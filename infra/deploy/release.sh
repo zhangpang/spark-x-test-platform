@@ -17,10 +17,47 @@ if [[ ! -d "$RELEASE_DIR" || ! -f "$RELEASE_DIR/infra/compose/compose.yaml" ]]; 
   exit 65
 fi
 
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "runtime environment file is missing" >&2
-  exit 66
-fi
+SHARED_DIR="$(dirname "$ENV_FILE")"
+
+ensure_runtime_environment() {
+  mkdir -p "$SHARED_DIR"
+  chmod 700 "$SHARED_DIR"
+  if [[ -f "$ENV_FILE" ]]; then
+    return 0
+  fi
+
+  command -v openssl >/dev/null
+  umask 077
+  local postgres_password
+  local minio_secret
+  postgres_password="$(openssl rand -hex 32)"
+  minio_secret="$(openssl rand -hex 32)"
+  {
+    printf 'NODE_ENV=production\n'
+    printf 'LOG_LEVEL=info\n'
+    printf 'WEB_PORT=4173\n'
+    printf 'API_PORT=24100\n'
+    printf 'SCHEDULER_HEALTH_PORT=24101\n'
+    printf 'WORKER_HEALTH_PORT=24102\n'
+    printf 'POSTGRES_PORT=25432\n'
+    printf 'REDIS_PORT=26379\n'
+    printf 'MINIO_PORT=29000\n'
+    printf 'MINIO_CONSOLE_PORT=29001\n'
+    printf 'POSTGRES_DB=spark_x_test_platform\n'
+    printf 'POSTGRES_USER=spark_x_test\n'
+    printf 'POSTGRES_PASSWORD=%s\n' "$postgres_password"
+    printf 'MINIO_ACCESS_KEY=spark-x-test-platform\n'
+    printf 'MINIO_SECRET_KEY=%s\n' "$minio_secret"
+    printf 'MINIO_BUCKET=test-artifacts\n'
+    printf 'PLATFORM_QUEUE_NAME=test-runs\n'
+    printf 'WORKER_CONCURRENCY=2\n'
+    printf 'WORKER_IDENTITY=\n'
+  } > "$ENV_FILE.tmp"
+  mv "$ENV_FILE.tmp" "$ENV_FILE"
+}
+
+ensure_runtime_environment
+chmod 600 "$ENV_FILE"
 
 if grep -q "change-me-local-only" "$ENV_FILE"; then
   echo "runtime environment still contains an example secret" >&2
@@ -33,7 +70,6 @@ if [[ ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
   exit 68
 fi
 
-SHARED_DIR="$(dirname "$ENV_FILE")"
 VERIFIED_DIR="$SHARED_DIR/verified-commits"
 BACKUP_DIR="$SHARED_DIR/backups"
 COMPOSE_FILE="$RELEASE_DIR/infra/compose/compose.yaml"
