@@ -17,17 +17,76 @@ import {
 } from "./api.js";
 
 const navigation = [
-  { id: "assets", label: "系统与环境", milestone: "M2" },
-  { id: "cases", label: "用例库", milestone: "M2" },
-  { id: "suites", label: "测试套件", milestone: "M2" },
-  { id: "shared", label: "公共资产", milestone: "M2" },
-  { id: "runs", label: "运行中心", milestone: "M3" },
-  { id: "plans", label: "定时计划", milestone: "M5" },
+  { id: "assets", label: "系统与环境", milestone: "M2", group: "assets" },
+  { id: "cases", label: "用例库", milestone: "M2", group: "assets" },
+  { id: "suites", label: "测试套件", milestone: "M2", group: "assets" },
+  { id: "shared", label: "公共资产", milestone: "M2", group: "assets" },
+  { id: "runs", label: "运行中心", milestone: "M3", group: "execution" },
+  { id: "plans", label: "定时计划", milestone: "M5", group: "execution" },
 ] as const;
 
 type PageId = (typeof navigation)[number]["id"];
 type Readiness = HealthResponse | { status: "loading" | "unreachable"; message?: string };
 type Notice = Readonly<{ tone: "success" | "error" | "info"; text: string }>;
+
+const pageDetails: Record<
+  PageId,
+  Readonly<{ eyebrow: string; title: string; description: string }>
+> = {
+  assets: {
+    eyebrow: "CONTROL PLANE · 01",
+    title: "系统与环境",
+    description: "统一登记被测系统、业务模块、访问边界与密钥引用。",
+  },
+  cases: {
+    eyebrow: "CONTROL PLANE · 02",
+    title: "用例库",
+    description: "用结构化 Schema 管理可审计、可比较、可回滚的测试用例。",
+  },
+  suites: {
+    eyebrow: "CONTROL PLANE · 03",
+    title: "测试套件",
+    description: "将已发布用例编排为可复用的业务回归集合。",
+  },
+  shared: {
+    eyebrow: "CONTROL PLANE · 04",
+    title: "公共资产",
+    description: "跨系统复用的数据、步骤与断言资产。",
+  },
+  runs: {
+    eyebrow: "EXECUTION · 01",
+    title: "运行中心",
+    description: "查看执行进度、诊断证据与回归结果。",
+  },
+  plans: {
+    eyebrow: "EXECUTION · 02",
+    title: "定时计划",
+    description: "维护周期性回归策略与触发计划。",
+  },
+};
+
+function NavigationIcon({ id }: Readonly<{ id: PageId }>) {
+  const paths: Record<PageId, readonly string[]> = {
+    assets: ["M4 5h16v5H4z", "M4 14h7v6H4z", "M15 14h5v6h-5z"],
+    cases: ["M6 3h9l4 4v14H6z", "M15 3v5h4", "M9 12h6", "M9 16h6"],
+    suites: ["M5 4h14v16H5z", "M8 8h8", "M8 12h8", "M8 16h5"],
+    shared: [
+      "M8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z",
+      "M16 20a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z",
+      "M11 9l2 6",
+    ],
+    runs: ["M12 3a9 9 0 1 0 9 9", "M12 7v5l3 2", "M17 3h4v4"],
+    plans: ["M5 4h14v16H5z", "M8 2v4", "M16 2v4", "M5 9h14", "M8 13h3", "M8 17h6"],
+  };
+
+  return (
+    <svg aria-hidden="true" className="nav-icon" fill="none" viewBox="0 0 24 24">
+      {paths[id].map((path) => (
+        <path d={path} key={path} />
+      ))}
+    </svg>
+  );
+}
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
@@ -473,56 +532,129 @@ export function App() {
     }
   }
 
+  const overviewMetrics =
+    page === "assets"
+      ? [
+          { label: "被测系统", value: systems.length, caption: "已登记" },
+          { label: "业务模块", value: modules.length, caption: "当前系统" },
+          { label: "可用环境", value: environments.length, caption: "受白名单保护" },
+          { label: "密钥引用", value: scopedSecrets.length, caption: "只显示元数据" },
+        ]
+      : page === "cases"
+        ? [
+            { label: "全部用例", value: cases.length, caption: "当前系统" },
+            { label: "已发布", value: publishedCases.length, caption: "可进入套件" },
+            {
+              label: "草稿用例",
+              value: cases.filter((testCase) => testCase.status === "draft").length,
+              caption: "等待校验",
+            },
+            { label: "版本记录", value: versions.length, caption: "当前选中用例" },
+          ]
+        : [
+            { label: "测试套件", value: suites.length, caption: "已编排" },
+            { label: "可选用例", value: publishedCases.length, caption: "已发布" },
+            { label: "全部用例", value: cases.length, caption: "当前系统" },
+            { label: "业务模块", value: modules.length, caption: "覆盖范围" },
+          ];
+
   return (
     <div className="shell">
       <a className="skip-link" href="#main-content">
         跳到主要内容
       </a>
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">SPARK X QUALITY INFRASTRUCTURE</p>
-          <h1>星火自动化测试平台</h1>
+      <aside className="sidebar" aria-label="平台导航">
+        <div className="brand-lockup">
+          <span className="brand-mark" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+            <i />
+          </span>
+          <span>
+            <strong>Spark X</strong>
+            <small>自动化测试平台</small>
+          </span>
         </div>
-        <div className={`status-pill status-${readiness.status}`} role="status">
-          <span aria-hidden="true" />
-          {readiness.status === "ok"
-            ? "平台就绪"
-            : readiness.status === "loading"
-              ? "正在检查"
-              : "平台未就绪"}
+        <nav className="sidebar-nav">
+          {[
+            { id: "assets", label: "资产控制" },
+            { id: "execution", label: "执行调度" },
+          ].map((group) => (
+            <section key={group.id}>
+              <p className="nav-group-label">{group.label}</p>
+              {navigation
+                .filter((item) => item.group === group.id)
+                .map((item, index) => {
+                  const enabled = ["assets", "cases", "suites"].includes(item.id);
+                  return (
+                    <button
+                      aria-current={page === item.id ? "page" : undefined}
+                      className={page === item.id ? "active" : ""}
+                      disabled={!enabled}
+                      key={item.id}
+                      onClick={() => setPage(item.id)}
+                      type="button"
+                    >
+                      <NavigationIcon id={item.id} />
+                      <span className="nav-copy">
+                        <b>{item.label}</b>
+                        <small>
+                          {enabled
+                            ? `0${index + 1} · ${item.milestone}`
+                            : `${item.milestone} 即将开放`}
+                        </small>
+                      </span>
+                      <span className="nav-arrow" aria-hidden="true">
+                        →
+                      </span>
+                    </button>
+                  );
+                })}
+            </section>
+          ))}
+        </nav>
+        <div className="sidebar-footnote">
+          <span className="live-indicator" aria-hidden="true" />
+          <span>
+            <small>PRIVATE NETWORK</small>
+            <strong>{readiness.status === "ok" ? "测试环境在线" : "正在检查服务"}</strong>
+          </span>
         </div>
-      </header>
+      </aside>
 
-      <div className="workspace">
-        <aside className="sidebar" aria-label="平台导航">
-          {navigation.map((item, index) => {
-            const enabled = ["assets", "cases", "suites"].includes(item.id);
-            return (
-              <button
-                aria-current={page === item.id ? "page" : undefined}
-                className={page === item.id ? "active" : ""}
-                disabled={!enabled}
-                key={item.id}
-                onClick={() => setPage(item.id)}
-                type="button"
-              >
-                <span>{String(index + 1).padStart(2, "0")}</span>
-                <b>{item.label}</b>
-                <small>{item.milestone}</small>
-              </button>
-            );
-          })}
-        </aside>
+      <div className="app-surface">
+        <header className="topbar">
+          <div className="breadcrumb" aria-label="当前位置">
+            <span>测试控制台</span>
+            <i aria-hidden="true">/</i>
+            <strong>{pageDetails[page].title}</strong>
+          </div>
+          <div className="topbar-actions">
+            <span className="release-chip">M2 · ASSET PLANE</span>
+            <div className={`status-pill status-${readiness.status}`} role="status">
+              <span aria-hidden="true" />
+              {readiness.status === "ok"
+                ? "服务正常"
+                : readiness.status === "loading"
+                  ? "正在检查"
+                  : "服务异常"}
+            </div>
+          </div>
+        </header>
 
         <main id="main-content">
           <section className="page-heading">
-            <div>
-              <p className="eyebrow">M2 · TEST ASSET CONTROL PLANE</p>
-              <h2>{navigation.find((item) => item.id === page)?.label}</h2>
-              <p>测试资产保留不可变历史；发布、回滚和导入不会覆盖旧版本。</p>
+            <div className="page-title-block">
+              <p className="eyebrow">{pageDetails[page].eyebrow}</p>
+              <div className="title-line">
+                <h2>{pageDetails[page].title}</h2>
+                <span>ONLINE</span>
+              </div>
+              <p>{pageDetails[page].description}</p>
             </div>
             <label className="system-switcher">
-              当前系统
+              <span>当前被测系统</span>
               <select
                 disabled={systems.length === 0}
                 onChange={(event) => setSelectedSystemId(event.target.value)}
@@ -538,8 +670,22 @@ export function App() {
             </label>
           </section>
 
+          <section className="overview-strip" aria-label="资产概览">
+            {overviewMetrics.map((metric, index) => (
+              <article key={metric.label}>
+                <span className="metric-index">0{index + 1}</span>
+                <div>
+                  <strong>{metric.value}</strong>
+                  <span>{metric.label}</span>
+                </div>
+                <small>{metric.caption}</small>
+              </article>
+            ))}
+          </section>
+
           <div aria-atomic="true" aria-live="polite" className={`notice notice-${notice.tone}`}>
-            {busy ? "正在处理…" : notice.text}
+            <span className="notice-symbol" aria-hidden="true" />
+            <span>{busy ? "正在处理…" : notice.text}</span>
           </div>
 
           {page === "assets" ? (
@@ -910,7 +1056,7 @@ export function App() {
                   </div>
                   <span className="count">{cases.length}</span>
                 </div>
-                <div className="case-list" role="list">
+                <div className="case-list">
                   {cases.map((testCase) => (
                     <button
                       className={testCase.id === selectedCaseId ? "selected" : ""}
@@ -920,7 +1066,6 @@ export function App() {
                         setComparison([]);
                         setValidation(undefined);
                       }}
-                      role="listitem"
                       type="button"
                     >
                       <span>
