@@ -51,6 +51,12 @@ function fakeStore(executionSnapshot: RunExecutionSnapshot) {
   } as unknown as RunExecutionStore;
 }
 
+function requestUrl(input: URL | RequestInfo | undefined): string | undefined {
+  if (input instanceof URL) return input.toString();
+  if (typeof input === "string") return input;
+  return input?.url;
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("run worker", () => {
@@ -75,9 +81,10 @@ describe("run worker", () => {
       ],
     };
     const statuses = [503, 200, 204];
-    const fetchMock = vi.fn(
-      async (_input: URL | RequestInfo) => new Response(null, { status: statuses.shift() ?? 500 }),
-    );
+    const fetchMock = vi.fn((input: URL | RequestInfo) => {
+      void input;
+      return Promise.resolve(new Response(null, { status: statuses.shift() ?? 500 }));
+    });
     vi.stubGlobal("fetch", fetchMock);
     const store = fakeStore(snapshot(definition));
 
@@ -85,7 +92,7 @@ describe("run worker", () => {
       summary: { total: 1, flaky: 1 },
     });
     expect(store.startCase).toHaveBeenCalledTimes(2);
-    expect(String(fetchMock.mock.calls[2]?.[0])).toBe("http://api:4100/cleanup/200");
+    expect(requestUrl(fetchMock.mock.calls[2]?.[0])).toBe("http://api:4100/cleanup/200");
     expect(store.finishCase).toHaveBeenCalledWith(
       job.runId,
       "00000000-0000-4000-8000-000000000104",
@@ -136,7 +143,7 @@ describe("run worker", () => {
     const statuses = [200, 500];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(null, { status: statuses.shift() ?? 500 })),
+      vi.fn(() => Promise.resolve(new Response(null, { status: statuses.shift() ?? 500 }))),
     );
 
     await executeRunJob(job, "worker-1", store);
@@ -182,18 +189,20 @@ describe("run worker", () => {
       recorded.push(input);
       return Promise.resolve();
     });
-    const fetchMock = vi.fn(
-      async (_input: URL | RequestInfo) =>
+    const fetchMock = vi.fn((input: URL | RequestInfo) => {
+      void input;
+      return Promise.resolve(
         new Response(JSON.stringify({ token: secret, value: `echo:${secret}` }), {
           status: 200,
           headers: { "content-type": "application/json", "x-echo": secret },
         }),
-    );
+      );
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     await executeRunJob(job, "worker-1", store);
 
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(`http://api:4100/echo/${secret}`);
+    expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toBe(`http://api:4100/echo/${secret}`);
     const evidence = JSON.stringify(recorded[0]);
     expect(evidence).not.toContain(secret);
     expect(evidence).toContain("[REDACTED]");

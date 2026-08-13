@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { runStatuses, type RunStatus, type TestRunJob } from "@spark-x-test/contracts";
-import { TestRunStore } from "@spark-x-test/service-runtime";
+import type { TestRunStore } from "@spark-x-test/service-runtime";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { badRequest, conflict, notFound } from "./control-plane/errors.js";

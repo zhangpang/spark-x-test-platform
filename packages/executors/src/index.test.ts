@@ -46,8 +46,10 @@ describe("HTTP executor safety", () => {
   });
 
   it("revalidates redirect targets", async () => {
-    const fetcher = async () =>
-      new Response(null, { status: 302, headers: { location: "http://metadata.internal/" } });
+    const fetcher = () =>
+      Promise.resolve(
+        new Response(null, { status: 302, headers: { location: "http://metadata.internal/" } }),
+      );
     await expect(
       executeHttpRequest(
         environment,
@@ -59,11 +61,13 @@ describe("HTTP executor safety", () => {
   });
 
   it("returns bounded structured HTTP evidence", async () => {
-    const fetcher = async () =>
-      new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { "content-type": "application/json", authorization: "secret" },
-      });
+    const fetcher = () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json", authorization: "secret" },
+        }),
+      );
     await expect(
       executeHttpRequest(
         environment,
