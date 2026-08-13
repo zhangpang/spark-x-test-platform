@@ -78,7 +78,6 @@ run_compose() {
   PLATFORM_VERSION="$RELEASE_COMMIT" docker compose \
     --env-file "$ENV_FILE" \
     --project-name "$PROJECT_NAME" \
-    --project-directory "$RELEASE_DIR" \
     -f "$COMPOSE_FILE" \
     "$@"
 }
