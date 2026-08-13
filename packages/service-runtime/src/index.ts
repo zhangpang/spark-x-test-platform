@@ -263,11 +263,7 @@ export class TestRunStore {
     try {
       await client.query("begin");
       await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
-        serializeRunIdempotencyLockKey(
-          input.triggerSource,
-          input.systemId,
-          input.idempotencyKey,
-        ),
+        serializeRunIdempotencyLockKey(input.triggerSource, input.systemId, input.idempotencyKey),
       ]);
       const existing = await client.query<RunRow>(
         `${runSelection}
