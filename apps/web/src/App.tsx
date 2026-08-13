@@ -17,6 +17,7 @@ import {
   type TestSuiteRecord,
   type ValidationResult,
 } from "./api.js";
+import { createIdempotencyKey } from "./idempotency.js";
 
 const navigation = [
   { id: "assets", label: "系统与环境", milestone: "M2", group: "assets" },
@@ -653,7 +654,7 @@ export function App() {
       controlPlaneApi.createRun({
         triggerType: "manual",
         triggerSource: "web-console",
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: createIdempotencyKey(),
         priority: Number(data.get("priority")),
         systemId: selectedSystemId,
         environmentId: data.get("environmentId"),
