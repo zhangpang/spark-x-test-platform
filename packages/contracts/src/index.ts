@@ -158,9 +158,47 @@ export interface StepRunRecord {
   readonly durationMs: number | null;
 }
 
+export interface ResourceLedgerRecord {
+  readonly id: string;
+  readonly runId: string;
+  readonly runCaseId: string;
+  readonly resourceType: string;
+  readonly systemResourceId: string;
+  readonly createdStepRunId: string | null;
+  readonly cleanupDefinition: Readonly<Record<string, unknown>>;
+  readonly cleanupStatus: "pending" | "running" | "passed" | "failed";
+  readonly lastError: RunFailure | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export const cleanupJobStatuses = ["queued", "running", "succeeded", "failed"] as const;
+export type CleanupJobStatus = (typeof cleanupJobStatuses)[number];
+
+export interface CleanupJobRecord {
+  readonly id: string;
+  readonly runId: string;
+  readonly status: CleanupJobStatus;
+  readonly attempts: number;
+  readonly lastError: RunFailure | null;
+  readonly createdAt: string;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
+  readonly updatedAt: string;
+}
+
+export interface RunCleanupJob {
+  readonly protocolVersion: "1.0";
+  readonly cleanupJobId: string;
+  readonly runId: string;
+  readonly queuedAt: string;
+}
+
 export interface TestRunDetail extends TestRunRecord {
   readonly cases: readonly TestRunCaseRecord[];
   readonly steps: readonly StepRunRecord[];
+  readonly resources: readonly ResourceLedgerRecord[];
+  readonly cleanupJob: CleanupJobRecord | null;
 }
 
 export interface RunEvent {

@@ -1,7 +1,12 @@
 import type { RunExecutionSnapshot } from "@spark-x-test/service-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { executeRunJob, type RunExecutionStore } from "./run-executor.js";
+import {
+  executeCompensationJob,
+  executeRunJob,
+  type CompensationExecutionStore,
+  type RunExecutionStore,
+} from "./run-executor.js";
 
 const job = {
   protocolVersion: "1.0" as const,
@@ -48,6 +53,23 @@ function fakeStore(executionSnapshot: RunExecutionSnapshot) {
     recordStep: vi.fn(() => Promise.resolve()),
     finishCase: vi.fn(() => Promise.resolve()),
     completeRun: vi.fn(() => Promise.resolve()),
+    acquireResourceLocks: vi.fn(() => Promise.resolve(true)),
+    releaseResourceLocks: vi.fn(() => Promise.resolve()),
+    registerResource: vi.fn(() => Promise.resolve()),
+    markCaseResources: vi.fn(() => Promise.resolve(0)),
+    prepareCompensation: vi.fn(() =>
+      Promise.resolve({
+        id: "00000000-0000-4000-8000-000000000107",
+        runId: job.runId,
+        status: "queued",
+        attempts: 0,
+        lastError: null,
+        createdAt: new Date(0).toISOString(),
+        startedAt: null,
+        finishedAt: null,
+        updatedAt: new Date(0).toISOString(),
+      }),
+    ),
   } as unknown as RunExecutionStore;
 }
 
@@ -258,5 +280,133 @@ describe("run worker", () => {
       "inconclusive",
       null,
     );
+  });
+
+  it("registers a nested response resource and queues compensation after cleanup fails", async () => {
+    const store = fakeStore(
+      snapshot({
+        execution: { stepTimeoutMs: 1_000, caseTimeoutMs: 5_000 },
+        resourceLocks: ["knowledge-base:${run.id}"],
+        steps: [
+          {
+            id: "create-resource",
+            action: "http:request",
+            params: { method: "POST", path: "/resources" },
+            capture: { "resource-id": "$.body.id" },
+            resource: {
+              type: "knowledge-base",
+              id: "${step.resource-id}",
+              cleanup: {
+                action: "http:request",
+                params: { method: "GET", path: "/cleanup/${resource.id}" },
+              },
+            },
+          },
+        ],
+        finally: [
+          {
+            id: "cleanup",
+            action: "http:request",
+            params: { method: "POST", path: "/cleanup" },
+            capture: { status: "$.status" },
+            assertions: [{ type: "status:equals", actual: "${step.status}", expected: 204 }],
+          },
+        ],
+      }),
+    );
+    vi.mocked(store.markCaseResources).mockResolvedValue(1);
+    const responses = [
+      new Response(JSON.stringify({ id: "kb-123" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response(null, { status: 500 }),
+    ];
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(responses.shift() as Response)));
+    const enqueueCleanup = vi.fn(() => Promise.resolve());
+
+    await expect(executeRunJob(job, "worker-1", store, enqueueCleanup)).resolves.toMatchObject({
+      compensationPending: true,
+    });
+
+    expect(store.acquireResourceLocks).toHaveBeenCalledWith(
+      job.runId,
+      "00000000-0000-4000-8000-000000000104",
+      [`knowledge-base:${job.runId}`],
+    );
+    expect(store.registerResource).toHaveBeenCalledWith(
+      job.runId,
+      expect.objectContaining({
+        resourceType: "knowledge-base",
+        systemResourceId: "kb-123",
+      }),
+    );
+    expect(store.prepareCompensation).toHaveBeenCalledOnce();
+    expect(enqueueCleanup).toHaveBeenCalledWith(
+      expect.objectContaining({ cleanupJobId: "00000000-0000-4000-8000-000000000107" }),
+    );
+    expect(store.completeRun).not.toHaveBeenCalled();
+  });
+
+  it("executes a persisted compensation definition and completes the pending run", async () => {
+    const cleanupJob = {
+      protocolVersion: "1.0" as const,
+      cleanupJobId: "00000000-0000-4000-8000-000000000107",
+      runId: job.runId,
+      queuedAt: new Date(0).toISOString(),
+    };
+    const store = {
+      claimCleanupJob: vi.fn(() =>
+        Promise.resolve({
+          id: cleanupJob.cleanupJobId,
+          runId: job.runId,
+          attempts: 1,
+          summary: {
+            total: 1,
+            queued: 0,
+            running: 0,
+            passed: 0,
+            productFailed: 0,
+            testFailed: 0,
+            environmentFailed: 0,
+            infrastructureFailed: 1,
+            flaky: 0,
+            cancelled: 0,
+            skipped: 0,
+          },
+          gateResult: "inconclusive",
+          firstFailure: null,
+          snapshot: snapshot({ steps: [] }),
+        }),
+      ),
+      resolveSecretVariables: vi.fn(() => Promise.resolve({})),
+      listResourcesForCleanup: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "00000000-0000-4000-8000-000000000108",
+            systemResourceId: "kb-123",
+            cleanupDefinition: {
+              action: "http:request",
+              params: { method: "GET", path: "/cleanup/${resource.id}" },
+            },
+          },
+        ]),
+      ),
+      markResourceCleanup: vi.fn(() => Promise.resolve()),
+      renewResourceLocks: vi.fn(() => Promise.resolve()),
+      failCleanupJob: vi.fn(() => Promise.resolve()),
+      completeCompensation: vi.fn(() => Promise.resolve()),
+    } as unknown as CompensationExecutionStore;
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status: 204 })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(executeCompensationJob(cleanupJob, store)).resolves.toEqual({ cleaned: 1 });
+
+    expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toBe("http://api:4100/cleanup/kb-123");
+    expect(store.markResourceCleanup).toHaveBeenLastCalledWith(
+      "00000000-0000-4000-8000-000000000108",
+      "passed",
+    );
+    expect(store.completeCompensation).toHaveBeenCalledWith(cleanupJob.cleanupJobId);
   });
 });

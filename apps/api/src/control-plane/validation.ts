@@ -172,6 +172,25 @@ function collectSteps(definition: JsonObject): readonly JsonObject[] {
   return collected;
 }
 
+function collectTemplateReferences(value: JsonValue): readonly string[] {
+  const references = new Set<string>();
+  const visit = (candidate: JsonValue): void => {
+    if (typeof candidate === "string") {
+      for (const match of candidate.matchAll(/\$\{([^}]+)\}/g)) {
+        if (match[1] !== undefined) references.add(match[1]);
+      }
+      return;
+    }
+    if (isJsonArray(candidate)) {
+      candidate.forEach(visit);
+      return;
+    }
+    if (isObject(candidate)) Object.values(candidate).forEach(visit);
+  };
+  visit(value);
+  return [...references];
+}
+
 function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const stepIds = new Set<string>();
@@ -264,6 +283,91 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
             path: "$.metadata.actionLevel",
             message: `${method.toUpperCase()} 至少需要 ${requiredLevel} 动作等级。`,
           });
+        }
+      }
+    }
+
+    const resource = isObject(step.resource) ? step.resource : undefined;
+    const cleanup = resource !== undefined && isObject(resource.cleanup) ? resource.cleanup : undefined;
+    if (cleanup !== undefined) {
+      if (typeof cleanup.action !== "string" || !availableActions.has(cleanup.action)) {
+        issues.push({
+          severity: "error",
+          code: "CLEANUP_ACTION_NOT_AVAILABLE",
+          path: `$.steps.${id}.resource.cleanup.action`,
+          message: `当前平台版本未注册资源补偿动作 ${String(cleanup.action)}。`,
+        });
+      }
+      const declaredSecrets = new Set(
+        isJsonArray(definition.inputs)
+          ? definition.inputs.flatMap((input) =>
+              isObject(input) && typeof input.name === "string" && typeof input.secretRef === "string"
+                ? [`case.${input.name}`]
+                : [],
+            )
+          : [],
+      );
+      for (const reference of collectTemplateReferences(cleanup)) {
+        if (reference !== "resource.id" && !declaredSecrets.has(reference)) {
+          issues.push({
+            severity: "error",
+            code: "CLEANUP_REFERENCE_FORBIDDEN",
+            path: `$.steps.${id}.resource.cleanup`,
+            message: `资源补偿只能引用 resource.id 或已声明的密钥输入，不能引用 ${reference}。`,
+          });
+        }
+      }
+      if (cleanup.action === "http:request" && isObject(cleanup.params)) {
+        const method = cleanup.params.method;
+        const path = cleanup.params.path;
+        if (
+          typeof method !== "string" ||
+          !["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(
+            method.toUpperCase(),
+          )
+        ) {
+          issues.push({
+            severity: "error",
+            code: "HTTP_METHOD_INVALID",
+            path: `$.steps.${id}.resource.cleanup.params.method`,
+            message: "HTTP 补偿请求必须使用受支持的方法。",
+          });
+        }
+        if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) {
+          issues.push({
+            severity: "error",
+            code: "HTTP_PATH_INVALID",
+            path: `$.steps.${id}.resource.cleanup.params.path`,
+            message: "HTTP 补偿请求只能填写以 / 开头的相对路径。",
+          });
+        }
+        if ("url" in cleanup.params || "baseUrl" in cleanup.params || "host" in cleanup.params) {
+          issues.push({
+            severity: "error",
+            code: "ARBITRARY_TARGET_FORBIDDEN",
+            path: `$.steps.${id}.resource.cleanup.params`,
+            message: "资源补偿不得直接指定 URL、baseUrl 或 host。",
+          });
+        }
+        const metadata = isObject(definition.metadata) ? definition.metadata : undefined;
+        if (typeof method === "string" && typeof metadata?.actionLevel === "string") {
+          const requiredLevel: ActionLevel =
+            method.toUpperCase() === "DELETE"
+              ? "dangerous"
+              : ["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())
+                ? "read"
+                : "write";
+          if (
+            metadata.actionLevel in actionRank &&
+            actionRank[metadata.actionLevel as ActionLevel] < actionRank[requiredLevel]
+          ) {
+            issues.push({
+              severity: "error",
+              code: "ACTION_LEVEL_UNDERSPECIFIED",
+              path: "$.metadata.actionLevel",
+              message: `资源补偿 ${method.toUpperCase()} 至少需要 ${requiredLevel} 动作等级。`,
+            });
+          }
         }
       }
     }
@@ -374,6 +478,42 @@ function validateHttpStepTargets(
         message: `HTTP 路径 ${step.params.path} 不在环境目标白名单内。`,
       });
     }
+    const resource = isObject(step.resource) ? step.resource : undefined;
+    const cleanup = resource !== undefined && isObject(resource.cleanup) ? resource.cleanup : undefined;
+    if (
+      cleanup?.action === "http:request" &&
+      isObject(cleanup.params) &&
+      typeof cleanup.params.path === "string"
+    ) {
+      let cleanupTarget: URL;
+      try {
+        cleanupTarget = new URL(cleanup.params.path, environment.baseUrl);
+      } catch {
+        continue;
+      }
+      const cleanupPort = Number.parseInt(
+        cleanupTarget.port ||
+          (cleanupTarget.protocol === "https:" ? "443" : cleanupTarget.protocol === "http:" ? "80" : "0"),
+        10,
+      );
+      const cleanupAllowed = environment.allowlist.some(
+        (rule) =>
+          `${rule.protocol}:` === cleanupTarget.protocol &&
+          rule.host.toLowerCase() === cleanupTarget.hostname.toLowerCase() &&
+          rule.ports.includes(cleanupPort) &&
+          (rule.pathPrefixes === undefined ||
+            rule.pathPrefixes.length === 0 ||
+            rule.pathPrefixes.some((prefix) => cleanupTarget.pathname.startsWith(prefix))),
+      );
+      if (!cleanupAllowed) {
+        issues.push({
+          severity: "error",
+          code: "HTTP_TARGET_NOT_ALLOWLISTED",
+          path: `$.steps.${typeof step.id === "string" ? step.id : "unknown"}.resource.cleanup.params.path`,
+          message: `HTTP 补偿路径 ${cleanup.params.path} 不在环境目标白名单内。`,
+        });
+      }
+    }
   }
   return issues;
 }
@@ -447,6 +587,35 @@ export function validateDefinition(
   issues.push(...findPlaintextSecrets(definition));
   issues.push(...validateStepSemantics(definition));
   issues.push(...validateTimeoutBudget(definition));
+
+  if (isJsonArray(definition.resourceLocks)) {
+    definition.resourceLocks.forEach((lock, index) => {
+      if (typeof lock !== "string") return;
+      for (const reference of collectTemplateReferences(lock)) {
+        if (reference !== "run.id") {
+          issues.push({
+            severity: "error",
+            code: "RESOURCE_LOCK_REFERENCE_FORBIDDEN",
+            path: `$.resourceLocks[${index}]`,
+            message: `资源锁只能引用 run.id，不能引用 ${reference}。`,
+          });
+        }
+      }
+    });
+  }
+
+  if (isJsonArray(definition.finally)) {
+    definition.finally.forEach((step, index) => {
+      if (isObject(step) && step.resource !== undefined) {
+        issues.push({
+          severity: "error",
+          code: "FINALLY_RESOURCE_REGISTRATION_FORBIDDEN",
+          path: `$.finally[${index}].resource`,
+          message: "finally 清理阶段不得登记新的外部资源。",
+        });
+      }
+    });
+  }
 
   if (context.environment !== undefined) {
     issues.push(...validateEnvironmentTarget(context.environment));

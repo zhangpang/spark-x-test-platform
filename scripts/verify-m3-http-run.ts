@@ -20,6 +20,11 @@ interface RunRecord extends RecordWithId {
     cleanupStatus: string;
   }>[];
   readonly steps: readonly Readonly<{ status: string; phase: string }>[];
+  readonly resources: readonly Readonly<{
+    cleanupStatus: string;
+    systemResourceId: string;
+  }>[];
+  readonly cleanupJob: Readonly<{ status: string; attempts: number }> | null;
 }
 
 const apiBase = process.env.M3_SMOKE_API_URL ?? "http://127.0.0.1:4100/api/v1";
@@ -139,6 +144,87 @@ async function createPublishedCase(
     { method: "POST", body: { environmentId } },
   );
   check(validation.body.valid, `${name} did not pass static validation`);
+  await api(`/test-cases/${created.body.id}/publish`, {
+    method: "POST",
+    body: { versionId: created.body.currentDraftVersionId },
+  });
+  return created.body.id;
+}
+
+async function createPublishedResourceCase(
+  moduleId: string,
+  environmentId: string,
+  systemKey: string,
+  moduleKey: string,
+): Promise<string> {
+  const definition = {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "M3 compensation recovery",
+      systemKey,
+      moduleKey,
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "read",
+      tags: ["m3-smoke", "resource-safety"],
+    },
+    inputs: [],
+    execution: {
+      stepTimeoutMs: 5_000,
+      caseTimeoutMs: 15_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["m3-resource:${run.id}"],
+    steps: [
+      {
+        id: "register-resource",
+        name: "登记合成外部资源",
+        kind: "action",
+        action: "http:request",
+        params: { method: "GET", path: "/api/v1/healthz" },
+        resource: {
+          type: "m3-smoke-resource",
+          id: "${run.id}",
+          cleanup: {
+            action: "http:request",
+            params: {
+              method: "GET",
+              path: "/api/v1/healthz?resource=${resource.id}",
+            },
+          },
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "force-compensation",
+        name: "模拟首次清理失败",
+        kind: "action",
+        action: "http:request",
+        params: { method: "GET", path: "/api/v1/healthz" },
+        capture: { "cleanup-status": "$.status" },
+        assertions: [
+          {
+            type: "status:equals",
+            actual: "${step.cleanup-status}",
+            expected: 204,
+            severity: "hard",
+          },
+        ],
+      },
+    ],
+  };
+  const created = await api<CaseRecord>("/test-cases", {
+    method: "POST",
+    body: { moduleId, definition, changeNote: "M3 resource safety release smoke" },
+  });
+  createdIds.push(created.body.id, created.body.currentDraftVersionId);
+  const validation = await api<{ readonly valid: boolean }>(
+    `/test-case-versions/${created.body.currentDraftVersionId}/validations`,
+    { method: "POST", body: { environmentId } },
+  );
+  check(validation.body.valid, "resource compensation case did not pass static validation");
   await api(`/test-cases/${created.body.id}/publish`, {
     method: "POST",
     body: { versionId: created.body.currentDraftVersionId },
@@ -276,6 +362,12 @@ try {
     "M3 product failure",
     599,
   );
+  const resourceCaseId = await createPublishedResourceCase(
+    module.body.id,
+    environment.body.id,
+    systemKey,
+    moduleKey,
+  );
 
   const passingSuite = await api<RecordWithId>("/test-suites", {
     method: "POST",
@@ -301,6 +393,18 @@ try {
     },
   });
   createdIds.push(failingSuite.body.id);
+  const resourceSuite = await api<RecordWithId>("/test-suites", {
+    method: "POST",
+    body: {
+      systemId,
+      key: "resource-compensation",
+      name: "Resource compensation",
+      caseIds: [resourceCaseId],
+      defaultConcurrency: 1,
+      defaultDiagnosticRetries: 0,
+    },
+  });
+  createdIds.push(resourceSuite.body.id);
 
   const idempotencyKey = randomUUID();
   const accepted = await createRun(passingSuite.body.id, environment.body.id, idempotencyKey);
@@ -332,13 +436,36 @@ try {
     "first product failure was not preserved",
   );
 
+  const compensated = await createRun(resourceSuite.body.id, environment.body.id, randomUUID());
+  const compensatedRun = await waitForRun(compensated.body.id);
+  check(compensatedRun.gateResult === "inconclusive", "cleanup failure gate was not inconclusive");
+  check(
+    compensatedRun.summary.infrastructureFailed === 1,
+    "cleanup failure was not classified as infrastructure failure",
+  );
+  check(compensatedRun.cases[0]?.cleanupStatus === "failed", "original cleanup failure was lost");
+  check(compensatedRun.resources.length === 1, "created resource was not registered");
+  check(compensatedRun.resources[0]?.cleanupStatus === "passed", "compensation did not clean resource");
+  check(compensatedRun.cleanupJob?.status === "succeeded", "cleanup job did not succeed");
+  check((compensatedRun.cleanupJob?.attempts ?? 0) >= 1, "cleanup attempt was not recorded");
+  const releasedLock = await pool.query<{ readonly release_reason: string | null }>(
+    `select release_reason from resource_locks
+     where run_id = $1 order by acquired_at desc limit 1`,
+    [compensatedRun.id],
+  );
+  check(
+    releasedLock.rows[0]?.release_reason === "compensation_succeeded",
+    "resource lock was not released by compensation",
+  );
+
   console.info(
     JSON.stringify({
       status: "passed",
       scenario: "m3-http-run-evidence-loop",
-      assertions: 17,
+      assertions: 25,
       passingRunId: passingRun.id,
       failingRunId: failingRun.id,
+      compensatedRunId: compensatedRun.id,
     }),
   );
 } finally {

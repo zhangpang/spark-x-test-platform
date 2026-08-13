@@ -40,4 +40,24 @@ describe("test case schema", () => {
     invalidCase.steps[0]!.action = "shell";
     expect(validateTestCaseDefinition(invalidCase).valid).toBe(false);
   });
+
+  it("accepts optional resource registration metadata", () => {
+    const resourceCase = {
+      ...validCase,
+      steps: [
+        {
+          ...validCase.steps[0],
+          resource: {
+            type: "knowledge-base",
+            id: "${run.id}",
+            cleanup: {
+              action: "http:request",
+              params: { method: "DELETE", path: "/knowledge-bases/${resource.id}" },
+            },
+          },
+        },
+      ],
+    };
+    expect(validateTestCaseDefinition(resourceCase)).toEqual({ valid: true, errors: [] });
+  });
 });

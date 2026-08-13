@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type {
   CaseResult,
   CleanupStatus,
+  RunCleanupJob,
   RunFailure,
   RunSummary,
   TestRunJob,
@@ -15,6 +16,7 @@ import {
 import {
   executeHttpRequest,
   ExecutorFailure,
+  interpolateString,
   type HttpExecutionResult,
   type HttpStepParameters,
 } from "@spark-x-test/executors";
@@ -35,7 +37,29 @@ export type RunExecutionStore = Pick<
   | "recordStep"
   | "finishCase"
   | "completeRun"
+  | "acquireResourceLocks"
+  | "releaseResourceLocks"
+  | "registerResource"
+  | "markCaseResources"
+  | "prepareCompensation"
 >;
+
+export type CompensationExecutionStore = Pick<
+  TestRunStore,
+  | "claimCleanupJob"
+  | "resolveSecretVariables"
+  | "listResourcesForCleanup"
+  | "markResourceCleanup"
+  | "failCleanupJob"
+  | "completeCompensation"
+  | "renewResourceLocks"
+>;
+
+interface ResourceRegistration {
+  readonly type: string;
+  readonly id: string;
+  readonly cleanup: Readonly<Record<string, unknown>>;
+}
 
 interface DefinitionStep {
   readonly id: string;
@@ -43,6 +67,7 @@ interface DefinitionStep {
   readonly params: Readonly<Record<string, unknown>>;
   readonly capture: Readonly<Record<string, string>>;
   readonly assertions: readonly Readonly<Record<string, unknown>>[];
+  readonly resource?: ResourceRegistration;
 }
 
 interface ParsedDefinition {
@@ -51,6 +76,7 @@ interface ParsedDefinition {
   readonly steps: readonly DefinitionStep[];
   readonly finallySteps: readonly DefinitionStep[];
   readonly secretInputs: readonly SecretVariableReference[];
+  readonly resourceLocks: readonly string[];
 }
 
 interface AttemptResult {
@@ -75,7 +101,7 @@ function integerValue(value: unknown, fallback: number, max: number): number {
     : fallback;
 }
 
-function parseSteps(value: unknown): readonly DefinitionStep[] {
+function parseSteps(value: unknown, phase: "main" | "finally" = "main"): readonly DefinitionStep[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((candidate) => {
     const step = objectValue(candidate);
@@ -88,6 +114,30 @@ function parseSteps(value: unknown): readonly DefinitionStep[] {
           return parsed === null ? [] : [parsed];
         })
       : [];
+    const resource = objectValue(step.resource);
+    const cleanup = resource === null ? null : objectValue(resource.cleanup);
+    if (
+      step.resource !== undefined &&
+      (resource === null ||
+        cleanup === null ||
+        typeof resource.type !== "string" ||
+        typeof resource.id !== "string")
+    ) {
+      throw new ExecutorFailure({
+        code: "INVALID_RESOURCE_REGISTRATION",
+        message: `步骤 ${step.id} 的资源登记定义无效。`,
+        classification: "test_failed",
+        stepId: step.id,
+      });
+    }
+    if (phase === "finally" && step.resource !== undefined) {
+      throw new ExecutorFailure({
+        code: "FINALLY_RESOURCE_REGISTRATION_FORBIDDEN",
+        message: `finally 步骤 ${step.id} 不得登记新的外部资源。`,
+        classification: "test_failed",
+        stepId: step.id,
+      });
+    }
     return [
       {
         id: step.id,
@@ -99,6 +149,12 @@ function parseSteps(value: unknown): readonly DefinitionStep[] {
           ),
         ),
         assertions,
+        ...(resource !== null &&
+        cleanup !== null &&
+        typeof resource.type === "string" &&
+        typeof resource.id === "string"
+          ? { resource: { type: resource.type, id: resource.id, cleanup } }
+          : {}),
       },
     ];
   });
@@ -114,11 +170,27 @@ function parseDefinition(definition: Readonly<Record<string, unknown>>): ParsedD
       classification: "test_failed",
     });
   }
+  const resourceLocks = Array.isArray(definition.resourceLocks)
+    ? definition.resourceLocks.filter(
+        (candidate): candidate is string => typeof candidate === "string",
+      )
+    : [];
+  if (
+    resourceLocks.some((key) =>
+      [...key.matchAll(/\$\{([^}]+)\}/g)].some((match) => match[1] !== "run.id"),
+    )
+  ) {
+    throw new ExecutorFailure({
+      code: "RESOURCE_LOCK_REFERENCE_FORBIDDEN",
+      message: "资源锁只能引用 run.id。",
+      classification: "test_failed",
+    });
+  }
   return {
     stepTimeoutMs: integerValue(execution.stepTimeoutMs, 30_000, 300_000),
     caseTimeoutMs: integerValue(execution.caseTimeoutMs, 120_000, 1_800_000),
     steps,
-    finallySteps: parseSteps(definition.finally),
+    finallySteps: parseSteps(definition.finally, "finally"),
     secretInputs: Array.isArray(definition.inputs)
       ? definition.inputs.flatMap((candidate) => {
           const input = objectValue(candidate);
@@ -129,6 +201,7 @@ function parseDefinition(definition: Readonly<Record<string, unknown>>): ParsedD
             : [];
         })
       : [],
+    resourceLocks,
   };
 }
 
@@ -192,9 +265,23 @@ function captureValues(
   variables: Record<string, unknown>,
 ): void {
   for (const [name, path] of Object.entries(capture)) {
-    if (path === "$.status") variables[`step.${name}`] = response.status;
-    else if (path === "$.body") variables[`step.${name}`] = response.body;
-    else if (path === "$.headers") variables[`step.${name}`] = response.headers;
+    const root: Readonly<Record<string, unknown>> = {
+      status: response.status,
+      body: response.body,
+      headers: response.headers,
+    };
+    const segments = /^\$\.([a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*)$/.exec(path)?.[1]?.split(".");
+    if (segments === undefined) continue;
+    let value: unknown = root;
+    for (const segment of segments) {
+      const record = objectValue(value);
+      if (record === null || !(segment in record)) {
+        value = undefined;
+        break;
+      }
+      value = record[segment];
+    }
+    if (value !== undefined) variables[`step.${name}`] = value;
   }
 }
 
@@ -247,6 +334,8 @@ async function executeStep(
 ): Promise<AttemptResult> {
   const startedAt = new Date().toISOString();
   const started = performance.now();
+  const stepRunId = randomUUID();
+  let stepRecorded = false;
   try {
     if (step.action !== "http:request") {
       throw new ExecutorFailure({
@@ -265,7 +354,7 @@ async function executeStep(
     captureValues(response, step.capture, variables);
     assertResponse(step.assertions, variables, step.id);
     await store.recordStep(runId, {
-      id: randomUUID(),
+      id: stepRunId,
       runCaseId,
       attempt,
       path,
@@ -284,6 +373,26 @@ async function executeStep(
       startedAt,
       durationMs: Math.max(0, Math.round(performance.now() - started)),
     });
+    stepRecorded = true;
+    if (step.resource !== undefined) {
+      const resourceId = interpolateString(step.resource.id, variables);
+      if (resourceId.trim() === "" || resourceId.length > 1_000) {
+        throw new ExecutorFailure({
+          code: "RESOURCE_ID_INVALID",
+          message: "资源登记 ID 为空或超过安全长度。",
+          classification: "test_failed",
+          stepId: step.id,
+        });
+      }
+      await store.registerResource(runId, {
+        id: randomUUID(),
+        runCaseId,
+        resourceType: step.resource.type,
+        systemResourceId: resourceId,
+        createdStepRunId: stepRunId,
+        cleanupDefinition: step.resource.cleanup,
+      });
+    }
     return { result: "passed", failure: null };
   } catch (error) {
     const failure =
@@ -296,21 +405,23 @@ async function executeStep(
             stepId: step.id,
           };
     const cancelled = signal.aborted && failure.code === "EXECUTION_CANCELLED";
-    await store.recordStep(runId, {
-      id: randomUUID(),
-      runCaseId,
-      attempt,
-      path,
-      stepId: step.id,
-      action: step.action,
-      phase,
-      status: cancelled ? "cancelled" : "failed",
-      result: cancelled ? "cancelled" : failure.classification,
-      inputSummary: sanitizedInput(step),
-      ...(cancelled ? {} : { error: failure }),
-      startedAt,
-      durationMs: Math.max(0, Math.round(performance.now() - started)),
-    });
+    if (!stepRecorded) {
+      await store.recordStep(runId, {
+        id: stepRunId,
+        runCaseId,
+        attempt,
+        path,
+        stepId: step.id,
+        action: step.action,
+        phase,
+        status: cancelled ? "cancelled" : "failed",
+        result: cancelled ? "cancelled" : failure.classification,
+        inputSummary: sanitizedInput(step),
+        ...(cancelled ? {} : { error: failure }),
+        startedAt,
+        durationMs: Math.max(0, Math.round(performance.now() - started)),
+      });
+    }
     return {
       result: cancelled ? "cancelled" : failure.classification,
       failure: cancelled ? null : failure,
@@ -400,7 +511,8 @@ export async function executeRunJob(
   job: TestRunJob,
   workerId: string,
   store: RunExecutionStore,
-): Promise<Readonly<{ ignored?: true; summary?: RunSummary }>> {
+  enqueueCleanup?: (job: RunCleanupJob) => Promise<void>,
+): Promise<Readonly<{ ignored?: true; summary?: RunSummary; compensationPending?: true }>> {
   if (job.protocolVersion !== "1.0") throw new Error("Unsupported run job protocol");
   const snapshot = await store.claimRun(job.runId, workerId);
   if (snapshot === null) return { ignored: true };
@@ -426,6 +538,7 @@ export async function executeRunJob(
   }, 5_000);
   const results: CaseResult[] = [];
   const failures: RunFailure[] = [];
+  let compensationRequired = false;
   try {
     for (const item of snapshot.cases) {
       const caseStartedAt = Date.now();
@@ -503,6 +616,39 @@ export async function executeRunJob(
         () => caseController.abort(new Error("Case timeout")),
         definition.caseTimeoutMs,
       );
+      const lockKeys = definition.resourceLocks.map((key) =>
+        interpolateString(key, { "run.id": job.runId }),
+      );
+      let locksAcquired = false;
+      while (!caseController.signal.aborted) {
+        locksAcquired = await store.acquireResourceLocks(job.runId, item.runCaseId, lockKeys);
+        if (locksAcquired) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (!locksAcquired) {
+        clearTimeout(caseTimeout);
+        controller.signal.removeEventListener("abort", cancelCase);
+        const cancelled = controller.signal.aborted;
+        const failure: RunFailure | null = cancelled
+          ? null
+          : {
+              code: "RESOURCE_LOCK_TIMEOUT",
+              message: "等待测试资源锁超过用例时限。",
+              classification: "environment_failed",
+            };
+        await store.startCase(job.runId, item.runCaseId, 1);
+        await store.finishCase(
+          job.runId,
+          item.runCaseId,
+          cancelled ? "cancelled" : "environment_failed",
+          "not_required",
+          failure,
+          caseStartedAt,
+        );
+        results.push(cancelled ? "cancelled" : "environment_failed");
+        if (failure !== null) failures.push(failure);
+        continue;
+      }
       let attemptResult: AttemptResult = { result: "passed", failure: null };
       let firstFailure: RunFailure | null = null;
       let flaky = false;
@@ -536,7 +682,7 @@ export async function executeRunJob(
       }
       clearTimeout(caseTimeout);
       controller.signal.removeEventListener("abort", cancelCase);
-      const cleanup = await executeCleanup(
+      let cleanup = await executeCleanup(
         job.runId,
         item.runCaseId,
         lastAttempt,
@@ -545,6 +691,50 @@ export async function executeRunJob(
         store,
         attemptVariables,
       );
+      if (cleanup.status === "passed") {
+        const registered = await store.markCaseResources(
+          job.runId,
+          item.runCaseId,
+          "passed",
+        );
+        await store.releaseResourceLocks(
+          job.runId,
+          item.runCaseId,
+          registered > 0 ? "cleaned" : "no_side_effect",
+        );
+      } else if (cleanup.status === "failed") {
+        const registered = await store.markCaseResources(
+          job.runId,
+          item.runCaseId,
+          "failed",
+          cleanup.failure,
+        );
+        if (registered > 0) compensationRequired = true;
+        else
+          await store.releaseResourceLocks(job.runId, item.runCaseId, "no_side_effect");
+      } else {
+        const missingCleanup: RunFailure = {
+          code: "REGISTERED_RESOURCE_NOT_CLEANED",
+          message: "用例登记了外部资源，但没有执行显式 finally 清理。",
+          classification: "infrastructure_failed",
+        };
+        const registered = await store.markCaseResources(
+          job.runId,
+          item.runCaseId,
+          "failed",
+          missingCleanup,
+        );
+        if (registered > 0) {
+          cleanup = { status: "failed", failure: missingCleanup };
+          compensationRequired = true;
+        } else {
+          await store.releaseResourceLocks(
+            job.runId,
+            item.runCaseId,
+            attemptResult.result === "cancelled" ? "cancelled" : "no_side_effect",
+          );
+        }
+      }
       const executionResult: CaseResult = flaky ? "flaky" : attemptResult.result;
       const finalResult: CaseResult =
         cleanup.status === "failed" ? "infrastructure_failed" : executionResult;
@@ -563,15 +753,115 @@ export async function executeRunJob(
     }
     const summary = summarizeCaseResults(results);
     await store.setRunStatus(job.runId, "cleaning");
+    const gateResult = gateResultForSummary(summary);
+    const firstFailure = choosePrimaryFailure(failures);
+    if (compensationRequired) {
+      const cleanupJob = await store.prepareCompensation(
+        job.runId,
+        summary,
+        gateResult,
+        firstFailure,
+      );
+      if (enqueueCleanup === undefined) throw new Error("CLEANUP_QUEUE_NOT_CONFIGURED");
+      await enqueueCleanup({
+        protocolVersion: "1.0",
+        cleanupJobId: cleanupJob.id,
+        runId: job.runId,
+        queuedAt: new Date().toISOString(),
+      });
+      return { summary, compensationPending: true };
+    }
     await store.completeRun(
       job.runId,
       summary,
-      gateResultForSummary(summary),
-      choosePrimaryFailure(failures),
+      gateResult,
+      firstFailure,
     );
     return { summary };
   } finally {
     clearInterval(poll);
     clearInterval(heartbeat);
   }
+}
+
+function caseSecretInputs(
+  snapshot: RunExecutionSnapshot,
+  runCaseId: string,
+): readonly SecretVariableReference[] {
+  const definition = snapshot.cases.find((item) => item.runCaseId === runCaseId)?.definition;
+  const inputs = definition === undefined || !Array.isArray(definition.inputs) ? [] : definition.inputs;
+  return inputs.flatMap((candidate) => {
+    const input = objectValue(candidate);
+    return input !== null && typeof input.name === "string" && typeof input.secretRef === "string"
+      ? [{ name: input.name, secretRef: input.secretRef }]
+      : [];
+  });
+}
+
+function compensationFailure(error: unknown): RunFailure {
+  const source = error instanceof ExecutorFailure ? error.failure : undefined;
+  return {
+    code: "COMPENSATION_FAILED",
+    message:
+      source === undefined ? "资源补偿执行发生未预期错误。" : `资源补偿执行失败：${source.message}`,
+    classification: "infrastructure_failed",
+    ...(source?.stepId === undefined ? {} : { stepId: source.stepId }),
+  };
+}
+
+export async function executeCompensationJob(
+  job: RunCleanupJob,
+  store: CompensationExecutionStore,
+): Promise<Readonly<{ ignored?: true; cleaned?: number }>> {
+  if (job.protocolVersion !== "1.0") throw new Error("Unsupported cleanup job protocol");
+  const work = await store.claimCleanupJob(job.cleanupJobId);
+  if (work === null) return { ignored: true };
+  const resources = await store.listResourcesForCleanup(work.runId);
+  const secretsByCase = new Map<string, Readonly<Record<string, string>>>();
+  let cleaned = 0;
+  for (const resource of resources) {
+    await store.renewResourceLocks(work.runId);
+    await store.markResourceCleanup(resource.id, "running");
+    try {
+      let secrets = secretsByCase.get(resource.runCaseId);
+      if (secrets === undefined) {
+        secrets = await store.resolveSecretVariables(
+          work.runId,
+          caseSecretInputs(work.snapshot, resource.runCaseId),
+        );
+        secretsByCase.set(resource.runCaseId, secrets);
+      }
+      const definition = resource.cleanupDefinition;
+      if (definition.action !== "http:request" || objectValue(definition.params) === null) {
+        throw new ExecutorFailure({
+          code: "CLEANUP_EXECUTOR_NOT_AVAILABLE",
+          message: `补偿执行器 ${String(definition.action)} 尚未注册。`,
+          classification: "test_failed",
+        });
+      }
+      const params = objectValue(definition.params) as Readonly<Record<string, unknown>>;
+      const response = await executeHttpRequest(
+        work.snapshot.environment,
+        httpParameters(params),
+        { "run.id": work.runId, "resource.id": resource.systemResourceId, ...secrets },
+        { timeoutMs: 30_000 },
+      );
+      if (response.status < 200 || response.status >= 300) {
+        throw new ExecutorFailure({
+          code: "CLEANUP_HTTP_STATUS_FAILED",
+          message: `资源补偿返回 HTTP ${response.status}。`,
+          classification: "environment_failed",
+        });
+      }
+      await store.markResourceCleanup(resource.id, "passed");
+      cleaned += 1;
+    } catch (error) {
+      const failure = compensationFailure(error);
+      await store.markResourceCleanup(resource.id, "failed", failure);
+      await store.failCleanupJob(work.id, failure);
+      throw new Error(failure.code, { cause: error });
+    }
+  }
+  await store.completeCompensation(work.id);
+  return { cleaned };
 }

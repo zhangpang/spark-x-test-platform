@@ -151,4 +151,85 @@ describe("M2 asset validation", () => {
       expect.arrayContaining(["ACTION_LEVEL_EXCEEDS_ENVIRONMENT", "CLEANUP_REQUIRED"]),
     );
   });
+
+  it("accepts a fail-closed resource registration and rejects unsafe cleanup references", () => {
+    const safe = definition({
+      resourceLocks: ["knowledge-base:${run.id}"],
+      steps: [
+        {
+          id: "request",
+          name: "read health",
+          kind: "action",
+          action: "http:request",
+          params: { method: "GET", path: "/healthz" },
+          resource: {
+            type: "knowledge-base",
+            id: "${run.id}",
+            cleanup: {
+              action: "http:request",
+              params: { method: "GET", path: "/healthz?resource=${resource.id}" },
+            },
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "cleanup",
+          name: "cleanup",
+          kind: "action",
+          action: "http:request",
+          params: { method: "GET", path: "/healthz" },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(safe, {
+        systemKey: "sample-system",
+        moduleKey: "order",
+        environment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const unsafe = definition({
+      resourceLocks: ["knowledge-base:${case.secret}"],
+      steps: [
+        {
+          id: "request",
+          name: "read health",
+          kind: "action",
+          action: "http:request",
+          params: { method: "GET", path: "/healthz" },
+          resource: {
+            type: "knowledge-base",
+            id: "${run.id}",
+            cleanup: {
+              action: "http:request",
+              params: { method: "GET", path: "/healthz?resource=${step.untrusted}" },
+            },
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "cleanup",
+          name: "cleanup",
+          kind: "action",
+          action: "http:request",
+          params: { method: "GET", path: "/healthz" },
+        },
+      ],
+    });
+    const result = validateDefinition(unsafe, {
+      systemKey: "sample-system",
+      moduleKey: "order",
+      environment,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining([
+        "CLEANUP_REFERENCE_FORBIDDEN",
+        "RESOURCE_LOCK_REFERENCE_FORBIDDEN",
+      ]),
+    );
+  });
 });

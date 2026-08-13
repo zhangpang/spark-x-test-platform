@@ -6,6 +6,7 @@ import {
   platformVersion,
   runStatuses,
   type CaseResult,
+  type CleanupJobRecord,
   type CleanupStatus,
   type DependencyHealth,
   type DependencyName,
@@ -15,6 +16,7 @@ import {
   type RunFailure,
   type RunStatus,
   type RunSummary,
+  type ResourceLedgerRecord,
   type ServiceName,
   type StepRunRecord,
   type TestRunCaseRecord,
@@ -102,6 +104,35 @@ interface RunEventRow {
   readonly created_at: Date | string;
 }
 
+interface ResourceRow {
+  readonly id: string;
+  readonly run_id: string;
+  readonly run_case_id: string;
+  readonly resource_type: string;
+  readonly system_resource_id: string;
+  readonly created_step_run_id: string | null;
+  readonly cleanup_definition: Readonly<Record<string, unknown>>;
+  readonly cleanup_status: ResourceLedgerRecord["cleanupStatus"];
+  readonly last_error: RunFailure | null;
+  readonly created_at: Date | string;
+  readonly updated_at: Date | string;
+}
+
+interface CleanupJobRow {
+  readonly id: string;
+  readonly run_id: string;
+  readonly status: CleanupJobRecord["status"];
+  readonly attempts: number;
+  readonly outcome_summary: RunSummary;
+  readonly gate_result: GateResult;
+  readonly first_failure: RunFailure | null;
+  readonly last_error: RunFailure | null;
+  readonly created_at: Date | string;
+  readonly started_at: Date | string | null;
+  readonly finished_at: Date | string | null;
+  readonly updated_at: Date | string;
+}
+
 export interface RunSnapshotCase {
   readonly runCaseId: string;
   readonly caseId: string;
@@ -142,6 +173,16 @@ export interface CreateRunInput {
 export interface SecretVariableReference {
   readonly name: string;
   readonly secretRef: string;
+}
+
+export interface CleanupWorkItem {
+  readonly id: string;
+  readonly runId: string;
+  readonly attempts: number;
+  readonly summary: RunSummary;
+  readonly gateResult: GateResult;
+  readonly firstFailure: RunFailure | null;
+  readonly snapshot: RunExecutionSnapshot;
 }
 
 function isoTimestamp(value: Date | string): string {
@@ -222,6 +263,36 @@ function mapStep(row: StepRow): StepRunRecord {
     startedAt: isoTimestamp(row.started_at),
     finishedAt: nullableTimestamp(row.finished_at),
     durationMs: row.duration_ms,
+  };
+}
+
+function mapResource(row: ResourceRow): ResourceLedgerRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    runCaseId: row.run_case_id,
+    resourceType: row.resource_type,
+    systemResourceId: row.system_resource_id,
+    createdStepRunId: row.created_step_run_id,
+    cleanupDefinition: row.cleanup_definition,
+    cleanupStatus: row.cleanup_status,
+    lastError: row.last_error,
+    createdAt: isoTimestamp(row.created_at),
+    updatedAt: isoTimestamp(row.updated_at),
+  };
+}
+
+function mapCleanupJob(row: CleanupJobRow): CleanupJobRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    status: row.status,
+    attempts: row.attempts,
+    lastError: row.last_error,
+    createdAt: isoTimestamp(row.created_at),
+    startedAt: nullableTimestamp(row.started_at),
+    finishedAt: nullableTimestamp(row.finished_at),
+    updatedAt: isoTimestamp(row.updated_at),
   };
 }
 
@@ -417,7 +488,7 @@ export class TestRunStore {
   async getRunDetail(id: string): Promise<TestRunDetail | null> {
     const run = await this.getRun(id);
     if (run === null) return null;
-    const [cases, steps] = await Promise.all([
+    const [cases, steps, resources, cleanupJobs] = await Promise.all([
       this.#pool.query<RunCaseRow>(
         `select trc.*, tc.name as case_name, tcv.version
          from test_run_cases trc
@@ -434,8 +505,22 @@ export class TestRunStore {
          order by trc.sort_order, sr.attempt, sr.started_at`,
         [id],
       ),
+      this.#pool.query<ResourceRow>(
+        `select * from resource_ledger where run_id = $1 order by created_at, id`,
+        [id],
+      ),
+      this.#pool.query<CleanupJobRow>(
+        `select * from cleanup_jobs where run_id = $1`,
+        [id],
+      ),
     ]);
-    return { ...run, cases: cases.rows.map(mapRunCase), steps: steps.rows.map(mapStep) };
+    return {
+      ...run,
+      cases: cases.rows.map(mapRunCase),
+      steps: steps.rows.map(mapStep),
+      resources: resources.rows.map(mapResource),
+      cleanupJob: cleanupJobs.rows[0] === undefined ? null : mapCleanupJob(cleanupJobs.rows[0]),
+    };
   }
 
   async listEvents(runId: string, afterId = 0): Promise<readonly RunEvent[]> {
@@ -586,7 +671,315 @@ export class TestRunStore {
         [id, workerId],
       ),
       this.#pool.query("update workers set last_seen_at = now() where id = $1", [workerId]),
+      this.#pool.query(
+        `update resource_locks
+         set heartbeat_at = now(), leased_until = now() + interval '30 seconds'
+         where run_id = $1 and released_at is null`,
+        [id],
+      ),
     ]);
+  }
+
+  async acquireResourceLocks(
+    runId: string,
+    runCaseId: string,
+    requestedKeys: readonly string[],
+    leaseMs = 30_000,
+  ): Promise<boolean> {
+    const keys = [...new Set(requestedKeys)].sort();
+    if (keys.length === 0) return true;
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin");
+      for (const key of keys) {
+        await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+          JSON.stringify(key),
+        ]);
+        await client.query(
+          `update resource_locks
+           set released_at = now(), release_reason = 'expired'
+           where lock_key = $1 and released_at is null and leased_until <= now()`,
+          [key],
+        );
+        const conflict = await client.query<{ readonly id: string }>(
+          `select id from resource_locks
+           where lock_key = $1 and released_at is null and run_case_id <> $2
+           limit 1`,
+          [key, runCaseId],
+        );
+        if (conflict.rows[0] !== undefined) {
+          await client.query("rollback");
+          return false;
+        }
+        const own = await client.query<{ readonly id: string }>(
+          `update resource_locks
+           set leased_until = now() + ($3::integer * interval '1 millisecond'), heartbeat_at = now()
+           where lock_key = $1 and run_case_id = $2 and released_at is null
+           returning id`,
+          [key, runCaseId, leaseMs],
+        );
+        if (own.rows[0] === undefined) {
+          await client.query(
+            `insert into resource_locks
+               (id, lock_key, run_id, run_case_id, leased_until)
+             values ($1, $2, $3, $4, now() + ($5::integer * interval '1 millisecond'))`,
+            [randomUUID(), key, runId, runCaseId, leaseMs],
+          );
+        }
+      }
+      await client.query("commit");
+      await this.appendEvent(runId, "resource_locks.acquired", { runCaseId, keys });
+      return true;
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async releaseResourceLocks(
+    runId: string,
+    runCaseId: string | null,
+    reason: "cleaned" | "no_side_effect" | "cancelled" | "compensation_succeeded",
+  ): Promise<void> {
+    const result = await this.#pool.query(
+      `update resource_locks
+       set released_at = now(), release_reason = $3
+       where run_id = $1 and released_at is null and ($2::uuid is null or run_case_id = $2)`,
+      [runId, runCaseId, reason],
+    );
+    if ((result.rowCount ?? 0) > 0) {
+      await this.appendEvent(runId, "resource_locks.released", { runCaseId, reason });
+    }
+  }
+
+  async renewResourceLocks(runId: string): Promise<void> {
+    await this.#pool.query(
+      `update resource_locks
+       set heartbeat_at = now(), leased_until = now() + interval '30 seconds'
+       where run_id = $1 and released_at is null`,
+      [runId],
+    );
+  }
+
+  async registerResource(
+    runId: string,
+    input: Readonly<{
+      id: string;
+      runCaseId: string;
+      resourceType: string;
+      systemResourceId: string;
+      createdStepRunId: string;
+      cleanupDefinition: Readonly<Record<string, unknown>>;
+    }>,
+  ): Promise<void> {
+    await this.#pool.query(
+      `insert into resource_ledger
+         (id, run_id, run_case_id, resource_type, system_resource_id,
+          created_step_run_id, cleanup_definition)
+       values ($1, $2, $3, $4, $5, $6, $7::jsonb)
+       on conflict (run_id, resource_type, system_resource_id) do nothing`,
+      [
+        input.id,
+        runId,
+        input.runCaseId,
+        input.resourceType,
+        input.systemResourceId,
+        input.createdStepRunId,
+        JSON.stringify(input.cleanupDefinition),
+      ],
+    );
+    await this.appendEvent(runId, "resource.registered", {
+      runCaseId: input.runCaseId,
+      resourceType: input.resourceType,
+      systemResourceId: input.systemResourceId,
+    });
+  }
+
+  async markCaseResources(
+    runId: string,
+    runCaseId: string,
+    status: ResourceLedgerRecord["cleanupStatus"],
+    lastError: RunFailure | null = null,
+  ): Promise<number> {
+    const result = await this.#pool.query(
+      `update resource_ledger
+       set cleanup_status = $3, last_error = $4::jsonb, updated_at = now()
+       where run_id = $1 and run_case_id = $2 and cleanup_status <> 'passed'`,
+      [runId, runCaseId, status, lastError === null ? null : JSON.stringify(lastError)],
+    );
+    return result.rowCount ?? 0;
+  }
+
+  async prepareCompensation(
+    runId: string,
+    summary: RunSummary,
+    gateResult: GateResult,
+    firstFailure: RunFailure | null,
+  ): Promise<CleanupJobRecord> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin");
+      const run = await client.query(
+        `update test_runs
+         set status = 'compensation_pending', summary = $2::jsonb, gate_result = $3,
+             first_failure = $4::jsonb, updated_at = now()
+         where id = $1 and status = 'cleaning'
+         returning id`,
+        [
+          runId,
+          JSON.stringify(summary),
+          gateResult,
+          firstFailure === null ? null : JSON.stringify(firstFailure),
+        ],
+      );
+      if (run.rows[0] === undefined) throw new Error("INVALID_RUN_TRANSITION");
+      const cleanupJobId = randomUUID();
+      const cleanup = await client.query<CleanupJobRow>(
+        `insert into cleanup_jobs
+           (id, run_id, outcome_summary, gate_result, first_failure)
+         values ($1, $2, $3::jsonb, $4, $5::jsonb)
+         on conflict (run_id) do update set
+           outcome_summary = excluded.outcome_summary,
+           gate_result = excluded.gate_result,
+           first_failure = excluded.first_failure,
+           status = case when cleanup_jobs.status = 'succeeded' then 'succeeded' else 'queued' end,
+           updated_at = now()
+         returning *`,
+        [
+          cleanupJobId,
+          runId,
+          JSON.stringify(summary),
+          gateResult,
+          firstFailure === null ? null : JSON.stringify(firstFailure),
+        ],
+      );
+      await client.query(
+        `insert into run_events (run_id, event_type, data)
+         values ($1, 'run.compensation_pending', $2::jsonb)`,
+        [runId, JSON.stringify({ cleanupJobId: cleanup.rows[0]?.id })],
+      );
+      await client.query("commit");
+      if (cleanup.rows[0] === undefined) throw new Error("CLEANUP_JOB_NOT_CREATED");
+      return mapCleanupJob(cleanup.rows[0]);
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async claimCleanupJob(id: string): Promise<CleanupWorkItem | null> {
+    const result = await this.#pool.query<CleanupJobRow & { readonly snapshot: RunExecutionSnapshot }>(
+      `update cleanup_jobs cj
+       set status = 'running', attempts = attempts + 1,
+           started_at = coalesce(started_at, now()), updated_at = now(), last_error = null
+       from test_runs r
+       where cj.id = $1 and cj.run_id = r.id and cj.status in ('queued', 'running', 'failed')
+       returning cj.*, r.snapshot`,
+      [id],
+    );
+    const row = result.rows[0];
+    return row === undefined
+      ? null
+      : {
+          id: row.id,
+          runId: row.run_id,
+          attempts: row.attempts,
+          summary: row.outcome_summary,
+          gateResult: row.gate_result,
+          firstFailure: row.first_failure,
+          snapshot: row.snapshot,
+        };
+  }
+
+  async listResourcesForCleanup(runId: string): Promise<readonly ResourceLedgerRecord[]> {
+    const result = await this.#pool.query<ResourceRow>(
+      `select * from resource_ledger
+       where run_id = $1 and cleanup_status in ('pending', 'running', 'failed')
+       order by created_at desc, id desc`,
+      [runId],
+    );
+    return result.rows.map(mapResource);
+  }
+
+  async markResourceCleanup(
+    resourceId: string,
+    status: ResourceLedgerRecord["cleanupStatus"],
+    lastError: RunFailure | null = null,
+  ): Promise<void> {
+    await this.#pool.query(
+      `update resource_ledger
+       set cleanup_status = $2, last_error = $3::jsonb, updated_at = now()
+       where id = $1`,
+      [resourceId, status, lastError === null ? null : JSON.stringify(lastError)],
+    );
+  }
+
+  async failCleanupJob(id: string, failure: RunFailure): Promise<void> {
+    await this.#pool.query(
+      `update cleanup_jobs
+       set status = 'failed', last_error = $2::jsonb, updated_at = now()
+       where id = $1 and status = 'running'`,
+      [id, JSON.stringify(failure)],
+    );
+  }
+
+  async completeCompensation(id: string): Promise<void> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin");
+      const cleanup = await client.query<CleanupJobRow>(
+        `update cleanup_jobs
+         set status = 'succeeded', last_error = null, finished_at = now(), updated_at = now()
+         where id = $1 and status = 'running'
+         returning *`,
+        [id],
+      );
+      const row = cleanup.rows[0];
+      if (row === undefined) throw new Error("CLEANUP_JOB_NOT_RUNNING");
+      const run = await client.query(
+        `update test_runs
+         set status = 'completed', summary = $2::jsonb, gate_result = $3,
+             first_failure = $4::jsonb, finished_at = now(), updated_at = now()
+         where id = $1 and status = 'compensation_pending'
+         returning id`,
+        [
+          row.run_id,
+          JSON.stringify(row.outcome_summary),
+          row.gate_result,
+          row.first_failure === null ? null : JSON.stringify(row.first_failure),
+        ],
+      );
+      if (run.rows[0] === undefined) throw new Error("INVALID_RUN_TRANSITION");
+      await client.query(
+        `update resource_locks
+         set released_at = now(), release_reason = 'compensation_succeeded'
+         where run_id = $1 and released_at is null`,
+        [row.run_id],
+      );
+      await client.query(
+        `insert into run_events (run_id, event_type, data)
+         values ($1, 'run.completed', $2::jsonb)`,
+        [
+          row.run_id,
+          JSON.stringify({
+            summary: row.outcome_summary,
+            gateResult: row.gate_result,
+            firstFailure: row.first_failure,
+            compensation: "succeeded",
+          }),
+        ],
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async startCase(runId: string, runCaseId: string, attempt: number): Promise<void> {

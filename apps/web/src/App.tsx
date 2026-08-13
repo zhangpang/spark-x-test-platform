@@ -132,6 +132,20 @@ const caseResultLabels = {
   skipped: "已跳过",
 } as const;
 
+const resourceCleanupLabels = {
+  pending: "等待清理",
+  running: "正在清理",
+  passed: "已清理",
+  failed: "清理失败",
+} as const;
+
+const cleanupJobLabels = {
+  queued: "补偿已排队",
+  running: "补偿执行中",
+  succeeded: "补偿已完成",
+  failed: "补偿待重试",
+} as const;
+
 function runProgress(run: TestRunRecord): number {
   if (run.summary.total === 0) return 0;
   const finished =
@@ -1543,6 +1557,47 @@ export function App() {
                       <strong>{selectedRun.firstFailure.code}</strong>
                       <p>{selectedRun.firstFailure.message}</p>
                     </div>
+                  )}
+
+                  {selectedRun.resources.length === 0 && selectedRun.cleanupJob === null ? null : (
+                    <section className="resource-safety" aria-labelledby="resource-safety-title">
+                      <div className="resource-safety-heading">
+                        <div>
+                          <h4 id="resource-safety-title">资源与补偿</h4>
+                          <p>跟踪本次运行创建的外部资源，只有清理完成后才释放互斥锁。</p>
+                        </div>
+                        {selectedRun.cleanupJob === null ? null : (
+                          <span
+                            className={`cleanup-job-state cleanup-job-${selectedRun.cleanupJob.status}`}
+                            role="status"
+                          >
+                            {cleanupJobLabels[selectedRun.cleanupJob.status]} · 第
+                            {selectedRun.cleanupJob.attempts}次
+                          </span>
+                        )}
+                      </div>
+                      <ul className="resource-list">
+                        {selectedRun.resources.map((resource) => (
+                          <li key={resource.id}>
+                            <span className={`resource-state resource-${resource.cleanupStatus}`}>
+                              <i aria-hidden="true" />
+                              {resourceCleanupLabels[resource.cleanupStatus]}
+                            </span>
+                            <span className="resource-identity">
+                              <strong>{resource.resourceType}</strong>
+                              <code title={resource.systemResourceId}>
+                                {resource.systemResourceId}
+                              </code>
+                            </span>
+                            <small>
+                              {resource.lastError === null
+                                ? "资源台账已登记"
+                                : resource.lastError.message}
+                            </small>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
                   )}
 
                   <div className="evidence-layout">

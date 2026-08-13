@@ -129,6 +129,13 @@ steps:
     capture:
       knowledgeBaseId: $.knowledgeBaseId
       createdResourceId: $.resourceId
+    resource:
+      type: knowledge-base
+      id: "${step.createdResourceId}"
+      cleanup:
+        action: adapter:spark-x-agent/knowledge-base.cleanup
+        params:
+          resourceId: "${resource.id}"
   - id: ask-order-question
     name: 发送B2C订单问题
     kind: action
@@ -161,6 +168,8 @@ finally:
     params:
       resourceId: "${step.createdResourceId}"
 ```
+
+`resource` 是动作步骤的可选副作用登记。动作成功后，运行引擎把资源类型、系统资源 ID 和独立补偿动作写入资源台账。常规 `finally` 成功时台账标记为已清理；`finally` 失败时，运行进入 `compensation_pending`，补偿 Worker 只允许使用 `resource.id` 和用例声明的密钥引用重新执行清理。`finally` 阶段不得创建新的资源登记。
 
 ## 9. 兼容性
 

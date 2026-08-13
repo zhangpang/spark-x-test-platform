@@ -292,10 +292,43 @@
                 "$ref": "#/$defs/assertion"
               },
               "default": []
+            },
+            "resource": {
+              "$ref": "#/$defs/resourceRegistration"
             }
           }
         }
       ]
+    },
+    "resourceRegistration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id", "cleanup"],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/key"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^\\$\\{(?:run\\.id|step\\.[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*)\\}$",
+          "maxLength": 200
+        },
+        "cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "params"],
+          "properties": {
+            "action": {
+              "type": "string",
+              "pattern": "^(browser|http|mcp|wait|json|variable|database|adapter):[a-zA-Z0-9._/-]+$"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      }
     },
     "ifStep": {
       "type": "object",
