@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "packages/**/*.ts",
+    "adapters/**/*.ts",
+    "scripts/**/*.ts",
+    "vitest.config.ts",
+    "vite.config.ts"
+  ]
+}

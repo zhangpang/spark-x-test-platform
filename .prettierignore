@@ -1,0 +1,16 @@
+node_modules
+dist
+**/dist
+coverage
+package-lock.json
+playwright-report
+test-results
+docs/api
+docs/architecture
+docs/decisions
+docs/product
+docs/quality
+docs/roadmap
+docs/specs
+docs/ui
+schemas

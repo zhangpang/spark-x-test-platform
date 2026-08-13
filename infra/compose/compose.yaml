@@ -1,0 +1,255 @@
+name: spark-x-test-platform
+
+x-service-environment: &service-environment
+  NODE_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DATABASE_URL: postgresql://${POSTGRES_USER:-spark_x_test}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-spark_x_test_platform}
+  REDIS_URL: redis://redis:6379/0
+  MINIO_ENDPOINT: minio
+  MINIO_PORT: 9000
+  MINIO_USE_SSL: "false"
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-spark-x-test-local}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-change-me-local-only}
+  MINIO_BUCKET: ${MINIO_BUCKET:-test-artifacts}
+  PLATFORM_QUEUE_NAME: ${PLATFORM_QUEUE_NAME:-test-runs}
+
+x-service-base: &service-base
+  image: spark-x-test-platform-service:${PLATFORM_VERSION:-dev}
+  build:
+    context: ../..
+    dockerfile: infra/compose/Dockerfile.service
+  restart: unless-stopped
+  environment: *service-environment
+  networks: [platform]
+
+services:
+  postgres:
+    image: postgres:17.6-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-spark_x_test_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-spark_x_test}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    networks: [platform]
+
+  redis:
+    image: redis:7.4.5-bookworm
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    networks: [platform]
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-spark-x-test-local}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-change-me-local-only}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    networks: [platform]
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-spark-x-test-local}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-change-me-local-only}
+      MINIO_BUCKET: ${MINIO_BUCKET:-test-artifacts}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_ACCESS_KEY}" "$${MINIO_SECRET_KEY}"
+        mc mb --ignore-existing "local/$${MINIO_BUCKET}"
+    networks: [platform]
+
+  migrate:
+    <<: *service-base
+    restart: "no"
+    command: ["node", "--import", "tsx", "scripts/migrate.ts"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  api:
+    <<: *service-base
+    command: ["node", "apps/api/dist/main.js"]
+    environment:
+      <<: *service-environment
+      API_PORT: 4100
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${API_PORT:-4100}:4100"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4100/api/v1/readyz').then(r=>{if(!r.ok)process.exit(1)})",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+
+  scheduler:
+    <<: *service-base
+    command: ["node", "apps/scheduler/dist/main.js"]
+    environment:
+      <<: *service-environment
+      SCHEDULER_HEALTH_PORT: 4101
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${SCHEDULER_HEALTH_PORT:-4101}:4101"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4101/readyz').then(r=>{if(!r.ok)process.exit(1)})",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  worker:
+    <<: *service-base
+    command: ["node", "apps/worker/dist/main.js"]
+    environment:
+      <<: *service-environment
+      WORKER_HEALTH_PORT: 4102
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      WORKER_IDENTITY: ${WORKER_IDENTITY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${WORKER_HEALTH_PORT:-4102}:4102"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4102/readyz').then(r=>{if(!r.ok)process.exit(1)})",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G
+
+  web:
+    image: spark-x-test-platform-web:${PLATFORM_VERSION:-dev}
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-4173}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+    networks: [platform]
+
+networks:
+  platform:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

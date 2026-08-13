@@ -1,0 +1,49 @@
+{
+  "name": "spark-x-test-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@10.9.2",
+  "engines": {
+    "node": ">=22 <23",
+    "npm": ">=10 <11"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "adapters/*"
+  ],
+  "scripts": {
+    "build": "npm run build:packages && npm run build:apps",
+    "build:packages": "npm run build -w @spark-x-test/contracts && npm run build -w @spark-x-test/case-schema && npm run build -w @spark-x-test/adapter-sdk && npm run build -w @spark-x-test/execution-engine && npm run build -w @spark-x-test/executors && npm run build -w @spark-x-test/reporting && npm run build -w @spark-x-test/service-runtime && npm run build -w @spark-x-test/adapter-spark-x-agent",
+    "build:apps": "npm run build -w @spark-x-test/api && npm run build -w @spark-x-test/scheduler && npm run build -w @spark-x-test/worker && npm run build -w @spark-x-test/web",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run validate:contracts",
+    "dev": "concurrently -n web,api,scheduler,worker -c cyan,green,yellow,magenta \"npm run dev -w @spark-x-test/web\" \"npm run dev -w @spark-x-test/api\" \"npm run dev -w @spark-x-test/scheduler\" \"npm run dev -w @spark-x-test/worker\"",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "validate:contracts": "node --import tsx scripts/validate-contracts.ts",
+    "db:migrate": "node --import tsx scripts/migrate.ts",
+    "compose:config": "docker compose --env-file .env.example -f infra/compose/compose.yaml config --quiet",
+    "compose:up": "docker compose --env-file .env -f infra/compose/compose.yaml up --build -d",
+    "compose:down": "docker compose --env-file .env -f infra/compose/compose.yaml down"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.33.0",
+    "@types/node": "22.17.2",
+    "concurrently": "9.2.0",
+    "eslint": "9.33.0",
+    "eslint-plugin-react-hooks": "5.2.0",
+    "eslint-plugin-react-refresh": "0.4.20",
+    "globals": "16.3.0",
+    "prettier": "3.6.2",
+    "tsx": "4.20.4",
+    "typescript": "5.9.2",
+    "typescript-eslint": "8.40.0",
+    "vitest": "3.2.7",
+    "yaml": "2.9.0"
+  }
+}

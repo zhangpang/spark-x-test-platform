@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-仓库当前处于 **MVP 产品与技术基线评审阶段**，尚未进入业务功能开发。已确认的第一版目标包括：
+仓库已完成产品与技术基线，当前进入 **M1 平台工程骨架**。M1 仅建设平台自身运行基础，不执行真实测试案例。已确认的第一版目标包括：
 
 - 独立控制台、API、调度器和可横向扩展的 Worker；
 - 平台数据库内维护、发布、比较、回滚和导入导出自动化用例；
@@ -31,6 +31,8 @@
 - [验收清单](docs/quality/acceptance.md)
 - [星火 Agent 首批案例目录](docs/quality/spark-x-agent-case-catalog.md)
 - [决策记录](docs/decisions/0001-platform-boundary.md)
+- [本地开发指南](docs/development/getting-started.md)
+- [M1 部署后冒烟检查](docs/operations/m1-smoke-check.md)
 
 机器可校验的用例和适配器清单 Schema 位于 [`schemas/`](schemas/)。
 
@@ -52,3 +54,14 @@
 4. 任何通过、失败、取消或超时都必须进入清理阶段，清理失败独立记录。
 5. 用例只能访问已登记环境的地址，密钥不得进入用例正文、日志或 Git。
 6. AI 回归优先断言工具、参数、证据和业务事实，不比较回答全文。
+
+## M1 快速开始
+
+```bash
+npm ci
+npm run check
+cp .env.example .env
+npm run compose:up
+```
+
+默认 Web 入口为 `http://localhost:4173`。完整说明见[本地开发指南](docs/development/getting-started.md)。

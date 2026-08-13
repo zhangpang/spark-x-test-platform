@@ -1,0 +1,271 @@
+:root {
+  font-family:
+    Inter,
+    "PingFang SC",
+    "Microsoft YaHei",
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  color: #18312f;
+  background: #edf3f1;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: radial-gradient(circle at 75% 0%, rgb(188 230 216 / 55%), transparent 30rem), #edf3f1;
+}
+
+button {
+  font: inherit;
+}
+
+.shell {
+  min-height: 100vh;
+}
+
+.topbar {
+  min-height: 92px;
+  padding: 20px 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  color: #f7fffc;
+  background: #123c38;
+  border-bottom: 4px solid #dcaa56;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: 24px;
+  letter-spacing: 0.02em;
+}
+
+.eyebrow {
+  margin-bottom: 6px;
+  color: #82c8b5;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 14px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 8%);
+  font-size: 13px;
+}
+
+.status-pill span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #e5a657;
+}
+
+.status-ok span {
+  background: #5de3ae;
+  box-shadow: 0 0 0 5px rgb(93 227 174 / 12%);
+}
+
+.status-degraded span,
+.status-unreachable span {
+  background: #ff6f61;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  min-height: calc(100vh - 92px);
+}
+
+.sidebar {
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: rgb(255 255 255 / 68%);
+  border-right: 1px solid #d4e0dc;
+}
+
+.sidebar button {
+  width: 100%;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #48625f;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  text-align: left;
+  cursor: default;
+}
+
+.sidebar button span {
+  color: #94aaa6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.sidebar button.active {
+  color: #0f665f;
+  background: #d9ede7;
+  font-weight: 700;
+}
+
+main {
+  width: min(1180px, 100%);
+  padding: 54px clamp(28px, 5vw, 72px);
+}
+
+.hero {
+  max-width: 760px;
+  margin-bottom: 38px;
+}
+
+.hero h2 {
+  margin-bottom: 16px;
+  color: #123c38;
+  font-size: clamp(30px, 4vw, 52px);
+  line-height: 1.08;
+  letter-spacing: -0.035em;
+}
+
+.hero > p:last-child {
+  color: #58716e;
+  font-size: 16px;
+  line-height: 1.8;
+}
+
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.health-card,
+.scope-card {
+  padding: 22px;
+  background: rgb(255 255 255 / 76%);
+  border: 1px solid #d4e0dc;
+  border-radius: 14px;
+  box-shadow: 0 14px 45px rgb(28 70 64 / 6%);
+}
+
+.health-card.wide {
+  grid-column: 1 / -1;
+}
+
+.health-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.health-card h3,
+.scope-card h3 {
+  margin-bottom: 8px;
+  color: #1a4641;
+  text-transform: capitalize;
+}
+
+.health-card strong {
+  display: block;
+  margin: 18px 0 8px;
+  color: #113e39;
+  font-size: 28px;
+}
+
+.health-card p,
+.scope-card li {
+  margin-bottom: 0;
+  color: #718683;
+  font-size: 13px;
+}
+
+.badge {
+  padding: 4px 8px;
+  color: #526966;
+  background: #e8efed;
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.badge-ok {
+  color: #12644f;
+  background: #daf4e9;
+}
+
+.badge-error {
+  color: #a43d35;
+  background: #ffe0dc;
+}
+
+.scope-card {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  background: #163f3b;
+  border-color: #163f3b;
+}
+
+.scope-card h3 {
+  margin-bottom: 0;
+  color: #f5fffb;
+}
+
+.scope-card ul {
+  margin: 0;
+  padding-left: 20px;
+  columns: 2;
+  column-gap: 34px;
+}
+
+.scope-card li {
+  padding: 4px 0;
+  color: #bcd2cd;
+}
+
+@media (max-width: 860px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .health-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .scope-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
