@@ -26,6 +26,7 @@ interface RunRecord extends RecordWithId {
     systemResourceId: string;
   }>[];
   readonly cleanupJob: Readonly<{
+    id: string;
     status: string;
     attempts: number;
     lastError: Readonly<{
