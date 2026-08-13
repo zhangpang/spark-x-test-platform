@@ -277,7 +277,7 @@ function validateTimeoutBudget(definition: JsonObject): ValidationIssue[] {
   const caseTimeout = definition.execution.caseTimeoutMs;
   if (typeof stepTimeout !== "number" || typeof caseTimeout !== "number") return [];
   const mainSteps = isJsonArray(definition.steps) ? definition.steps : [];
-  const theoretical = mainSteps.reduce((total, step) => {
+  const theoretical = mainSteps.reduce<number>((total, step) => {
     if (!isObject(step)) return total;
     return total + (typeof step.timeoutMs === "number" ? step.timeoutMs : stepTimeout);
   }, 0);
