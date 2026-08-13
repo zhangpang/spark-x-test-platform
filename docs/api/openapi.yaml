@@ -1,0 +1,2038 @@
+openapi: 3.1.0
+info:
+  title: Spark X Test Platform API
+  version: 0.1.0
+  description: |
+    MVP API baseline for the independent automation test platform.
+    The first internal release has no user authentication, but is restricted to
+    the controlled intranet. Worker transport is handled by the queue and is not
+    part of this public/control-plane API.
+servers:
+  - url: /api/v1
+tags:
+  - name: Health
+  - name: Systems
+  - name: Environments
+  - name: Cases
+  - name: Datasets
+  - name: Templates
+  - name: Shared Steps
+  - name: Suites
+  - name: Plans
+  - name: Runs
+  - name: Secrets
+  - name: Adapters
+  - name: Platform
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /readyz:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      responses:
+        "200":
+          description: Required dependencies are ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /systems:
+    get:
+      tags: [Systems]
+      operationId: listSystems
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Systems page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemPage"
+    post:
+      tags: [Systems]
+      operationId: createSystem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SystemInput"
+      responses:
+        "201":
+          description: System created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/System"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /systems/{systemId}:
+    parameters:
+      - $ref: "#/components/parameters/SystemId"
+    get:
+      tags: [Systems]
+      operationId: getSystem
+      responses:
+        "200":
+          description: System details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/System"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Systems]
+      operationId: updateSystem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SystemPatch"
+      responses:
+        "200":
+          description: System updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/System"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /systems/{systemId}/modules:
+    parameters:
+      - $ref: "#/components/parameters/SystemId"
+    get:
+      tags: [Systems]
+      operationId: listModules
+      responses:
+        "200":
+          description: Modules in display order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Module"
+    post:
+      tags: [Systems]
+      operationId: createModule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModuleInput"
+      responses:
+        "201":
+          description: Module created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Module"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /systems/{systemId}/environments:
+    parameters:
+      - $ref: "#/components/parameters/SystemId"
+    get:
+      tags: [Environments]
+      operationId: listEnvironments
+      responses:
+        "200":
+          description: Environments for a system.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Environment"
+    post:
+      tags: [Environments]
+      operationId: createEnvironment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvironmentInput"
+      responses:
+        "201":
+          description: Environment created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /environments/{environmentId}:
+    parameters:
+      - $ref: "#/components/parameters/EnvironmentId"
+    get:
+      tags: [Environments]
+      operationId: getEnvironment
+      responses:
+        "200":
+          description: Environment details without secret values.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Environments]
+      operationId: updateEnvironment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvironmentPatch"
+      responses:
+        "200":
+          description: Environment updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /environments/{environmentId}/health-checks:
+    parameters:
+      - $ref: "#/components/parameters/EnvironmentId"
+    post:
+      tags: [Environments]
+      operationId: runEnvironmentHealthCheck
+      responses:
+        "202":
+          description: Health check accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationAccepted"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /test-cases:
+    get:
+      tags: [Cases]
+      operationId: listTestCases
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: systemId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/CaseStatus"
+        - name: tag
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Test case page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestCasePage"
+    post:
+      tags: [Cases]
+      operationId: createTestCase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTestCaseRequest"
+      responses:
+        "201":
+          description: Test case and initial draft version created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestCase"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /test-cases/imports:
+    post:
+      tags: [Cases]
+      operationId: importTestCases
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [systemId, format, content]
+              properties:
+                systemId:
+                  type: string
+                  format: uuid
+                format:
+                  enum: [json, yaml]
+                content:
+                  type: string
+                mode:
+                  enum: [validate_only, create_drafts]
+                  default: validate_only
+      responses:
+        "200":
+          description: Import validation or draft creation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /test-cases/exports:
+    post:
+      tags: [Cases]
+      operationId: exportTestCases
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [caseIds, format]
+              properties:
+                caseIds:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    type: string
+                    format: uuid
+                format:
+                  enum: [json, yaml]
+      responses:
+        "200":
+          description: Versioned portable test case bundle.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                contentMediaType: application/octet-stream
+  /test-cases/{caseId}:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: getTestCase
+      responses:
+        "200":
+          description: Test case identity and version pointers.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestCase"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Cases]
+      operationId: updateTestCaseMetadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name:
+                  type: string
+                status:
+                  $ref: "#/components/schemas/CaseStatus"
+      responses:
+        "200":
+          description: Test case identity updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestCase"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /test-cases/{caseId}/versions:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: listTestCaseVersions
+      responses:
+        "200":
+          description: Immutable versions, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TestCaseVersion"
+    post:
+      tags: [Cases]
+      operationId: createTestCaseVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVersionRequest"
+      responses:
+        "201":
+          description: Draft version created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestCaseVersion"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /test-case-versions/{versionId}/validations:
+    parameters:
+      - $ref: "#/components/parameters/VersionId"
+    post:
+      tags: [Cases]
+      operationId: validateTestCaseVersion
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                environmentId:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Static validation result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /test-cases/{caseId}/publish:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    post:
+      tags: [Cases]
+      operationId: publishTestCaseVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [versionId]
+              properties:
+                versionId:
+                  type: string
+                  format: uuid
+                changeNote:
+                  type: string
+                  maxLength: 1000
+      responses:
+        "200":
+          description: Version published and case pointer updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestCase"
+        "409":
+          description: Validation or optimistic concurrency conflict.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /test-cases/{caseId}/rollback:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    post:
+      tags: [Cases]
+      operationId: rollbackTestCase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [sourceVersionId]
+              properties:
+                sourceVersionId:
+                  type: string
+                  format: uuid
+      responses:
+        "201":
+          description: A new draft copied from the selected historical version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestCaseVersion"
+  /datasets:
+    get:
+      tags: [Datasets]
+      operationId: listDatasets
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: systemId
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Dataset page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericPage"
+    post:
+      tags: [Datasets]
+      operationId: createDataset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DatasetInput"
+      responses:
+        "201":
+          description: Dataset and initial immutable version created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResource"
+  /datasets/{datasetId}/versions:
+    parameters:
+      - $ref: "#/components/parameters/DatasetId"
+    get:
+      tags: [Datasets]
+      operationId: listDatasetVersions
+      responses:
+        "200":
+          description: Dataset versions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DefinitionVersion"
+    post:
+      tags: [Datasets]
+      operationId: createDatasetVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DefinitionVersionInput"
+      responses:
+        "201":
+          description: Dataset draft version created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DefinitionVersion"
+  /case-templates:
+    get:
+      tags: [Templates]
+      operationId: listCaseTemplates
+      parameters:
+        - name: systemId
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Built-in and adapter-provided case templates.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GenericResource"
+  /shared-steps:
+    get:
+      tags: [Shared Steps]
+      operationId: listSharedSteps
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Shared step page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericPage"
+    post:
+      tags: [Shared Steps]
+      operationId: createSharedStep
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NamedDefinitionInput"
+      responses:
+        "201":
+          description: Shared step created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResource"
+  /shared-steps/{sharedStepId}/versions:
+    parameters:
+      - $ref: "#/components/parameters/SharedStepId"
+    get:
+      tags: [Shared Steps]
+      operationId: listSharedStepVersions
+      responses:
+        "200":
+          description: Immutable shared step versions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DefinitionVersion"
+    post:
+      tags: [Shared Steps]
+      operationId: createSharedStepVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DefinitionVersionInput"
+      responses:
+        "201":
+          description: Shared step draft version created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DefinitionVersion"
+  /shared-steps/{sharedStepId}/publish:
+    parameters:
+      - $ref: "#/components/parameters/SharedStepId"
+    post:
+      tags: [Shared Steps]
+      operationId: publishSharedStepVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [versionId]
+              properties:
+                versionId:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Shared step version published.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericResource"
+  /test-suites:
+    get:
+      tags: [Suites]
+      operationId: listTestSuites
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Test suite page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericPage"
+    post:
+      tags: [Suites]
+      operationId: createTestSuite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuiteInput"
+      responses:
+        "201":
+          description: Test suite created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestSuite"
+  /test-suites/{suiteId}:
+    parameters:
+      - $ref: "#/components/parameters/SuiteId"
+    get:
+      tags: [Suites]
+      operationId: getTestSuite
+      responses:
+        "200":
+          description: Test suite details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestSuite"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Suites]
+      operationId: updateTestSuite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuiteInput"
+      responses:
+        "200":
+          description: Test suite updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestSuite"
+  /test-plans:
+    get:
+      tags: [Plans]
+      operationId: listTestPlans
+      responses:
+        "200":
+          description: Scheduled plans.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenericPage"
+    post:
+      tags: [Plans]
+      operationId: createTestPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanInput"
+      responses:
+        "201":
+          description: Test plan created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestPlan"
+  /test-plans/{planId}:
+    parameters:
+      - $ref: "#/components/parameters/PlanId"
+    get:
+      tags: [Plans]
+      operationId: getTestPlan
+      responses:
+        "200":
+          description: Test plan details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestPlan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Plans]
+      operationId: updateTestPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanPatch"
+      responses:
+        "200":
+          description: Plan updated, including enable or disable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestPlan"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /runs:
+    get:
+      tags: [Runs]
+      operationId: listRuns
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: systemId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/RunStatus"
+      responses:
+        "200":
+          description: Run page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunPage"
+    post:
+      tags: [Runs]
+      operationId: createRun
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRunRequest"
+      responses:
+        "202":
+          description: Run accepted, or existing run returned for the same idempotency key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Environment or capability conflict.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /runs/{runId}:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [Runs]
+      operationId: getRun
+      responses:
+        "200":
+          description: Run snapshot and current summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /runs/{runId}/cases:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [Runs]
+      operationId: listRunCases
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Case iterations in a run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunCasePage"
+  /runs/{runId}/artifacts:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [Runs]
+      operationId: listRunArtifacts
+      responses:
+        "200":
+          description: Artifact metadata and short-lived download URLs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Artifact"
+  /artifacts/{artifactId}/retention:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactId"
+    patch:
+      tags: [Runs]
+      operationId: updateArtifactRetention
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [locked]
+              properties:
+                locked:
+                  type: boolean
+      responses:
+        "200":
+          description: Artifact retention lock updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Artifact"
+  /runs/{runId}/events:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [Runs]
+      operationId: streamRunEvents
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Server-sent event stream with monotonic event IDs.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /runs/{runId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    post:
+      tags: [Runs]
+      operationId: cancelRun
+      responses:
+        "202":
+          description: Cancellation requested; cleanup still runs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "409":
+          description: Run is already terminal.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /runs/{runId}/retries:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    post:
+      tags: [Runs]
+      operationId: retryRunCases
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [runCaseIds]
+              properties:
+                runCaseIds:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        "202":
+          description: A new run linked to the original run was accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+  /secrets:
+    get:
+      tags: [Secrets]
+      operationId: listSecretMetadata
+      responses:
+        "200":
+          description: Secret metadata; values are never returned.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SecretMetadata"
+    post:
+      tags: [Secrets]
+      operationId: upsertSecret
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecretInput"
+      responses:
+        "200":
+          description: Secret stored or rotated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretMetadata"
+  /adapters:
+    get:
+      tags: [Adapters]
+      operationId: listAdapters
+      responses:
+        "200":
+          description: Adapter manifests embedded in the current platform build.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdapterSummary"
+  /callback-targets:
+    get:
+      tags: [Platform]
+      operationId: listCallbackTargets
+      responses:
+        "200":
+          description: Pre-registered callback targets without secret material.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CallbackTarget"
+    post:
+      tags: [Platform]
+      operationId: createCallbackTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallbackTargetInput"
+      responses:
+        "201":
+          description: Callback target created after allowlist validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallbackTarget"
+  /platform/settings:
+    get:
+      tags: [Platform]
+      operationId: getPlatformSettings
+      responses:
+        "200":
+          description: Non-secret platform settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlatformSettings"
+    patch:
+      tags: [Platform]
+      operationId: updatePlatformSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlatformSettings"
+      responses:
+        "200":
+          description: Platform settings updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlatformSettings"
+  /audit-events:
+    get:
+      tags: [Platform]
+      operationId: listAuditEvents
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: objectType
+          in: query
+          schema:
+            type: string
+        - name: objectId
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Anonymous operation audit page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditPage"
+components:
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 200
+    SystemId:
+      name: systemId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    EnvironmentId:
+      name: environmentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CaseId:
+      name: caseId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    VersionId:
+      name: versionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DatasetId:
+      name: datasetId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SharedStepId:
+      name: sharedStepId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SuiteId:
+      name: suiteId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PlanId:
+      name: planId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ArtifactId:
+      name: artifactId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    BadRequest:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unavailable:
+      description: Required dependency is unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Health:
+      type: object
+      required: [status, time]
+      properties:
+        status:
+          enum: [ok, degraded]
+        time:
+          type: string
+          format: date-time
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+    OperationAccepted:
+      type: object
+      required: [operationId, status]
+      properties:
+        operationId:
+          type: string
+          format: uuid
+        status:
+          enum: [queued]
+    SystemInput:
+      type: object
+      additionalProperties: false
+      required: [key, name]
+      properties:
+        key:
+          type: string
+          pattern: "^[a-z][a-z0-9-]+$"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 4000
+        concurrencyLimit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 5
+    SystemPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          enum: [active, archived]
+        concurrencyLimit:
+          type: integer
+          minimum: 1
+          maximum: 100
+    System:
+      allOf:
+        - $ref: "#/components/schemas/SystemInput"
+        - type: object
+          required: [id, status, createdAt, updatedAt]
+          properties:
+            id:
+              type: string
+              format: uuid
+            status:
+              enum: [active, archived]
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+    SystemPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/System"
+        nextCursor:
+          type: [string, "null"]
+    ModuleInput:
+      type: object
+      additionalProperties: false
+      required: [key, name]
+      properties:
+        key:
+          type: string
+          pattern: "^[a-z][a-z0-9-]+$"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        sortOrder:
+          type: integer
+          minimum: 0
+          default: 0
+    Module:
+      allOf:
+        - $ref: "#/components/schemas/ModuleInput"
+        - type: object
+          required: [id, systemId, createdAt]
+          properties:
+            id:
+              type: string
+              format: uuid
+            systemId:
+              type: string
+              format: uuid
+            createdAt:
+              type: string
+              format: date-time
+    EnvironmentInput:
+      type: object
+      additionalProperties: false
+      required: [key, name, kind, baseUrl, actionLevel, allowlist, timezone, concurrencyLimit]
+      properties:
+        key:
+          type: string
+          pattern: "^[a-z][a-z0-9-]+$"
+        name:
+          type: string
+        kind:
+          enum: [test, staging, production]
+        baseUrl:
+          type: string
+          format: uri
+        actionLevel:
+          enum: [read, write, dangerous]
+        allowlist:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [protocol, host, ports]
+            properties:
+              protocol:
+                enum: [http, https]
+              host:
+                type: string
+              ports:
+                type: array
+                items:
+                  type: integer
+                  minimum: 1
+                  maximum: 65535
+              pathPrefixes:
+                type: array
+                items:
+                  type: string
+        timezone:
+          type: string
+          default: Asia/Shanghai
+        concurrencyLimit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        adapterKey:
+          type: string
+        adapterConfig:
+          type: object
+    EnvironmentPatch:
+      type: object
+      description: Partial EnvironmentInput. Secret values are referenced separately.
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        kind:
+          enum: [test, staging, production]
+        baseUrl:
+          type: string
+          format: uri
+        actionLevel:
+          enum: [read, write, dangerous]
+        allowlist:
+          type: array
+          minItems: 1
+          items:
+            type: object
+        timezone:
+          type: string
+        concurrencyLimit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        adapterKey:
+          type: string
+        adapterConfig:
+          type: object
+        status:
+          enum: [active, disabled, archived]
+    Environment:
+      allOf:
+        - $ref: "#/components/schemas/EnvironmentInput"
+        - type: object
+          required: [id, systemId, status, createdAt, updatedAt]
+          properties:
+            id:
+              type: string
+              format: uuid
+            systemId:
+              type: string
+              format: uuid
+            status:
+              enum: [active, disabled, archived]
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+    CaseStatus:
+      enum: [draft, published, disabled, archived]
+    CreateTestCaseRequest:
+      type: object
+      additionalProperties: false
+      required: [moduleId, definition]
+      properties:
+        moduleId:
+          type: string
+          format: uuid
+        definition:
+          type: object
+        changeNote:
+          type: string
+          maxLength: 1000
+    TestCase:
+      type: object
+      required: [id, moduleId, name, status, currentDraftVersionId, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        moduleId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          $ref: "#/components/schemas/CaseStatus"
+        currentDraftVersionId:
+          type: [string, "null"]
+          format: uuid
+        currentPublishedVersionId:
+          type: [string, "null"]
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [definition, expectedBaseVersion]
+      properties:
+        definition:
+          type: object
+        expectedBaseVersion:
+          type: integer
+          minimum: 0
+        changeNote:
+          type: string
+          maxLength: 1000
+    TestCaseVersion:
+      type: object
+      required: [id, caseId, version, schemaVersion, definition, contentHash, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        caseId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        schemaVersion:
+          type: string
+        definition:
+          type: object
+        contentHash:
+          type: string
+        changeNote:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    ValidationResult:
+      type: object
+      required: [valid, issues]
+      properties:
+        valid:
+          type: boolean
+        issues:
+          type: array
+          items:
+            type: object
+            required: [severity, code, path, message]
+            properties:
+              severity:
+                enum: [error, warning]
+              code:
+                type: string
+              path:
+                type: string
+              message:
+                type: string
+    TestCasePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/TestCase"
+        nextCursor:
+          type: [string, "null"]
+    DatasetInput:
+      type: object
+      additionalProperties: false
+      required: [systemId, name, columns, rows]
+      properties:
+        systemId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        columns:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+        rows:
+          type: array
+          items:
+            type: object
+        changeNote:
+          type: string
+          maxLength: 1000
+    DefinitionVersionInput:
+      type: object
+      additionalProperties: false
+      required: [definition, expectedBaseVersion]
+      properties:
+        definition:
+          type: object
+        expectedBaseVersion:
+          type: integer
+          minimum: 0
+        changeNote:
+          type: string
+          maxLength: 1000
+    DefinitionVersion:
+      type: object
+      required: [id, resourceId, version, definition, contentHash, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        resourceId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        definition:
+          type: object
+        contentHash:
+          type: string
+        changeNote:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    NamedDefinitionInput:
+      type: object
+      additionalProperties: false
+      required: [systemId, name, definition]
+      properties:
+        systemId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        definition:
+          type: object
+    GenericResource:
+      type: object
+      required: [id, name, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    GenericPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/GenericResource"
+        nextCursor:
+          type: [string, "null"]
+    SuiteInput:
+      type: object
+      additionalProperties: false
+      required: [systemId, key, name, caseIds]
+      properties:
+        systemId:
+          type: string
+          format: uuid
+        key:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        caseIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        defaultConcurrency:
+          type: integer
+          minimum: 1
+          maximum: 100
+        defaultDiagnosticRetries:
+          type: integer
+          minimum: 0
+          maximum: 3
+    TestSuite:
+      allOf:
+        - $ref: "#/components/schemas/SuiteInput"
+        - type: object
+          required: [id, createdAt, updatedAt]
+          properties:
+            id:
+              type: string
+              format: uuid
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+    PlanInput:
+      type: object
+      additionalProperties: false
+      required: [name, suiteId, environmentId, cron, timezone, enabled]
+      properties:
+        name:
+          type: string
+        suiteId:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        cron:
+          type: string
+        timezone:
+          type: string
+          default: Asia/Shanghai
+        enabled:
+          type: boolean
+        runParameters:
+          type: object
+    PlanPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        suiteId:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        cron:
+          type: string
+        timezone:
+          type: string
+        enabled:
+          type: boolean
+        runParameters:
+          type: object
+    TestPlan:
+      allOf:
+        - $ref: "#/components/schemas/PlanInput"
+        - type: object
+          required: [id, nextRunAt, createdAt, updatedAt]
+          properties:
+            id:
+              type: string
+              format: uuid
+            nextRunAt:
+              type: [string, "null"]
+              format: date-time
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+    CreateRunRequest:
+      type: object
+      additionalProperties: false
+      required: [suiteId, environmentId, triggerType]
+      properties:
+        suiteId:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        triggerType:
+          enum: [manual, schedule, api, release_gate, retry]
+        priority:
+          enum: [release_smoke, manual_smoke, reproduction, regression, scheduled]
+        subjectVersion:
+          type: object
+          additionalProperties: false
+          properties:
+            commit:
+              type: string
+            releaseId:
+              type: string
+            displayVersion:
+              type: string
+        variables:
+          type: object
+        callbackTargetId:
+          type: string
+          format: uuid
+    RunStatus:
+      enum: [queued, preparing, running, cancelling, cleaning, interrupted, compensation_pending, completed]
+    GateResult:
+      enum: [passed, blocked, inconclusive]
+    CaseResult:
+      enum: [passed, product_failed, test_failed, environment_failed, infrastructure_failed, flaky, cancelled, skipped]
+    Run:
+      type: object
+      required: [id, systemId, environmentId, suiteId, triggerType, status, queuedAt, summary]
+      properties:
+        id:
+          type: string
+          format: uuid
+        systemId:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        suiteId:
+          type: string
+          format: uuid
+        triggerType:
+          type: string
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        gateResult:
+          anyOf:
+            - $ref: "#/components/schemas/GateResult"
+            - type: "null"
+        queuedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: [string, "null"]
+          format: date-time
+        finishedAt:
+          type: [string, "null"]
+          format: date-time
+        subjectVersion:
+          type: object
+        summary:
+          type: object
+          additionalProperties:
+            type: integer
+            minimum: 0
+    RunPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Run"
+        nextCursor:
+          type: [string, "null"]
+    RunCase:
+      type: object
+      required: [id, runId, caseVersionId, iteration, result, cleanupStatus]
+      properties:
+        id:
+          type: string
+          format: uuid
+        runId:
+          type: string
+          format: uuid
+        caseVersionId:
+          type: string
+          format: uuid
+        datasetRow:
+          type: [integer, "null"]
+        iteration:
+          type: integer
+          minimum: 1
+        result:
+          $ref: "#/components/schemas/CaseResult"
+        cleanupStatus:
+          enum: [not_required, pending, running, succeeded, failed, compensation_pending]
+        firstFailure:
+          type: [object, "null"]
+        durationMs:
+          type: integer
+          minimum: 0
+    RunCasePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunCase"
+        nextCursor:
+          type: [string, "null"]
+    Artifact:
+      type: object
+      required: [id, runId, type, size, sha256, expiresAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        runId:
+          type: string
+          format: uuid
+        type:
+          enum: [log, screenshot, video, trace, http_exchange, tool_call, document_hit, judge_result, report]
+        size:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+        downloadUrl:
+          type: string
+          format: uri
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+        locked:
+          type: boolean
+    SecretInput:
+      type: object
+      additionalProperties: false
+      required: [systemId, key, value]
+      properties:
+        systemId:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        key:
+          type: string
+        value:
+          type: string
+          writeOnly: true
+          minLength: 1
+    SecretMetadata:
+      type: object
+      required: [id, systemId, key, version, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        systemId:
+          type: string
+          format: uuid
+        environmentId:
+          type: [string, "null"]
+          format: uuid
+        key:
+          type: string
+        version:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+    AdapterSummary:
+      type: object
+      required: [key, name, version, protocolVersion, compatible, capabilities]
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+        protocolVersion:
+          type: string
+        compatible:
+          type: boolean
+        capabilities:
+          type: object
+    CallbackTargetInput:
+      type: object
+      additionalProperties: false
+      required: [name, url, enabled]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        url:
+          type: string
+          format: uri
+        enabled:
+          type: boolean
+        signingSecretRef:
+          type: string
+        allowedSystemIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+    CallbackTarget:
+      allOf:
+        - $ref: "#/components/schemas/CallbackTargetInput"
+        - type: object
+          required: [id, createdAt, updatedAt]
+          properties:
+            id:
+              type: string
+              format: uuid
+            signingSecretRef:
+              type: [string, "null"]
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+    PlatformSettings:
+      type: object
+      additionalProperties: false
+      required: [timezone, successfulArtifactDays, failedArtifactDays, maxQueuedAndRunningTasks]
+      properties:
+        timezone:
+          type: string
+          default: Asia/Shanghai
+        successfulArtifactDays:
+          type: integer
+          minimum: 1
+          default: 30
+        failedArtifactDays:
+          type: integer
+          minimum: 1
+          default: 180
+        maxQueuedAndRunningTasks:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 20
+    AuditEvent:
+      type: object
+      required: [id, time, actor, sourceIp, requestId, objectType, objectId, action, result]
+      properties:
+        id:
+          type: string
+          format: uuid
+        time:
+          type: string
+          format: date-time
+        actor:
+          const: anonymous
+        sourceIp:
+          type: string
+        requestId:
+          type: string
+        objectType:
+          type: string
+        objectId:
+          type: string
+          format: uuid
+        action:
+          type: string
+        beforeVersion:
+          type: [integer, "null"]
+        afterVersion:
+          type: [integer, "null"]
+        result:
+          enum: [succeeded, failed]
+    AuditPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+        nextCursor:
+          type: [string, "null"]

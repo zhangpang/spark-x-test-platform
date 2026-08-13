@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.spark-x.test/adapter-manifest/v1.json",
+  "title": "Spark X Test Platform Adapter Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifestVersion",
+    "key",
+    "name",
+    "version",
+    "protocolVersion",
+    "platformRange",
+    "environmentSchema",
+    "capabilities"
+  ],
+  "properties": {
+    "manifestVersion": {
+      "const": "1.0"
+    },
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "maxLength": 100
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "protocolVersion": {
+      "const": "1.0"
+    },
+    "platformRange": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "environmentSchema": {
+      "type": "object"
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actions", "assertions", "fixtures", "telemetry"],
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        },
+        "assertions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/assertion"
+          }
+        },
+        "fixtures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fixture"
+          }
+        },
+        "telemetry": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "conversation",
+              "model-request",
+              "tool-call",
+              "tool-result",
+              "document-hit",
+              "final-answer",
+              "structured-log"
+            ]
+          },
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "capabilityBase": {
+      "type": "object",
+      "required": ["key", "name", "inputSchema", "outputSchema"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$",
+          "maxLength": 150
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object"
+        }
+      }
+    },
+    "action": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/capabilityBase"
+        },
+        {
+          "type": "object",
+          "required": ["actionLevel", "defaultTimeoutMs"],
+          "properties": {
+            "actionLevel": {
+              "enum": ["read", "write", "dangerous"]
+            },
+            "defaultTimeoutMs": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 3600000
+            },
+            "producesResource": {
+              "type": "boolean",
+              "default": false
+            },
+            "cleanupAction": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "assertion": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/capabilityBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "supportsNegation": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      ]
+    },
+    "fixture": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/capabilityBase"
+        },
+        {
+          "type": "object",
+          "required": ["actionLevel"],
+          "properties": {
+            "actionLevel": {
+              "enum": ["read", "write", "dangerous"]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

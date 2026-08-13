@@ -1,0 +1,476 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.spark-x.test/test-case/v1.json",
+  "title": "Spark X Test Case Definition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "metadata",
+    "execution",
+    "steps",
+    "finally"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "kind": {
+      "enum": ["automated", "manual"]
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/input"
+      },
+      "default": []
+    },
+    "dataset": {
+      "$ref": "#/$defs/versionedReference"
+    },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/versionedReference"
+      },
+      "default": []
+    },
+    "execution": {
+      "$ref": "#/$defs/execution"
+    },
+    "resourceLocks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    },
+    "finally": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "systemKey",
+        "moduleKey",
+        "priority",
+        "classification",
+        "actionLevel"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "systemKey": {
+          "$ref": "#/$defs/key"
+        },
+        "moduleKey": {
+          "$ref": "#/$defs/key"
+        },
+        "priority": {
+          "enum": ["P0", "P1", "P2", "P3"]
+        },
+        "classification": {
+          "enum": ["blackbox", "graybox", "whitebox"]
+        },
+        "actionLevel": {
+          "enum": ["read", "write", "dangerous"]
+        },
+        "owner": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/key"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "required"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/key"
+        },
+        "type": {
+          "enum": ["string", "number", "boolean", "json"]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "default": true,
+        "secretRef": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": ["default", "secretRef"]
+          }
+        }
+      ]
+    },
+    "versionedReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stepTimeoutMs", "caseTimeoutMs", "diagnosticRetries"],
+      "properties": {
+        "stepTimeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3600000
+        },
+        "caseTimeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 14400000
+        },
+        "diagnosticRetries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "realModel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repetitions", "minimumPasses", "hardConstraintsMustAlwaysPass"],
+          "properties": {
+            "repetitions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "default": 3
+            },
+            "minimumPasses": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "default": 2
+            },
+            "hardConstraintsMustAlwaysPass": {
+              "type": "boolean",
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "stepBase": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/key"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3600000
+        },
+        "continueOnFailure": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": ["id", "name"]
+    },
+    "actionStep": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/stepBase"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "name", "kind", "action", "params"],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/key"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 3600000
+            },
+            "continueOnFailure": {
+              "type": "boolean",
+              "default": false
+            },
+            "kind": {
+              "const": "action"
+            },
+            "action": {
+              "type": "string",
+              "pattern": "^(browser|http|mcp|wait|json|variable|database|adapter):[a-zA-Z0-9._/-]+$"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "capture": {
+              "type": "object",
+              "propertyNames": {
+                "$ref": "#/$defs/key"
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "assertions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/assertion"
+              },
+              "default": []
+            }
+          }
+        }
+      ]
+    },
+    "ifStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "kind", "condition", "then"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/key"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3600000
+        },
+        "continueOnFailure": {
+          "type": "boolean",
+          "default": false
+        },
+        "kind": {
+          "const": "if"
+        },
+        "condition": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "then": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        },
+        "else": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          },
+          "default": []
+        }
+      }
+    },
+    "foreachStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "kind", "items", "itemName", "steps"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/key"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3600000
+        },
+        "continueOnFailure": {
+          "type": "boolean",
+          "default": false
+        },
+        "kind": {
+          "const": "foreach"
+        },
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "itemName": {
+          "$ref": "#/$defs/key"
+        },
+        "maximumIterations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        }
+      }
+    },
+    "callStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "kind", "reference", "params"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/key"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3600000
+        },
+        "continueOnFailure": {
+          "type": "boolean",
+          "default": false
+        },
+        "kind": {
+          "const": "call"
+        },
+        "reference": {
+          "$ref": "#/$defs/versionedReference"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "step": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/actionStep"
+        },
+        {
+          "$ref": "#/$defs/ifStep"
+        },
+        {
+          "$ref": "#/$defs/foreachStep"
+        },
+        {
+          "$ref": "#/$defs/callStep"
+        }
+      ]
+    },
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "actual", "severity"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "pattern": "^(status|schema|equals|contains|collection|element|text|duration|database|adapter|judge):[a-zA-Z0-9._/-]+$"
+        },
+        "actual": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "expected": true,
+        "params": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "negate": {
+          "type": "boolean",
+          "default": false
+        },
+        "severity": {
+          "enum": ["hard", "soft"]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}
