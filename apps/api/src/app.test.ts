@@ -57,15 +57,16 @@ describe("API service", () => {
 
   it("creates systems through the versioned control-plane API", async () => {
     const repository = {
-      createSystem: async (input: Readonly<Record<string, unknown>>) => ({
-        ...input,
-        id: "00000000-0000-4000-8000-000000000001",
-        description: "",
-        status: "active",
-        concurrencyLimit: 5,
-        createdAt: new Date(0).toISOString(),
-        updatedAt: new Date(0).toISOString(),
-      }),
+      createSystem: (input: Readonly<Record<string, unknown>>) =>
+        Promise.resolve({
+          ...input,
+          id: "00000000-0000-4000-8000-000000000001",
+          description: "",
+          status: "active",
+          concurrencyLimit: 5,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        }),
     } as unknown as ControlPlaneRepository;
     const application = buildApiApplication(environment, { repository });
     applications.push(application);
@@ -81,27 +82,29 @@ describe("API service", () => {
   it("rejects plaintext secrets before a case draft reaches persistence", async () => {
     let createCalled = false;
     const repository = {
-      getModule: async () => ({
-        id: "00000000-0000-4000-8000-000000000010",
-        systemId: "00000000-0000-4000-8000-000000000011",
-        key: "order",
-        name: "Order",
-        sortOrder: 0,
-        createdAt: new Date(0).toISOString(),
-      }),
-      getSystem: async () => ({
-        id: "00000000-0000-4000-8000-000000000011",
-        key: "sample-system",
-        name: "Sample",
-        description: "",
-        status: "active",
-        concurrencyLimit: 5,
-        createdAt: new Date(0).toISOString(),
-        updatedAt: new Date(0).toISOString(),
-      }),
-      createCase: async () => {
+      getModule: () =>
+        Promise.resolve({
+          id: "00000000-0000-4000-8000-000000000010",
+          systemId: "00000000-0000-4000-8000-000000000011",
+          key: "order",
+          name: "Order",
+          sortOrder: 0,
+          createdAt: new Date(0).toISOString(),
+        }),
+      getSystem: () =>
+        Promise.resolve({
+          id: "00000000-0000-4000-8000-000000000011",
+          key: "sample-system",
+          name: "Sample",
+          description: "",
+          status: "active",
+          concurrencyLimit: 5,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        }),
+      createCase: () => {
         createCalled = true;
-        throw new Error("must not persist");
+        return Promise.reject(new Error("must not persist"));
       },
     } as unknown as ControlPlaneRepository;
     const application = buildApiApplication(environment, { repository });

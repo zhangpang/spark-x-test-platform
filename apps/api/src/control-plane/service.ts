@@ -41,6 +41,10 @@ function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isJsonArray(value: unknown): value is readonly JsonValue[] {
+  return Array.isArray(value);
+}
+
 function rejectSecrets(value: JsonValue): void {
   const issues = findPlaintextSecrets(value);
   if (issues.length > 0) {
@@ -83,11 +87,6 @@ interface PortableBundle {
   readonly formatVersion: "1.0";
   readonly exportedAt: string;
   readonly cases: readonly PortableCase[];
-}
-
-interface ImportBundle {
-  readonly formatVersion?: unknown;
-  readonly cases?: unknown;
 }
 
 export class ControlPlaneService {
@@ -517,8 +516,7 @@ export class ControlPlaneService {
       };
     }
     if (!isJsonObject(parsed)) return this.#invalidBundle("导入根节点必须是对象。");
-    const bundle = parsed as ImportBundle;
-    if (bundle.formatVersion !== "1.0" || !Array.isArray(bundle.cases)) {
+    if (parsed.formatVersion !== "1.0" || !isJsonArray(parsed.cases)) {
       return this.#invalidBundle("仅支持 formatVersion=1.0 且 cases 为数组的导出包。");
     }
 
@@ -526,8 +524,8 @@ export class ControlPlaneService {
     const issues: ValidationIssue[] = [];
     const pending: Readonly<{ moduleId: string; definition: JsonObject; changeNote: string }>[] =
       [];
-    for (const [index, item] of bundle.cases.entries()) {
-      if (!isJsonObject(item) || !Array.isArray(item.versions) || item.versions.length === 0) {
+    for (const [index, item] of parsed.cases.entries()) {
+      if (!isJsonObject(item) || !isJsonArray(item.versions) || item.versions.length === 0) {
         issues.push({
           severity: "error",
           code: "IMPORT_CASE_INVALID",
@@ -537,13 +535,22 @@ export class ControlPlaneService {
         continue;
       }
       const moduleKey = item.moduleKey;
+      if (typeof moduleKey !== "string") {
+        issues.push({
+          severity: "error",
+          code: "IMPORT_MODULE_KEY_INVALID",
+          path: `$.cases[${index}].moduleKey`,
+          message: "导入用例的 moduleKey 必须是字符串。",
+        });
+        continue;
+      }
       const module = modules.find((candidate) => candidate.key === moduleKey);
       if (module === undefined) {
         issues.push({
           severity: "error",
           code: "IMPORT_MODULE_NOT_FOUND",
           path: `$.cases[${index}].moduleKey`,
-          message: `目标系统中不存在模块 ${String(moduleKey)}。`,
+          message: `目标系统中不存在模块 ${moduleKey}。`,
         });
         continue;
       }
@@ -573,7 +580,9 @@ export class ControlPlaneService {
       pending.push({
         moduleId: module.id,
         definition,
-        changeNote: `Imported from ${String(item.caseId ?? "portable bundle")}`,
+        changeNote: `Imported from ${
+          typeof item.caseId === "string" ? item.caseId : "portable bundle"
+        }`,
       });
     }
     const result: ValidationResult = {

@@ -18,7 +18,7 @@ import type {
   SystemPatch,
   TargetRule,
 } from "./model.js";
-import { ControlPlaneService } from "./service.js";
+import type { ControlPlaneService } from "./service.js";
 
 const keyPattern = /^[a-z][a-z0-9-]+$/;
 const secretKeyPattern = /^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$/;

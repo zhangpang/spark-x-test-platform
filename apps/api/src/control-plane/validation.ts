@@ -27,8 +27,16 @@ const actionRank: Readonly<Record<ActionLevel, number>> = {
 const availableActions = new Set(["http:request"]);
 const availableAssertions = new Set(["status:equals"]);
 
-function isObject(value: JsonValue | unknown): value is JsonObject {
+function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isJsonArray(value: unknown): value is readonly JsonValue[] {
+  return Array.isArray(value);
+}
+
+function jsonEntries(value: JsonObject): readonly (readonly [string, JsonValue])[] {
+  return Object.entries(value) as [string, JsonValue][];
 }
 
 function isReference(value: string): boolean {
@@ -80,7 +88,7 @@ export function findPlaintextSecrets(value: JsonValue, path: string = "$"): Vali
     return issues;
   }
 
-  for (const [key, child] of Object.entries(value)) {
+  for (const [key, child] of jsonEntries(value)) {
     const childPath = joinPath(path, key);
     if (
       suspiciousKeyPattern.test(key) &&
@@ -114,7 +122,7 @@ export function redactSecrets(value: JsonValue): JsonValue {
     return value;
   }
   return Object.fromEntries(
-    Object.entries(value).map(([key, child]) => [
+    jsonEntries(value).map(([key, child]) => [
       key,
       suspiciousKeyPattern.test(key) && key.toLowerCase() !== "secretref"
         ? "[REDACTED]"
@@ -131,7 +139,7 @@ export function collectSecretReferences(value: JsonValue): readonly string[] {
       return;
     }
     if (!isObject(current)) return;
-    for (const [key, child] of Object.entries(current)) {
+    for (const [key, child] of jsonEntries(current)) {
       if (key.toLowerCase() === "secretref" && typeof child === "string") {
         references.add(child);
       }
@@ -268,7 +276,7 @@ function validateTimeoutBudget(definition: JsonObject): ValidationIssue[] {
   const stepTimeout = definition.execution.stepTimeoutMs;
   const caseTimeout = definition.execution.caseTimeoutMs;
   if (typeof stepTimeout !== "number" || typeof caseTimeout !== "number") return [];
-  const mainSteps = Array.isArray(definition.steps) ? definition.steps : [];
+  const mainSteps = isJsonArray(definition.steps) ? definition.steps : [];
   const theoretical = mainSteps.reduce((total, step) => {
     if (!isObject(step)) return total;
     return total + (typeof step.timeoutMs === "number" ? step.timeoutMs : stepTimeout);
@@ -362,7 +370,7 @@ function validateHttpStepTargets(
       issues.push({
         severity: "error",
         code: "HTTP_TARGET_NOT_ALLOWLISTED",
-        path: `$.steps.${String(step.id)}.params.path`,
+        path: `$.steps.${typeof step.id === "string" ? step.id : "unknown"}.params.path`,
         message: `HTTP 路径 ${step.params.path} 不在环境目标白名单内。`,
       });
     }

@@ -44,6 +44,11 @@ function moduleKey(modules: readonly ModuleRecord[], id: string): string {
   return modules.find((module) => module.id === id)?.key ?? "";
 }
 
+function formString(data: FormData, key: string): string {
+  const value = data.get(key);
+  return typeof value === "string" ? value : "";
+}
+
 function buildHttpDefinition(
   input: Readonly<{
     name: string;
@@ -275,7 +280,7 @@ export function App() {
     if (selectedSystemId === "") return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    const baseUrl = String(data.get("baseUrl"));
+    const baseUrl = formString(data, "baseUrl");
     let target: URL;
     try {
       target = new URL(baseUrl);
@@ -313,27 +318,27 @@ export function App() {
     if (selectedSystemId === "") return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    const moduleId = String(data.get("moduleId"));
+    const moduleId = formString(data, "moduleId");
     const actionLevel: ActionLevel =
       method === "DELETE" || cleanupMethod === "DELETE"
         ? "dangerous"
         : requiresCleanup
           ? "write"
           : "read";
-    const secretRef = String(data.get("secretRef") ?? "").trim();
+    const secretRef = formString(data, "secretRef").trim();
     const definition = buildHttpDefinition({
-      name: String(data.get("name")),
+      name: formString(data, "name"),
       systemKey: systemKey(systems, selectedSystemId),
       moduleKey: moduleKey(modules, moduleId),
       method,
-      path: String(data.get("path")),
+      path: formString(data, "path"),
       expectedStatus: Number(data.get("expectedStatus")),
       actionLevel,
       ...(secretRef === "" ? {} : { secretRef }),
       ...(requiresCleanup
         ? {
             cleanupMethod,
-            cleanupPath: String(data.get("cleanupPath")),
+            cleanupPath: formString(data, "cleanupPath"),
           }
         : {}),
     });
@@ -355,7 +360,7 @@ export function App() {
     if (selectedSystemId === "") return;
     const form = event.currentTarget;
     const data = new FormData(form);
-    const environmentId = String(data.get("environmentId") ?? "");
+    const environmentId = formString(data, "environmentId");
     const result = await perform("密钥已加密保存；页面不会回显密钥值。", () =>
       controlPlaneApi.upsertSecret({
         systemId: selectedSystemId,
