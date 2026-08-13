@@ -163,6 +163,8 @@ queued -> preparing -> running -> cleaning -> completed
 
 第一版使用 Docker Compose 部署到星火 Agent 测试机 `192.168.110.136`：
 
+该测试机同时是平台开发期间唯一的运行验证环境和开发完成后的默认长期部署环境。用户本机不启动平台服务、不承载数据库或附件数据，也不作为任何测试与验收证据来源。
+
 ```text
 web
 api

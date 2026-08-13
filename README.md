@@ -31,7 +31,7 @@
 - [验收清单](docs/quality/acceptance.md)
 - [星火 Agent 首批案例目录](docs/quality/spark-x-agent-case-catalog.md)
 - [决策记录](docs/decisions/0001-platform-boundary.md)
-- [本地开发指南](docs/development/getting-started.md)
+- [开发与测试环境指南](docs/development/getting-started.md)
 - [M1 部署后冒烟检查](docs/operations/m1-smoke-check.md)
 
 机器可校验的用例和适配器清单 Schema 位于 [`schemas/`](schemas/)。
@@ -44,7 +44,7 @@
 - 队列与租约：Redis
 - 运行附件：MinIO
 - 浏览器执行：Playwright / Chromium
-- 本地及测试环境部署：Docker Compose
+- 测试环境部署：Docker Compose
 
 ## 核心原则
 
@@ -55,7 +55,9 @@
 5. 用例只能访问已登记环境的地址，密钥不得进入用例正文、日志或 Git。
 6. AI 回归优先断言工具、参数、证据和业务事实，不比较回答全文。
 
-## M1 快速开始
+## M1 测试环境部署
+
+以下命令只在登录测试环境 `192.168.110.136` 并确认主机后执行，不在用户本机执行测试、构建或 Compose 验证：
 
 ```bash
 npm ci
@@ -64,4 +66,4 @@ cp .env.example .env
 npm run compose:up
 ```
 
-默认 Web 入口为 `http://localhost:4173`。完整说明见[本地开发指南](docs/development/getting-started.md)。
+平台开发完成后仍部署在该测试机，默认 Web 入口为 `http://192.168.110.136:4173`。完整说明见[开发与测试环境指南](docs/development/getting-started.md)。

@@ -1,9 +1,9 @@
-name: CI
+name: Test environment verification
 
 on:
-  pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,8 +14,8 @@ concurrency:
 
 jobs:
   quality:
-    name: Contracts, quality and build
-    runs-on: ubuntu-24.04
+    name: Contracts, quality and build on test environment
+    runs-on: [self-hosted, linux, spark-x-test-env]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -35,8 +35,8 @@ jobs:
         run: npm run compose:config
 
   container-build:
-    name: Container build
-    runs-on: ubuntu-24.04
+    name: Container build on test environment
+    runs-on: [self-hosted, linux, spark-x-test-env]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
