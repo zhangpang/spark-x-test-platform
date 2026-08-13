@@ -292,11 +292,12 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
       resource !== undefined && isObject(resource.cleanup) ? resource.cleanup : undefined;
     if (cleanup !== undefined) {
       if (typeof cleanup.action !== "string" || !availableActions.has(cleanup.action)) {
+        const cleanupAction = typeof cleanup.action === "string" ? cleanup.action : "无效动作";
         issues.push({
           severity: "error",
           code: "CLEANUP_ACTION_NOT_AVAILABLE",
           path: `$.steps.${id}.resource.cleanup.action`,
-          message: `当前平台版本未注册资源补偿动作 ${String(cleanup.action)}。`,
+          message: `当前平台版本未注册资源补偿动作 ${cleanupAction}。`,
         });
       }
       const declaredSecrets = new Set(
