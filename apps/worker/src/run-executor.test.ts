@@ -397,7 +397,10 @@ describe("run worker", () => {
       failCleanupJob: vi.fn(() => Promise.resolve()),
       completeCompensation: vi.fn(() => Promise.resolve()),
     } as unknown as CompensationExecutionStore;
-    const fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status: 204 })));
+    const fetchMock = vi.fn((input: URL | RequestInfo) => {
+      void input;
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(executeCompensationJob(cleanupJob, store)).resolves.toEqual({ cleaned: 1 });
