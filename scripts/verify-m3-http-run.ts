@@ -239,7 +239,7 @@ try {
       key: "test",
       name: "Container Test",
       kind: "test",
-      baseUrl: "http://api:4100/",
+      baseUrl: "http://api:4100/api/v1/",
       actionLevel: "read",
       allowlist: [{ protocol: "http", host: "api", ports: [4100], pathPrefixes: ["/api/v1/"] }],
       timezone: "Asia/Shanghai",
