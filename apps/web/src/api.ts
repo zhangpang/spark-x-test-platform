@@ -97,7 +97,7 @@ interface ApiErrorPayload {
 
 export class ApiError extends Error {
   readonly status: number;
-  readonly requestId?: string;
+  readonly requestId: string | undefined;
 
   constructor(status: number, payload: ApiErrorPayload) {
     super(payload.message ?? `请求失败（HTTP ${status}）`);
