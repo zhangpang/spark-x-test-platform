@@ -28,13 +28,14 @@ import type {
   ValidationResult,
 } from "./model.js";
 
-interface SqlQueryResult<Row> {
+export interface SqlQueryResult<Row> {
   readonly rows: readonly Row[];
   readonly rowCount: number | null;
 }
 
 export interface SqlExecutor {
   query<Row>(text: string, values?: readonly unknown[]): Promise<SqlQueryResult<Row>>;
+  transaction<Result>(work: (sql: SqlExecutor) => Promise<Result>): Promise<Result>;
 }
 
 interface SystemRow {
@@ -311,8 +312,9 @@ export class PostgresControlPlaneRepository implements ControlPlaneRepository {
     action: string,
     beforeVersion?: number,
     afterVersion?: number,
+    sql: SqlExecutor = this.#sql,
   ): Promise<void> {
-    await this.#sql.query(
+    await sql.query(
       `insert into operation_audits
          (id, source_ip, request_id, entrypoint, object_type, object_id, action,
           before_version, after_version, result, details)
@@ -563,34 +565,37 @@ export class PostgresControlPlaneRepository implements ControlPlaneRepository {
   async createCase(command: CreateCaseCommand, audit: AuditContext): Promise<TestCaseRecord> {
     const caseId = randomUUID();
     const versionId = randomUUID();
-    const result = await this.#sql.query<CaseRow>(
-      `with inserted_case as (
-         insert into test_cases (id, module_id, name)
-         values ($1, $2, $3)
-         returning id
-       ), inserted_version as (
-         insert into test_case_versions
+    return this.#sql.transaction(async (sql) => {
+      await sql.query(
+        `insert into test_cases (id, module_id, name)
+         values ($1, $2, $3)`,
+        [caseId, command.moduleId, metadataName(command.definition)],
+      );
+      await sql.query(
+        `insert into test_case_versions
            (id, case_id, version, schema_version, definition, content_hash, change_note)
-         select $4, id, 1, $5, $6::jsonb, $7, $8 from inserted_case
-         returning id
-       )
-       update test_cases
-       set current_draft_version_id = (select id from inserted_version), updated_at = now()
-       where id = $1
-       returning *`,
-      [
-        caseId,
-        command.moduleId,
-        metadataName(command.definition),
-        versionId,
-        definitionSchemaVersion(command.definition),
-        JSON.stringify(command.definition),
-        command.contentHash,
-        command.changeNote,
-      ],
-    );
-    await this.#audit(audit, "test-case", caseId, "create", 0, 1);
-    return mapCase(result.rows[0] as CaseRow);
+         values ($1, $2, 1, $3, $4::jsonb, $5, $6)`,
+        [
+          versionId,
+          caseId,
+          definitionSchemaVersion(command.definition),
+          JSON.stringify(command.definition),
+          command.contentHash,
+          command.changeNote,
+        ],
+      );
+      const result = await sql.query<CaseRow>(
+        `update test_cases
+         set current_draft_version_id = $2, updated_at = now()
+         where id = $1
+         returning *`,
+        [caseId, versionId],
+      );
+      const row = result.rows[0];
+      if (row === undefined) throw new Error("Created test case was not found inside transaction.");
+      await this.#audit(audit, "test-case", caseId, "create", 0, 1, sql);
+      return mapCase(row);
+    });
   }
 
   async getCase(id: string): Promise<TestCaseRecord | null> {
@@ -878,38 +883,57 @@ export class PostgresControlPlaneRepository implements ControlPlaneRepository {
   ): Promise<DefinitionResourceRecord> {
     const id = randomUUID();
     const versionId = randomUUID();
-    if (kind === "dataset") {
-      const result = await this.#sql.query<DefinitionResourceRow>(
-        `with resource as (
-           insert into datasets (id, system_id, name) values ($1, $2, $3) returning id
-         ), version as (
-           insert into dataset_versions
+    return this.#sql.transaction(async (sql) => {
+      if (kind === "dataset") {
+        await sql.query(`insert into datasets (id, system_id, name) values ($1, $2, $3)`, [
+          id,
+          systemId,
+          name,
+        ]);
+        await sql.query(
+          `insert into dataset_versions
              (id, dataset_id, version, definition, content_hash, change_note)
-           select $4, id, 1, $5::jsonb, $6, $7 from resource returning id
-         )
-         update datasets set current_version_id = (select id from version), updated_at = now()
-         where id = $1 returning id, system_id, name, current_version_id, created_at, updated_at`,
-        [id, systemId, name, versionId, JSON.stringify(definition), hash, changeNote],
-      );
-      await this.#audit(audit, "dataset", id, "create", 0, 1);
-      return mapDefinitionResource(result.rows[0] as DefinitionResourceRow);
-    }
-    const result = await this.#sql.query<DefinitionResourceRow>(
-      `with resource as (
-         insert into shared_steps (id, system_id, name) values ($1, $2, $3) returning id
-       ), version as (
-         insert into shared_step_versions
+           values ($1, $2, 1, $3::jsonb, $4, $5)`,
+          [versionId, id, JSON.stringify(definition), hash, changeNote],
+        );
+        const result = await sql.query<DefinitionResourceRow>(
+          `update datasets
+           set current_version_id = $2, updated_at = now()
+           where id = $1
+           returning id, system_id, name, current_version_id, created_at, updated_at`,
+          [id, versionId],
+        );
+        const row = result.rows[0];
+        if (row === undefined) throw new Error("Created dataset was not found inside transaction.");
+        await this.#audit(audit, "dataset", id, "create", 0, 1, sql);
+        return mapDefinitionResource(row);
+      }
+
+      await sql.query(`insert into shared_steps (id, system_id, name) values ($1, $2, $3)`, [
+        id,
+        systemId,
+        name,
+      ]);
+      await sql.query(
+        `insert into shared_step_versions
            (id, shared_step_id, version, definition, content_hash, change_note)
-         select $4, id, 1, $5::jsonb, $6, $7 from resource returning id
-       )
-       update shared_steps set current_draft_version_id = (select id from version), updated_at = now()
-       where id = $1
-       returning id, system_id, name, current_draft_version_id as current_version_id,
-                 current_published_version_id, created_at, updated_at`,
-      [id, systemId, name, versionId, JSON.stringify(definition), hash, changeNote],
-    );
-    await this.#audit(audit, "shared-step", id, "create", 0, 1);
-    return mapDefinitionResource(result.rows[0] as DefinitionResourceRow);
+         values ($1, $2, 1, $3::jsonb, $4, $5)`,
+        [versionId, id, JSON.stringify(definition), hash, changeNote],
+      );
+      const result = await sql.query<DefinitionResourceRow>(
+        `update shared_steps
+         set current_draft_version_id = $2, updated_at = now()
+         where id = $1
+         returning id, system_id, name, current_draft_version_id as current_version_id,
+                   current_published_version_id, created_at, updated_at`,
+        [id, versionId],
+      );
+      const row = result.rows[0];
+      if (row === undefined)
+        throw new Error("Created shared step was not found inside transaction.");
+      await this.#audit(audit, "shared-step", id, "create", 0, 1, sql);
+      return mapDefinitionResource(row);
+    });
   }
 
   async listDefinitionVersions(

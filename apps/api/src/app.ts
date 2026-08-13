@@ -38,6 +38,29 @@ export function buildApiApplication(
       );
       return { rows: result.rows as readonly Row[], rowCount: result.rowCount };
     },
+    async transaction<Result>(work: (sql: SqlExecutor) => Promise<Result>) {
+      const client = await application.dependencies.postgres.connect();
+      const transactionSql: SqlExecutor = {
+        async query<Row>(text: string, values?: readonly unknown[]) {
+          const result = await client.query(text, values === undefined ? undefined : [...values]);
+          return { rows: result.rows as readonly Row[], rowCount: result.rowCount };
+        },
+        transaction<NestedResult>(nestedWork: (sql: SqlExecutor) => Promise<NestedResult>) {
+          return nestedWork(transactionSql);
+        },
+      };
+      try {
+        await client.query("begin");
+        const result = await work(transactionSql);
+        await client.query("commit");
+        return result;
+      } catch (error) {
+        await client.query("rollback").catch(() => undefined);
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
   };
   const repository = options.repository ?? new PostgresControlPlaneRepository(sql);
   const controlPlane = new ControlPlaneService(
