@@ -312,8 +312,10 @@ function definitionDiff(
     typeof right === "object" && right !== null && !Array.isArray(right) ? right : undefined;
   if (leftObject !== undefined && rightObject !== undefined) {
     const keys = [...new Set([...Object.keys(leftObject), ...Object.keys(rightObject)])].sort();
+    const leftRecord = leftObject as JsonObject;
+    const rightRecord = rightObject as JsonObject;
     return keys.flatMap((key) =>
-      definitionDiff(leftObject[key], rightObject[key], `${path}.${key}`),
+      definitionDiff(leftRecord[key], rightRecord[key], `${path}.${key}`),
     );
   }
   return [

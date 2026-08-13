@@ -289,7 +289,7 @@ function metadataName(definition: JsonObject): string {
   const metadata = definition.metadata;
   if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata))
     return "未命名用例";
-  const name = metadata.name;
+  const name = (metadata as JsonObject).name;
   return typeof name === "string" ? name : "未命名用例";
 }
 

@@ -160,6 +160,7 @@ export class ControlPlaneService {
     audit: AuditContext,
   ): Promise<EnvironmentRecord> {
     const existing = await this.getEnvironment(id);
+    const adapterKey = patch.adapterKey ?? existing.adapterKey;
     const merged: EnvironmentInput = {
       key: existing.key,
       name: patch.name ?? existing.name,
@@ -169,10 +170,8 @@ export class ControlPlaneService {
       allowlist: patch.allowlist ?? existing.allowlist,
       timezone: patch.timezone ?? existing.timezone,
       concurrencyLimit: patch.concurrencyLimit ?? existing.concurrencyLimit,
-      ...(patch.adapterKey === undefined && existing.adapterKey === undefined
-        ? {}
-        : { adapterKey: patch.adapterKey ?? existing.adapterKey }),
-      adapterConfig: patch.adapterConfig ?? existing.adapterConfig,
+      ...(adapterKey === undefined ? {} : { adapterKey }),
+      adapterConfig: patch.adapterConfig ?? existing.adapterConfig ?? {},
     };
     assertEnvironmentValid(merged);
     const updated = await this.#repository.updateEnvironment(id, patch, audit);

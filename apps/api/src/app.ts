@@ -81,7 +81,11 @@ export function buildApiApplication(
       });
     }
     request.log.error(
-      { errorName: error.name, databaseCode: code, requestId: String(request.id) },
+      {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        databaseCode: code,
+        requestId: String(request.id),
+      },
       "control-plane request failed",
     );
     return reply.code(500).send({
