@@ -67,3 +67,5 @@ npm run compose:up
 ```
 
 平台开发完成后仍部署在该测试机，默认 Web 入口为 `http://192.168.110.136:4173`。完整说明见[开发与测试环境指南](docs/development/getting-started.md)。
+
+正式部署通过 Youlan 发布控制台按精确 Commit 执行；检测到数据库迁移时必须在备份后获得显式批准，不允许从本机直接 SSH 拼装发布命令。
