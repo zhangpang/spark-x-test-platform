@@ -232,6 +232,14 @@ const runSelection = `
   join environments e on e.id = r.environment_id
   join test_suites ts on ts.id = r.suite_id`;
 
+export function serializeRunIdempotencyLockKey(
+  triggerSource: string,
+  systemId: string,
+  idempotencyKey: string,
+): string {
+  return JSON.stringify([triggerSource, systemId, idempotencyKey]);
+}
+
 export class TestRunStore {
   readonly #pool: Pool;
   readonly #secretKey?: Buffer;
@@ -255,7 +263,11 @@ export class TestRunStore {
     try {
       await client.query("begin");
       await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
-        `${input.triggerSource}\u0000${input.systemId}\u0000${input.idempotencyKey}`,
+        serializeRunIdempotencyLockKey(
+          input.triggerSource,
+          input.systemId,
+          input.idempotencyKey,
+        ),
       ]);
       const existing = await client.query<RunRow>(
         `${runSelection}

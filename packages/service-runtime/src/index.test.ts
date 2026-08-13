@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { createPlatformDependencies, loadPlatformConfig, runDependencyProbe } from "./index.js";
+import {
+  createPlatformDependencies,
+  loadPlatformConfig,
+  runDependencyProbe,
+  serializeRunIdempotencyLockKey,
+} from "./index.js";
 
 const baseEnvironment = {
   DATABASE_URL: "postgresql://user:pass@localhost:5432/platform",
@@ -45,5 +50,17 @@ describe("platform service configuration", () => {
     expect(health.status).toBe("error");
     expect(health.error).toContain("timed out after 10ms");
     expect(health.latencyMs).toBeLessThan(100);
+  });
+});
+
+describe("run idempotency locking", () => {
+  it("serializes a PostgreSQL-safe and unambiguous advisory lock key", () => {
+    const key = serializeRunIdempotencyLockKey("release", "system-id", "request-id");
+
+    expect(key).not.toContain("\u0000");
+    expect(JSON.parse(key)).toEqual(["release", "system-id", "request-id"]);
+    expect(serializeRunIdempotencyLockKey("ab", "c", "d")).not.toBe(
+      serializeRunIdempotencyLockKey("a", "bc", "d"),
+    );
   });
 });
