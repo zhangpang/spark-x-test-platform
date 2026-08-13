@@ -492,6 +492,55 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TestCaseVersion"
+  /test-cases/{caseId}/comparisons:
+    parameters:
+      - $ref: "#/components/parameters/CaseId"
+    get:
+      tags: [Cases]
+      operationId: compareTestCaseVersions
+      parameters:
+        - name: baseVersionId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: targetVersionId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Structural differences between two immutable versions of the same case.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [caseId, baseVersionId, targetVersionId, changes]
+                properties:
+                  caseId:
+                    type: string
+                    format: uuid
+                  baseVersionId:
+                    type: string
+                    format: uuid
+                  targetVersionId:
+                    type: string
+                    format: uuid
+                  changes:
+                    type: array
+                    items:
+                      type: object
+                      required: [path]
+                      properties:
+                        path:
+                          type: string
+                        before: {}
+                        after: {}
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /datasets:
     get:
       tags: [Datasets]

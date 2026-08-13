@@ -1,0 +1,487 @@
+import { createHash } from "node:crypto";
+
+import { validateTestCaseDefinition } from "@spark-x-test/case-schema";
+
+import type {
+  ActionLevel,
+  EnvironmentInput,
+  EnvironmentRecord,
+  JsonObject,
+  JsonValue,
+  ValidationIssue,
+  ValidationResult,
+} from "./model.js";
+
+const referencePattern = /\$\{[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*\}/i;
+const suspiciousKeyPattern =
+  /^(?:authorization|cookie|password|passwd|passphrase|private[-_]?key|client[-_]?secret|api[-_]?key|access[-_]?key|secret|token)$/i;
+const privateKeyPattern = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/;
+const bearerPattern = /\bbearer\s+[a-z0-9._~+/=-]{12,}/i;
+const jwtPattern = /\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\b/;
+
+const actionRank: Readonly<Record<ActionLevel, number>> = {
+  read: 0,
+  write: 1,
+  dangerous: 2,
+};
+const availableActions = new Set(["http:request"]);
+const availableAssertions = new Set(["status:equals"]);
+
+function isObject(value: JsonValue | unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isReference(value: string): boolean {
+  return referencePattern.test(value) || /^secretRef:[a-z][a-z0-9_.-]*$/i.test(value);
+}
+
+function canonicalize(value: JsonValue): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalize(item)).join(",")}]`;
+  }
+  if (isObject(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalize(value[key] ?? null)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function contentHash(value: JsonValue): string {
+  return createHash("sha256").update(canonicalize(value)).digest("hex");
+}
+
+function joinPath(parent: string, child: string | number): string {
+  return typeof child === "number" ? `${parent}[${child}]` : `${parent}.${child}`;
+}
+
+export function findPlaintextSecrets(value: JsonValue, path: string = "$"): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      issues.push(...findPlaintextSecrets(item, joinPath(path, index))),
+    );
+    return issues;
+  }
+  if (!isObject(value)) {
+    if (
+      typeof value === "string" &&
+      !isReference(value) &&
+      (privateKeyPattern.test(value) || bearerPattern.test(value) || jwtPattern.test(value))
+    ) {
+      issues.push({
+        severity: "error",
+        code: "PLAINTEXT_SECRET",
+        path,
+        message: "检测到疑似明文密钥；请改用 secretRef 或受控变量引用。",
+      });
+    }
+    return issues;
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = joinPath(path, key);
+    if (
+      suspiciousKeyPattern.test(key) &&
+      key.toLowerCase() !== "secretref" &&
+      typeof child === "string" &&
+      child.trim() !== "" &&
+      !isReference(child)
+    ) {
+      issues.push({
+        severity: "error",
+        code: "PLAINTEXT_SECRET",
+        path: childPath,
+        message: `字段 ${key} 不允许保存明文；请改用 secretRef。`,
+      });
+    } else {
+      issues.push(...findPlaintextSecrets(child, childPath));
+    }
+  }
+  return issues;
+}
+
+export function redactSecrets(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) return value.map((item) => redactSecrets(item));
+  if (!isObject(value)) {
+    if (
+      typeof value === "string" &&
+      (privateKeyPattern.test(value) || bearerPattern.test(value) || jwtPattern.test(value))
+    ) {
+      return "[REDACTED]";
+    }
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [
+      key,
+      suspiciousKeyPattern.test(key) && key.toLowerCase() !== "secretref"
+        ? "[REDACTED]"
+        : redactSecrets(child),
+    ]),
+  );
+}
+
+export function collectSecretReferences(value: JsonValue): readonly string[] {
+  const references = new Set<string>();
+  const visit = (current: JsonValue): void => {
+    if (Array.isArray(current)) {
+      current.forEach(visit);
+      return;
+    }
+    if (!isObject(current)) return;
+    for (const [key, child] of Object.entries(current)) {
+      if (key.toLowerCase() === "secretref" && typeof child === "string") {
+        references.add(child);
+      }
+      if (typeof child === "string") {
+        const directReference = /^secretRef:([a-z][a-z0-9_.-]*)$/i.exec(child);
+        if (directReference?.[1] !== undefined) references.add(directReference[1]);
+      } else {
+        visit(child);
+      }
+    }
+  };
+  visit(value);
+  return [...references].sort();
+}
+
+function collectSteps(definition: JsonObject): readonly JsonObject[] {
+  const collected: JsonObject[] = [];
+  const visit = (steps: JsonValue | undefined): void => {
+    if (!Array.isArray(steps)) return;
+    for (const step of steps) {
+      if (!isObject(step)) continue;
+      collected.push(step);
+      visit(step.then);
+      visit(step.else);
+      visit(step.steps);
+    }
+  };
+  visit(definition.steps);
+  visit(definition.finally);
+  return collected;
+}
+
+function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const stepIds = new Set<string>();
+  for (const step of collectSteps(definition)) {
+    const id = typeof step.id === "string" ? step.id : "";
+    if (id !== "") {
+      if (stepIds.has(id)) {
+        issues.push({
+          severity: "error",
+          code: "DUPLICATE_STEP_ID",
+          path: "$.steps",
+          message: `步骤 ID ${id} 重复。`,
+        });
+      }
+      stepIds.add(id);
+    }
+
+    if (step.kind !== "action" || typeof step.action !== "string" || !isObject(step.params)) {
+      continue;
+    }
+    if (!availableActions.has(step.action)) {
+      issues.push({
+        severity: "error",
+        code: "ACTION_NOT_AVAILABLE",
+        path: `$.steps.${id}.action`,
+        message: `当前平台版本未注册动作 ${step.action}。`,
+      });
+    }
+    if (Array.isArray(step.assertions)) {
+      for (const [assertionIndex, assertion] of step.assertions.entries()) {
+        if (
+          isObject(assertion) &&
+          typeof assertion.type === "string" &&
+          !availableAssertions.has(assertion.type)
+        ) {
+          issues.push({
+            severity: "error",
+            code: "ASSERTION_NOT_AVAILABLE",
+            path: `$.steps.${id}.assertions[${assertionIndex}].type`,
+            message: `当前平台版本未注册断言 ${assertion.type}。`,
+          });
+        }
+      }
+    }
+    if (step.action === "http:request") {
+      const method = step.params.method;
+      const path = step.params.path;
+      if (
+        typeof method !== "string" ||
+        !["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(method.toUpperCase())
+      ) {
+        issues.push({
+          severity: "error",
+          code: "HTTP_METHOD_INVALID",
+          path: `$.steps.${id}.params.method`,
+          message: "HTTP 请求必须使用受支持的方法。",
+        });
+      }
+      if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) {
+        issues.push({
+          severity: "error",
+          code: "HTTP_PATH_INVALID",
+          path: `$.steps.${id}.params.path`,
+          message: "HTTP 请求只能填写以 / 开头的相对路径，目标主机由环境提供。",
+        });
+      }
+      if ("url" in step.params || "baseUrl" in step.params || "host" in step.params) {
+        issues.push({
+          severity: "error",
+          code: "ARBITRARY_TARGET_FORBIDDEN",
+          path: `$.steps.${id}.params`,
+          message: "用例不得直接指定 URL、baseUrl 或 host；目标必须来自已登记环境。",
+        });
+      }
+      const metadata = isObject(definition.metadata) ? definition.metadata : undefined;
+      if (typeof method === "string" && typeof metadata?.actionLevel === "string") {
+        const requiredLevel: ActionLevel =
+          method.toUpperCase() === "DELETE"
+            ? "dangerous"
+            : ["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())
+              ? "read"
+              : "write";
+        if (
+          metadata.actionLevel in actionRank &&
+          actionRank[metadata.actionLevel as ActionLevel] < actionRank[requiredLevel]
+        ) {
+          issues.push({
+            severity: "error",
+            code: "ACTION_LEVEL_UNDERSPECIFIED",
+            path: "$.metadata.actionLevel",
+            message: `${method.toUpperCase()} 至少需要 ${requiredLevel} 动作等级。`,
+          });
+        }
+      }
+    }
+  }
+  return issues;
+}
+
+function validateTimeoutBudget(definition: JsonObject): ValidationIssue[] {
+  if (!isObject(definition.execution)) return [];
+  const stepTimeout = definition.execution.stepTimeoutMs;
+  const caseTimeout = definition.execution.caseTimeoutMs;
+  if (typeof stepTimeout !== "number" || typeof caseTimeout !== "number") return [];
+  const mainSteps = Array.isArray(definition.steps) ? definition.steps : [];
+  const theoretical = mainSteps.reduce((total, step) => {
+    if (!isObject(step)) return total;
+    return total + (typeof step.timeoutMs === "number" ? step.timeoutMs : stepTimeout);
+  }, 0);
+  return caseTimeout < theoretical
+    ? [
+        {
+          severity: "error" as const,
+          code: "CASE_TIMEOUT_TOO_SMALL",
+          path: "$.execution.caseTimeoutMs",
+          message: `用例总超时 ${caseTimeout}ms 小于主步骤理论上限 ${theoretical}ms。`,
+        },
+      ]
+    : [];
+}
+
+function validateEnvironmentTarget(environment: EnvironmentRecord): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  let target: URL;
+  try {
+    target = new URL(environment.baseUrl);
+  } catch {
+    return [
+      {
+        severity: "error",
+        code: "ENVIRONMENT_BASE_URL_INVALID",
+        path: "$.environment.baseUrl",
+        message: "环境 baseUrl 不是有效 URL。",
+      },
+    ];
+  }
+  const port = Number.parseInt(
+    target.port ||
+      (target.protocol === "https:" ? "443" : target.protocol === "http:" ? "80" : "0"),
+    10,
+  );
+  const matchingRule = environment.allowlist.find(
+    (rule) =>
+      `${rule.protocol}:` === target.protocol &&
+      rule.host.toLowerCase() === target.hostname.toLowerCase() &&
+      rule.ports.includes(port) &&
+      (rule.pathPrefixes === undefined ||
+        rule.pathPrefixes.length === 0 ||
+        rule.pathPrefixes.some((prefix) => target.pathname.startsWith(prefix))),
+  );
+  if (matchingRule === undefined) {
+    issues.push({
+      severity: "error",
+      code: "ENVIRONMENT_TARGET_NOT_ALLOWLISTED",
+      path: "$.environment.allowlist",
+      message: "环境 baseUrl 不在自己的目标白名单内。",
+    });
+  }
+  return issues;
+}
+
+function validateHttpStepTargets(
+  definition: JsonObject,
+  environment: EnvironmentRecord,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (const step of collectSteps(definition)) {
+    if (
+      step.action !== "http:request" ||
+      !isObject(step.params) ||
+      typeof step.params.path !== "string"
+    ) {
+      continue;
+    }
+    let target: URL;
+    try {
+      target = new URL(step.params.path, environment.baseUrl);
+    } catch {
+      continue;
+    }
+    const port = Number.parseInt(
+      target.port ||
+        (target.protocol === "https:" ? "443" : target.protocol === "http:" ? "80" : "0"),
+      10,
+    );
+    const allowed = environment.allowlist.some(
+      (rule) =>
+        `${rule.protocol}:` === target.protocol &&
+        rule.host.toLowerCase() === target.hostname.toLowerCase() &&
+        rule.ports.includes(port) &&
+        (rule.pathPrefixes === undefined ||
+          rule.pathPrefixes.length === 0 ||
+          rule.pathPrefixes.some((prefix) => target.pathname.startsWith(prefix))),
+    );
+    if (!allowed) {
+      issues.push({
+        severity: "error",
+        code: "HTTP_TARGET_NOT_ALLOWLISTED",
+        path: `$.steps.${String(step.id)}.params.path`,
+        message: `HTTP 路径 ${step.params.path} 不在环境目标白名单内。`,
+      });
+    }
+  }
+  return issues;
+}
+
+export function validateEnvironmentInput(input: EnvironmentInput): ValidationResult {
+  const asRecord: EnvironmentRecord = {
+    ...input,
+    id: "00000000-0000-4000-8000-000000000000",
+    systemId: "00000000-0000-4000-8000-000000000000",
+    status: "active",
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  };
+  const issues = [
+    ...validateEnvironmentTarget(asRecord),
+    ...findPlaintextSecrets(input.adapterConfig ?? {}),
+  ];
+  if (input.kind === "production" && input.actionLevel !== "read") {
+    issues.push({
+      severity: "error",
+      code: "PRODUCTION_MUST_BE_READ_ONLY",
+      path: "$.actionLevel",
+      message: "MVP 的生产环境仅允许 read 动作等级。",
+    });
+  }
+  return { valid: issues.every((issue) => issue.severity !== "error"), issues };
+}
+
+export interface DefinitionValidationContext {
+  readonly systemKey: string;
+  readonly moduleKey: string;
+  readonly environment?: EnvironmentRecord;
+}
+
+export function validateDefinition(
+  definition: JsonObject,
+  context: DefinitionValidationContext,
+): ValidationResult {
+  const schemaResult = validateTestCaseDefinition(definition);
+  const issues: ValidationIssue[] = schemaResult.errors.map((error) => ({
+    severity: "error",
+    code: "SCHEMA_INVALID",
+    path: error.instancePath === "" ? "$" : `$${error.instancePath.replaceAll("/", ".")}`,
+    message: error.message ?? "用例定义不符合 Schema。",
+  }));
+  const metadata = isObject(definition.metadata) ? definition.metadata : undefined;
+  if (definition.kind === "manual") {
+    issues.push({
+      severity: "error",
+      code: "MANUAL_CASE_NOT_PUBLISHABLE",
+      path: "$.kind",
+      message: "MVP 不允许发布人工用例。",
+    });
+  }
+  if (metadata?.systemKey !== context.systemKey) {
+    issues.push({
+      severity: "error",
+      code: "SYSTEM_KEY_MISMATCH",
+      path: "$.metadata.systemKey",
+      message: `用例 systemKey 必须为 ${context.systemKey}。`,
+    });
+  }
+  if (metadata?.moduleKey !== context.moduleKey) {
+    issues.push({
+      severity: "error",
+      code: "MODULE_KEY_MISMATCH",
+      path: "$.metadata.moduleKey",
+      message: `用例 moduleKey 必须为 ${context.moduleKey}。`,
+    });
+  }
+  issues.push(...findPlaintextSecrets(definition));
+  issues.push(...validateStepSemantics(definition));
+  issues.push(...validateTimeoutBudget(definition));
+
+  if (context.environment !== undefined) {
+    issues.push(...validateEnvironmentTarget(context.environment));
+    issues.push(...validateHttpStepTargets(definition, context.environment));
+    if (
+      metadata !== undefined &&
+      typeof metadata.actionLevel === "string" &&
+      metadata.actionLevel in actionRank &&
+      actionRank[metadata.actionLevel as ActionLevel] > actionRank[context.environment.actionLevel]
+    ) {
+      issues.push({
+        severity: "error",
+        code: "ACTION_LEVEL_EXCEEDS_ENVIRONMENT",
+        path: "$.metadata.actionLevel",
+        message: `用例动作等级高于环境允许的 ${context.environment.actionLevel}。`,
+      });
+    }
+  }
+
+  if (
+    metadata !== undefined &&
+    (metadata.actionLevel === "write" || metadata.actionLevel === "dangerous") &&
+    (!Array.isArray(definition.finally) || definition.finally.length === 0)
+  ) {
+    issues.push({
+      severity: "error",
+      code: "CLEANUP_REQUIRED",
+      path: "$.finally",
+      message: "write 或 dangerous 用例必须提供清理步骤。",
+    });
+  }
+
+  const uniqueIssues = issues.filter(
+    (issue, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          candidate.code === issue.code &&
+          candidate.path === issue.path &&
+          candidate.message === issue.message,
+      ) === index,
+  );
+  return {
+    valid: uniqueIssues.every((issue) => issue.severity !== "error"),
+    issues: uniqueIssues,
+  };
+}

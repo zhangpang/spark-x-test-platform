@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { ControlPlaneRepository, JsonObject } from "./control-plane/model.js";
 import { buildApiApplication } from "./app.js";
 
 const environment = {
@@ -35,7 +36,7 @@ describe("API service", () => {
     const response = await application.app.inject({ method: "GET", url: "/api/v1" });
     expect(response.json()).toMatchObject({
       name: "spark-x-test-platform",
-      phase: "M1-engineering-foundation",
+      phase: "M2-test-asset-control-plane",
     });
   });
 
@@ -52,5 +53,73 @@ describe("API service", () => {
         minio: { status: "error" },
       },
     });
+  });
+
+  it("creates systems through the versioned control-plane API", async () => {
+    const repository = {
+      createSystem: async (input: Readonly<Record<string, unknown>>) => ({
+        ...input,
+        id: "00000000-0000-4000-8000-000000000001",
+        description: "",
+        status: "active",
+        concurrencyLimit: 5,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      }),
+    } as unknown as ControlPlaneRepository;
+    const application = buildApiApplication(environment, { repository });
+    applications.push(application);
+    const response = await application.app.inject({
+      method: "POST",
+      url: "/api/v1/systems",
+      payload: { key: "sample-system", name: "Sample System" },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ key: "sample-system", status: "active" });
+  });
+
+  it("rejects plaintext secrets before a case draft reaches persistence", async () => {
+    let createCalled = false;
+    const repository = {
+      getModule: async () => ({
+        id: "00000000-0000-4000-8000-000000000010",
+        systemId: "00000000-0000-4000-8000-000000000011",
+        key: "order",
+        name: "Order",
+        sortOrder: 0,
+        createdAt: new Date(0).toISOString(),
+      }),
+      getSystem: async () => ({
+        id: "00000000-0000-4000-8000-000000000011",
+        key: "sample-system",
+        name: "Sample",
+        description: "",
+        status: "active",
+        concurrencyLimit: 5,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      }),
+      createCase: async () => {
+        createCalled = true;
+        throw new Error("must not persist");
+      },
+    } as unknown as ControlPlaneRepository;
+    const application = buildApiApplication(environment, { repository });
+    applications.push(application);
+    const definition: JsonObject = {
+      metadata: { name: "unsafe" },
+      steps: [{ params: { password: "plain-password" } }],
+    };
+    const response = await application.app.inject({
+      method: "POST",
+      url: "/api/v1/test-cases",
+      payload: {
+        moduleId: "00000000-0000-4000-8000-000000000010",
+        definition,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(createCalled).toBe(false);
   });
 });

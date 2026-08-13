@@ -12,6 +12,7 @@ x-service-environment: &service-environment
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-change-me-local-only}
   MINIO_BUCKET: ${MINIO_BUCKET:-test-artifacts}
   PLATFORM_QUEUE_NAME: ${PLATFORM_QUEUE_NAME:-test-runs}
+  PLATFORM_SECRET_ENCRYPTION_KEY: ${PLATFORM_SECRET_ENCRYPTION_KEY:-}
 
 x-service-base: &service-base
   image: spark-x-test-platform-service:${PLATFORM_VERSION:-dev}

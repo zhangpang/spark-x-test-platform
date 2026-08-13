@@ -30,8 +30,10 @@ ensure_runtime_environment() {
   umask 077
   local postgres_password
   local minio_secret
+  local platform_secret_key
   postgres_password="$(openssl rand -hex 32)"
   minio_secret="$(openssl rand -hex 32)"
+  platform_secret_key="$(openssl rand -base64 32 | tr -d '\n')"
   {
     printf 'NODE_ENV=production\n'
     printf 'LOG_LEVEL=info\n'
@@ -50,6 +52,7 @@ ensure_runtime_environment() {
     printf 'MINIO_SECRET_KEY=%s\n' "$minio_secret"
     printf 'MINIO_BUCKET=test-artifacts\n'
     printf 'PLATFORM_QUEUE_NAME=test-runs\n'
+    printf 'PLATFORM_SECRET_ENCRYPTION_KEY=%s\n' "$platform_secret_key"
     printf 'WORKER_CONCURRENCY=2\n'
     printf 'WORKER_IDENTITY=\n'
   } > "$ENV_FILE.tmp"
@@ -58,6 +61,14 @@ ensure_runtime_environment() {
 
 ensure_runtime_environment
 chmod 600 "$ENV_FILE"
+
+if ! grep -Eq '^PLATFORM_SECRET_ENCRYPTION_KEY=[A-Za-z0-9+/]{43}=$' "$ENV_FILE"; then
+  umask 077
+  grep -v '^PLATFORM_SECRET_ENCRYPTION_KEY=' "$ENV_FILE" > "$ENV_FILE.tmp"
+  printf 'PLATFORM_SECRET_ENCRYPTION_KEY=%s\n' "$(openssl rand -base64 32 | tr -d '\n')" >> "$ENV_FILE.tmp"
+  mv "$ENV_FILE.tmp" "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+fi
 
 if grep -q "change-me-local-only" "$ENV_FILE"; then
   echo "runtime environment still contains an example secret" >&2
@@ -155,8 +166,8 @@ smoke_platform() {
   local migration_count
   migration_count="$(run_compose exec -T postgres psql \
     -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc \
-    "select count(*) from platform_schema_migrations where version = '0001_platform_bootstrap.sql'")"
-  test "$migration_count" = "1"
+    "select count(*) from platform_schema_migrations where version in ('0001_platform_bootstrap.sql', '0002_test_asset_control_plane.sql')")"
+  test "$migration_count" = "2"
 
   local heartbeat_count
   heartbeat_count="$(run_compose exec -T postgres psql \
