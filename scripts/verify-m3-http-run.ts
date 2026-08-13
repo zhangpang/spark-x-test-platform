@@ -24,7 +24,15 @@ interface RunRecord extends RecordWithId {
     cleanupStatus: string;
     systemResourceId: string;
   }>[];
-  readonly cleanupJob: Readonly<{ status: string; attempts: number }> | null;
+  readonly cleanupJob: Readonly<{
+    status: string;
+    attempts: number;
+    lastError: Readonly<{
+      code: string;
+      message: string;
+      classification: string;
+    }> | null;
+  }> | null;
 }
 
 const apiBase = process.env.M3_SMOKE_API_URL ?? "http://127.0.0.1:4100/api/v1";
@@ -234,12 +242,28 @@ async function createPublishedResourceCase(
 
 async function waitForRun(id: string): Promise<RunRecord> {
   const deadline = Date.now() + 30_000;
+  let lastRun: RunRecord | undefined;
   while (Date.now() < deadline) {
     const run = (await api<RunRecord>(`/runs/${id}`)).body;
+    lastRun = run;
     if (run.status === "completed") return run;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error(`run ${id} did not complete within 30 seconds`);
+  const diagnostic =
+    lastRun === undefined
+      ? { status: "not-observed" }
+      : {
+          status: lastRun.status,
+          gateResult: lastRun.gateResult,
+          summary: lastRun.summary,
+          firstFailure: lastRun.firstFailure,
+          cases: lastRun.cases,
+          resources: lastRun.resources,
+          cleanupJob: lastRun.cleanupJob,
+        };
+  throw new Error(
+    `run ${id} did not complete within 30 seconds: ${JSON.stringify(diagnostic)}`,
+  );
 }
 
 async function createRun(
