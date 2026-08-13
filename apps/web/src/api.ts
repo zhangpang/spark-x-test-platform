@@ -1,3 +1,7 @@
+import type { TestRunDetail, TestRunRecord } from "@spark-x-test/contracts";
+
+export type { TestRunDetail, TestRunRecord } from "@spark-x-test/contracts";
+
 export type ActionLevel = "read" | "write" | "dangerous";
 
 export interface SystemRecord {
@@ -234,5 +238,40 @@ export const controlPlaneApi = {
   },
   createSuite(input: Readonly<Record<string, unknown>>): Promise<TestSuiteRecord> {
     return request("/test-suites", { method: "POST", body: JSON.stringify(input) });
+  },
+  async listRuns(systemId?: string): Promise<readonly TestRunRecord[]> {
+    const suffix = systemId === undefined ? "" : `?systemId=${encodeURIComponent(systemId)}`;
+    return (await request<Page<TestRunRecord>>(`/runs${suffix}`)).items;
+  },
+  createRun(input: Readonly<Record<string, unknown>>): Promise<TestRunRecord> {
+    const { idempotencyKey, ...body } = input;
+    return request("/runs", {
+      method: "POST",
+      ...(typeof idempotencyKey === "string"
+        ? { headers: { "idempotency-key": idempotencyKey } }
+        : {}),
+      body: JSON.stringify(body),
+    });
+  },
+  getRun(runId: string): Promise<TestRunDetail> {
+    return request(`/runs/${runId}`);
+  },
+  cancelRun(runId: string): Promise<TestRunRecord> {
+    return request(`/runs/${runId}/cancel`, { method: "POST" });
+  },
+  subscribeRunEvents(runId: string, onEvent: () => void): () => void {
+    const source = new EventSource(`/api/v1/runs/${runId}/events`);
+    const listener = () => onEvent();
+    [
+      "run.preparing",
+      "run.running",
+      "run.cancelling",
+      "run.cleaning",
+      "run.completed",
+      "case.started",
+      "case.completed",
+      "step.completed",
+    ].forEach((name) => source.addEventListener(name, listener));
+    return () => source.close();
   },
 };

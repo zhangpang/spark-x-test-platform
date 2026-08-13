@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
 import type { HealthResponse } from "@spark-x-test/contracts";
 
@@ -12,6 +12,8 @@ import {
   type SystemRecord,
   type TestCaseRecord,
   type TestCaseVersionRecord,
+  type TestRunDetail,
+  type TestRunRecord,
   type TestSuiteRecord,
   type ValidationResult,
 } from "./api.js";
@@ -108,6 +110,49 @@ function formString(data: FormData, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+const runStatusLabels: Readonly<Record<TestRunRecord["status"], string>> = {
+  queued: "排队中",
+  preparing: "准备中",
+  running: "运行中",
+  cancelling: "取消中",
+  cleaning: "清理中",
+  interrupted: "已中断",
+  compensation_pending: "待补偿",
+  completed: "已完成",
+};
+
+const caseResultLabels = {
+  passed: "通过",
+  product_failed: "产品失败",
+  test_failed: "用例失败",
+  environment_failed: "环境失败",
+  infrastructure_failed: "基础设施失败",
+  flaky: "不稳定",
+  cancelled: "已取消",
+  skipped: "已跳过",
+} as const;
+
+function runProgress(run: TestRunRecord): number {
+  if (run.summary.total === 0) return 0;
+  const finished =
+    run.summary.passed +
+    run.summary.productFailed +
+    run.summary.testFailed +
+    run.summary.environmentFailed +
+    run.summary.infrastructureFailed +
+    run.summary.flaky +
+    run.summary.cancelled +
+    run.summary.skipped;
+  return Math.round((finished / run.summary.total) * 100);
+}
+
+function elapsed(run: TestRunRecord): string {
+  const start = new Date(run.startedAt ?? run.queuedAt).getTime();
+  const end = run.finishedAt === null ? Date.now() : new Date(run.finishedAt).getTime();
+  const seconds = Math.max(0, Math.round((end - start) / 1_000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 function buildHttpDefinition(
   input: Readonly<{
     name: string;
@@ -191,6 +236,9 @@ export function App() {
   const [selectedCaseId, setSelectedCaseId] = useState("");
   const [versions, setVersions] = useState<readonly TestCaseVersionRecord[]>([]);
   const [suites, setSuites] = useState<readonly TestSuiteRecord[]>([]);
+  const [runs, setRuns] = useState<readonly TestRunRecord[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState("");
+  const [selectedRun, setSelectedRun] = useState<TestRunDetail>();
   const [validation, setValidation] = useState<ValidationResult>();
   const [comparison, setComparison] = useState<
     readonly Readonly<{ path: string; before?: unknown; after?: unknown }>[]
@@ -208,6 +256,7 @@ export function App() {
     [cases, selectedCaseId],
   );
   const publishedCases = cases.filter((testCase) => testCase.currentPublishedVersionId !== null);
+  const scopedSuites = suites.filter((suite) => suite.systemId === selectedSystemId);
   const scopedSecrets = secrets.filter((secret) => secret.systemId === selectedSystemId);
   const requiresCleanup = !["GET", "HEAD", "OPTIONS"].includes(method);
 
@@ -257,6 +306,24 @@ export function App() {
     setSecrets(await controlPlaneApi.listSecrets());
   }
 
+  const refreshRuns = useCallback(
+    async (preferredId?: string): Promise<void> => {
+      if (selectedSystemId === "") {
+        setRuns([]);
+        setSelectedRunId("");
+        setSelectedRun(undefined);
+        return;
+      }
+      const loaded = await controlPlaneApi.listRuns(selectedSystemId);
+      setRuns(loaded);
+      setSelectedRunId((current) => {
+        const candidate = preferredId ?? current;
+        return loaded.some((run) => run.id === candidate) ? candidate : (loaded[0]?.id ?? "");
+      });
+    },
+    [selectedSystemId],
+  );
+
   useEffect(() => {
     const controller = new AbortController();
     void Promise.all([
@@ -297,6 +364,37 @@ export function App() {
       .then(setVersions)
       .catch((error: unknown) => setNotice({ tone: "error", text: errorMessage(error) }));
   }, [selectedCaseId]);
+
+  useEffect(() => {
+    void refreshRuns().catch((error: unknown) =>
+      setNotice({ tone: "error", text: errorMessage(error) }),
+    );
+  }, [refreshRuns]);
+
+  useEffect(() => {
+    if (selectedRunId === "") {
+      setSelectedRun(undefined);
+      return;
+    }
+    let active = true;
+    const refresh = async () => {
+      const detail = await controlPlaneApi.getRun(selectedRunId);
+      if (active) setSelectedRun(detail);
+      await refreshRuns(selectedRunId);
+    };
+    void refresh().catch((error: unknown) =>
+      setNotice({ tone: "error", text: errorMessage(error) }),
+    );
+    const unsubscribe = controlPlaneApi.subscribeRunEvents(selectedRunId, () => {
+      void refresh().catch((error: unknown) =>
+        setNotice({ tone: "error", text: errorMessage(error) }),
+      );
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [refreshRuns, selectedRunId]);
 
   async function createSystem(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -532,6 +630,37 @@ export function App() {
     }
   }
 
+  async function createRun(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (selectedSystemId === "") return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const created = await perform("回归运行已创建，正在等待 Worker。", () =>
+      controlPlaneApi.createRun({
+        triggerType: "manual",
+        triggerSource: "web-console",
+        idempotencyKey: crypto.randomUUID(),
+        priority: Number(data.get("priority")),
+        systemId: selectedSystemId,
+        environmentId: data.get("environmentId"),
+        suiteId: data.get("suiteId"),
+        testedVersion: data.get("testedVersion"),
+      }),
+    );
+    if (created !== undefined) {
+      setSelectedRunId(created.id);
+      await refreshRuns(created.id);
+    }
+  }
+
+  async function cancelSelectedRun(): Promise<void> {
+    if (selectedRunId === "") return;
+    const cancelled = await perform("取消请求已提交，Worker 将进入清理阶段。", () =>
+      controlPlaneApi.cancelRun(selectedRunId),
+    );
+    if (cancelled !== undefined) await refreshRuns(selectedRunId);
+  }
+
   const overviewMetrics =
     page === "assets"
       ? [
@@ -551,12 +680,31 @@ export function App() {
             },
             { label: "版本记录", value: versions.length, caption: "当前选中用例" },
           ]
-        : [
-            { label: "测试套件", value: suites.length, caption: "已编排" },
-            { label: "可选用例", value: publishedCases.length, caption: "已发布" },
-            { label: "全部用例", value: cases.length, caption: "当前系统" },
-            { label: "业务模块", value: modules.length, caption: "覆盖范围" },
-          ];
+        : page === "runs"
+          ? [
+              { label: "全部运行", value: runs.length, caption: "当前系统" },
+              {
+                label: "执行中",
+                value: runs.filter((run) => run.status !== "completed").length,
+                caption: "实时更新",
+              },
+              {
+                label: "门禁通过",
+                value: runs.filter((run) => run.gateResult === "passed").length,
+                caption: "最近 200 次",
+              },
+              {
+                label: "门禁阻断",
+                value: runs.filter((run) => run.gateResult === "blocked").length,
+                caption: "需处理",
+              },
+            ]
+          : [
+              { label: "测试套件", value: suites.length, caption: "已编排" },
+              { label: "可选用例", value: publishedCases.length, caption: "已发布" },
+              { label: "全部用例", value: cases.length, caption: "当前系统" },
+              { label: "业务模块", value: modules.length, caption: "覆盖范围" },
+            ];
 
   return (
     <div className="shell">
@@ -586,7 +734,7 @@ export function App() {
               {navigation
                 .filter((item) => item.group === group.id)
                 .map((item, index) => {
-                  const enabled = ["assets", "cases", "suites"].includes(item.id);
+                  const enabled = ["assets", "cases", "suites", "runs"].includes(item.id);
                   return (
                     <button
                       aria-current={page === item.id ? "page" : undefined}
@@ -631,7 +779,9 @@ export function App() {
             <strong>{pageDetails[page].title}</strong>
           </div>
           <div className="topbar-actions">
-            <span className="release-chip">M2 · ASSET PLANE</span>
+            <span className="release-chip">
+              {page === "runs" ? "M3 · EXECUTION LOOP" : "M2 · ASSET PLANE"}
+            </span>
             <div className={`status-pill status-${readiness.status}`} role="status">
               <span aria-hidden="true" />
               {readiness.status === "ok"
@@ -1169,6 +1319,290 @@ export function App() {
                   </div>
                 ) : null}
               </article>
+            </section>
+          ) : null}
+
+          {page === "runs" ? (
+            <section className="run-center-layout">
+              <article className="panel launch-panel">
+                <div className="panel-title">
+                  <div>
+                    <span className="step-number">RUN</span>
+                    <h3>一键发起回归</h3>
+                  </div>
+                  <span className="count">HTTP</span>
+                </div>
+                <p className="helper">
+                  创建运行时固定当前已发布用例版本；执行期间的资产修改不会改变本次结果。
+                </p>
+                <form className="form-stack" onSubmit={(event) => void createRun(event)}>
+                  <label>
+                    目标环境
+                    <select name="environmentId" required>
+                      <option value="">选择受控环境</option>
+                      {environments
+                        .filter((environment) => environment.status === "active")
+                        .map((environment) => (
+                          <option key={environment.id} value={environment.id}>
+                            {environment.name} · {environment.actionLevel}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <label>
+                    测试套件
+                    <select name="suiteId" required>
+                      <option value="">选择测试套件</option>
+                      {scopedSuites.map((suite) => (
+                        <option key={suite.id} value={suite.id}>
+                          {suite.name} · {suite.caseIds.length} 例
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    被测版本
+                    <input name="testedVersion" placeholder="Commit / Release / Build ID" />
+                  </label>
+                  <label>
+                    优先级
+                    <select defaultValue="50" name="priority">
+                      <option value="90">P0 · 发布冒烟</option>
+                      <option value="70">P1 · 核心回归</option>
+                      <option value="50">P2 · 常规回归</option>
+                      <option value="30">P3 · 巡检任务</option>
+                    </select>
+                  </label>
+                  <div className="launch-safety-note">
+                    <span aria-hidden="true">✓</span>
+                    <p>目标由环境白名单控制；写入步骤必须执行 finally 清理；首次失败永久保留。</p>
+                  </div>
+                  <button
+                    className="primary"
+                    disabled={busy || environments.length === 0 || scopedSuites.length === 0}
+                    type="submit"
+                  >
+                    发起一键回归
+                  </button>
+                </form>
+              </article>
+
+              <article className="panel run-list-panel">
+                <div className="panel-title">
+                  <div>
+                    <span className="step-number">LIVE</span>
+                    <h3>运行队列</h3>
+                  </div>
+                  <span className="live-refresh">
+                    <i aria-hidden="true" /> SSE 实时
+                  </span>
+                </div>
+                <div className="run-list" aria-label="测试运行列表">
+                  {runs.map((run) => {
+                    const progress = runProgress(run);
+                    return (
+                      <button
+                        aria-current={run.id === selectedRunId ? "true" : undefined}
+                        className={run.id === selectedRunId ? "selected" : ""}
+                        key={run.id}
+                        onClick={() => setSelectedRunId(run.id)}
+                        type="button"
+                      >
+                        <span className="run-identity">
+                          <strong>#{run.sequenceNumber}</strong>
+                          <span>
+                            <b>{run.suiteName}</b>
+                            <small>
+                              {run.environmentName} ·{" "}
+                              {new Date(run.queuedAt).toLocaleString("zh-CN")}
+                            </small>
+                          </span>
+                        </span>
+                        <span className="run-state-column">
+                          <span className={`run-status run-status-${run.status}`}>
+                            {runStatusLabels[run.status]}
+                          </span>
+                          <small>{elapsed(run)}</small>
+                        </span>
+                        <span className="run-progress-column">
+                          <span>
+                            <b>{progress}%</b>
+                            <small>
+                              {run.summary.passed + run.summary.flaky}/{run.summary.total}
+                            </small>
+                          </span>
+                          <span
+                            aria-label={`运行进度 ${progress}%`}
+                            aria-valuemax={100}
+                            aria-valuemin={0}
+                            aria-valuenow={progress}
+                            className="progress-track"
+                            role="progressbar"
+                          >
+                            <i style={{ width: `${progress}%` }} />
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {runs.length === 0 ? (
+                    <div className="run-empty-state">
+                      <span aria-hidden="true">◎</span>
+                      <strong>还没有测试运行</strong>
+                      <p>从左侧选择环境和套件，创建第一条可追踪的回归记录。</p>
+                    </div>
+                  ) : null}
+                </div>
+              </article>
+
+              {selectedRun !== undefined ? (
+                <article className="panel run-detail-panel">
+                  <div className="run-detail-heading">
+                    <div>
+                      <p className="eyebrow">RUN #{selectedRun.sequenceNumber}</p>
+                      <h3>{selectedRun.suiteName}</h3>
+                      <p>
+                        {selectedRun.environmentName} ·{" "}
+                        {selectedRun.testedVersion || "未声明被测版本"}
+                      </p>
+                    </div>
+                    <div className="run-detail-actions">
+                      <span className={`gate-badge gate-${selectedRun.gateResult ?? "pending"}`}>
+                        {selectedRun.gateResult === "passed"
+                          ? "门禁通过"
+                          : selectedRun.gateResult === "blocked"
+                            ? "门禁阻断"
+                            : selectedRun.gateResult === "inconclusive"
+                              ? "结论不确定"
+                              : runStatusLabels[selectedRun.status]}
+                      </span>
+                      {selectedRun.status === "completed" ? null : (
+                        <button
+                          className="secondary danger-action"
+                          disabled={busy || selectedRun.cancellationRequested}
+                          onClick={() => void cancelSelectedRun()}
+                          type="button"
+                        >
+                          {selectedRun.cancellationRequested ? "取消处理中" : "取消运行"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <dl className="run-metadata">
+                    <div>
+                      <dt>状态</dt>
+                      <dd>{runStatusLabels[selectedRun.status]}</dd>
+                    </div>
+                    <div>
+                      <dt>Worker</dt>
+                      <dd>{selectedRun.workerId?.slice(0, 12) ?? "等待分配"}</dd>
+                    </div>
+                    <div>
+                      <dt>Worker 镜像</dt>
+                      <dd>{selectedRun.workerImageDigest?.slice(0, 18) ?? "等待分配"}</dd>
+                    </div>
+                    <div>
+                      <dt>执行器</dt>
+                      <dd>{selectedRun.executorVersion ?? "等待分配"}</dd>
+                    </div>
+                    <div>
+                      <dt>优先级</dt>
+                      <dd>{selectedRun.priority}</dd>
+                    </div>
+                    <div>
+                      <dt>耗时</dt>
+                      <dd>{elapsed(selectedRun)}</dd>
+                    </div>
+                  </dl>
+
+                  <section className="result-summary" aria-label="运行结果汇总">
+                    <span>
+                      <strong>{selectedRun.summary.passed}</strong>通过
+                    </span>
+                    <span>
+                      <strong>{selectedRun.summary.productFailed}</strong>产品失败
+                    </span>
+                    <span>
+                      <strong>{selectedRun.summary.testFailed}</strong>用例失败
+                    </span>
+                    <span>
+                      <strong>{selectedRun.summary.environmentFailed}</strong>环境失败
+                    </span>
+                    <span>
+                      <strong>{selectedRun.summary.infrastructureFailed}</strong>设施失败
+                    </span>
+                    <span>
+                      <strong>{selectedRun.summary.flaky}</strong>不稳定
+                    </span>
+                  </section>
+
+                  {selectedRun.firstFailure === null ? null : (
+                    <div className="first-failure" role="alert">
+                      <span>首次失败</span>
+                      <strong>{selectedRun.firstFailure.code}</strong>
+                      <p>{selectedRun.firstFailure.message}</p>
+                    </div>
+                  )}
+
+                  <div className="evidence-layout">
+                    <section className="run-case-column">
+                      <h4>用例 / 迭代</h4>
+                      <ol>
+                        {selectedRun.cases.map((runCase) => (
+                          <li key={runCase.id}>
+                            <span
+                              className={`case-result case-result-${runCase.result ?? runCase.status}`}
+                              aria-hidden="true"
+                            />
+                            <span>
+                              <strong>{runCase.caseName}</strong>
+                              <small>
+                                v{runCase.version} · {runCase.durationMs ?? 0}ms · 清理
+                                {runCase.cleanupStatus}
+                              </small>
+                            </span>
+                            <b>
+                              {runCase.result === null
+                                ? runCase.status
+                                : caseResultLabels[runCase.result]}
+                            </b>
+                          </li>
+                        ))}
+                      </ol>
+                    </section>
+                    <section className="run-timeline">
+                      <h4>步骤证据</h4>
+                      <ol>
+                        {selectedRun.steps.map((step) => (
+                          <li key={step.id}>
+                            <span className={`timeline-dot timeline-${step.status}`} />
+                            <div>
+                              <span>
+                                <strong>{step.stepId}</strong>
+                                <small>
+                                  {step.phase === "finally" ? "清理" : `尝试 ${step.attempt}`} ·
+                                  {step.durationMs ?? 0}ms
+                                </small>
+                              </span>
+                              <code>{step.action}</code>
+                              {step.error === null ? null : <p>{step.error.message}</p>}
+                            </div>
+                          </li>
+                        ))}
+                        {selectedRun.steps.length === 0 ? (
+                          <li className="timeline-waiting">
+                            <span className="timeline-dot" />
+                            <div>
+                              <strong>等待 Worker 生成第一条步骤证据</strong>
+                            </div>
+                          </li>
+                        ) : null}
+                      </ol>
+                    </section>
+                  </div>
+                </article>
+              ) : null}
             </section>
           ) : null}
 

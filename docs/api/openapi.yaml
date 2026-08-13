@@ -869,7 +869,13 @@ paths:
               $ref: "#/components/schemas/CreateRunRequest"
       responses:
         "202":
-          description: Run accepted, or existing run returned for the same idempotency key.
+          description: New run accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "200":
+          description: Existing run returned for the same idempotency key.
           content:
             application/json:
               schema:
@@ -1788,8 +1794,11 @@ components:
     CreateRunRequest:
       type: object
       additionalProperties: false
-      required: [suiteId, environmentId, triggerType]
+      required: [systemId, suiteId, environmentId]
       properties:
+        systemId:
+          type: string
+          format: uuid
         suiteId:
           type: string
           format: uuid
@@ -1797,24 +1806,19 @@ components:
           type: string
           format: uuid
         triggerType:
-          enum: [manual, schedule, api, release_gate, retry]
-        priority:
-          enum: [release_smoke, manual_smoke, reproduction, regression, scheduled]
-        subjectVersion:
-          type: object
-          additionalProperties: false
-          properties:
-            commit:
-              type: string
-            releaseId:
-              type: string
-            displayVersion:
-              type: string
-        variables:
-          type: object
-        callbackTargetId:
+          enum: [manual, schedule, api, release]
+          default: manual
+        triggerSource:
           type: string
-          format: uuid
+          default: web-console
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+        testedVersion:
+          type: string
+          maxLength: 200
     RunStatus:
       enum: [queued, preparing, running, cancelling, cleaning, interrupted, compensation_pending, completed]
     GateResult:
@@ -1823,11 +1827,14 @@ components:
       enum: [passed, product_failed, test_failed, environment_failed, infrastructure_failed, flaky, cancelled, skipped]
     Run:
       type: object
-      required: [id, systemId, environmentId, suiteId, triggerType, status, queuedAt, summary]
+      required: [id, sequenceNumber, systemId, environmentId, suiteId, systemName, environmentName, suiteName, triggerType, triggerSource, idempotencyKey, priority, testedVersion, platformVersion, status, queuedAt, summary, cancellationRequested]
       properties:
         id:
           type: string
           format: uuid
+        sequenceNumber:
+          type: integer
+          minimum: 1
         systemId:
           type: string
           format: uuid
@@ -1838,6 +1845,22 @@ components:
           type: string
           format: uuid
         triggerType:
+          type: string
+        triggerSource:
+          type: string
+        idempotencyKey:
+          type: string
+        priority:
+          type: integer
+        systemName:
+          type: string
+        environmentName:
+          type: string
+        suiteName:
+          type: string
+        testedVersion:
+          type: string
+        platformVersion:
           type: string
         status:
           $ref: "#/components/schemas/RunStatus"
@@ -1854,8 +1877,16 @@ components:
         finishedAt:
           type: [string, "null"]
           format: date-time
-        subjectVersion:
-          type: object
+        cancellationRequested:
+          type: boolean
+        workerId:
+          type: [string, "null"]
+        workerImageDigest:
+          type: [string, "null"]
+        executorVersion:
+          type: [string, "null"]
+        firstFailure:
+          type: [object, "null"]
         summary:
           type: object
           additionalProperties:

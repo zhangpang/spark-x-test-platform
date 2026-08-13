@@ -12,6 +12,7 @@ x-service-environment: &service-environment
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-change-me-local-only}
   MINIO_BUCKET: ${MINIO_BUCKET:-test-artifacts}
   PLATFORM_QUEUE_NAME: ${PLATFORM_QUEUE_NAME:-test-runs}
+  PLATFORM_RELEASE_COMMIT: ${PLATFORM_VERSION:-dev}
   PLATFORM_SECRET_ENCRYPTION_KEY: ${PLATFORM_SECRET_ENCRYPTION_KEY:-}
 
 x-service-base: &service-base
@@ -195,6 +196,7 @@ services:
       WORKER_HEALTH_PORT: 4102
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
       WORKER_IDENTITY: ${WORKER_IDENTITY:-}
+      WORKER_IMAGE_DIGEST: ${WORKER_IMAGE_DIGEST:-}
     depends_on:
       postgres:
         condition: service_healthy

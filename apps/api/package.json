@@ -12,6 +12,7 @@
     "@spark-x-test/case-schema": "0.1.0",
     "@spark-x-test/contracts": "0.1.0",
     "@spark-x-test/service-runtime": "0.1.0",
+    "bullmq": "5.81.3",
     "fastify": "5.11.3",
     "yaml": "2.9.0"
   }

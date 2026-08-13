@@ -1,5 +1,6 @@
 import { apiVersion, platformVersion } from "@spark-x-test/contracts";
-import { createServiceApplication } from "@spark-x-test/service-runtime";
+import { createServiceApplication, TestRunStore } from "@spark-x-test/service-runtime";
+import { Queue } from "bullmq";
 
 import { ControlPlaneError } from "./control-plane/errors.js";
 import type { ControlPlaneRepository } from "./control-plane/model.js";
@@ -10,6 +11,7 @@ import {
 import { registerControlPlaneRoutes } from "./control-plane/routes.js";
 import { SecretVault } from "./control-plane/secrets.js";
 import { ControlPlaneService } from "./control-plane/service.js";
+import { registerRunRoutes, type RunQueue, type RunRouteStore } from "./run-routes.js";
 
 interface DatabaseError {
   readonly code?: string;
@@ -23,7 +25,11 @@ function databaseErrorCode(error: unknown): string | undefined {
 
 export function buildApiApplication(
   environment: NodeJS.ProcessEnv = process.env,
-  options: Readonly<{ repository?: ControlPlaneRepository }> = {},
+  options: Readonly<{
+    repository?: ControlPlaneRepository;
+    runQueue?: RunQueue;
+    runStore?: RunRouteStore;
+  }> = {},
 ) {
   const application = createServiceApplication("api", {
     environment,
@@ -67,15 +73,28 @@ export function buildApiApplication(
     repository,
     new SecretVault(environment.PLATFORM_SECRET_ENCRYPTION_KEY),
   );
+  const runStore = options.runStore ?? new TestRunStore(application.dependencies.postgres);
+  const queue =
+    options.runQueue ??
+    (environment.NODE_ENV === "test"
+      ? { add: () => Promise.resolve() }
+      : new Queue(`${application.config.queueName}-runs`, {
+          connection: { url: application.config.redisUrl },
+        }));
 
   application.app.get(`/api/${apiVersion}`, () => ({
     name: "spark-x-test-platform",
     version: platformVersion,
     apiVersion,
-    phase: "M2-test-asset-control-plane",
+    phase: "M3-run-evidence-loop",
   }));
 
   registerControlPlaneRoutes(application.app, controlPlane, `/api/${apiVersion}`);
+  registerRunRoutes(application.app, runStore, queue, `/api/${apiVersion}`);
+
+  if (queue instanceof Queue) {
+    application.app.addHook("onClose", () => queue.close());
+  }
 
   application.app.setErrorHandler((error, request, reply) => {
     if (error instanceof ControlPlaneError) {

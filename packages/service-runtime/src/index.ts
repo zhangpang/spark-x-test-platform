@@ -1,17 +1,775 @@
-import { randomUUID } from "node:crypto";
+import { createDecipheriv, randomUUID } from "node:crypto";
 
 import {
+  gateResults,
   dependencyNames,
   platformVersion,
+  runStatuses,
+  type CaseResult,
+  type CleanupStatus,
   type DependencyHealth,
   type DependencyName,
+  type GateResult,
   type HealthResponse,
+  type RunEvent,
+  type RunFailure,
+  type RunStatus,
+  type RunSummary,
   type ServiceName,
+  type StepRunRecord,
+  type TestRunCaseRecord,
+  type TestRunDetail,
+  type TestRunRecord,
 } from "@spark-x-test/contracts";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Redis } from "ioredis";
 import { Client as MinioClient } from "minio";
 import { Pool } from "pg";
+
+interface RunRow {
+  readonly id: string;
+  readonly sequence_number: string | number;
+  readonly trigger_type: TestRunRecord["triggerType"];
+  readonly trigger_source: string;
+  readonly idempotency_key: string;
+  readonly priority: number;
+  readonly system_id: string;
+  readonly environment_id: string;
+  readonly suite_id: string;
+  readonly system_name: string;
+  readonly environment_name: string;
+  readonly suite_name: string;
+  readonly tested_version: string;
+  readonly platform_version: string;
+  readonly snapshot: RunExecutionSnapshot;
+  readonly status: RunStatus;
+  readonly gate_result: GateResult | null;
+  readonly summary: RunSummary;
+  readonly cancellation_requested: boolean;
+  readonly first_failure: RunFailure | null;
+  readonly worker_id: string | null;
+  readonly worker_image_digest: string | null;
+  readonly executor_version: string | null;
+  readonly queued_at: Date | string;
+  readonly started_at: Date | string | null;
+  readonly finished_at: Date | string | null;
+  readonly updated_at: Date | string;
+}
+
+interface RunCaseRow {
+  readonly id: string;
+  readonly run_id: string;
+  readonly case_id: string;
+  readonly case_version_id: string;
+  readonly case_name: string;
+  readonly version: number;
+  readonly iteration: number;
+  readonly sort_order: number;
+  readonly status: TestRunCaseRecord["status"];
+  readonly result: CaseResult | null;
+  readonly attempts: number;
+  readonly flaky: boolean;
+  readonly first_failure: RunFailure | null;
+  readonly cleanup_status: CleanupStatus;
+  readonly started_at: Date | string | null;
+  readonly finished_at: Date | string | null;
+  readonly duration_ms: number | null;
+}
+
+interface StepRow {
+  readonly id: string;
+  readonly run_case_id: string;
+  readonly attempt: number;
+  readonly step_path: string;
+  readonly step_id: string;
+  readonly action: string;
+  readonly phase: StepRunRecord["phase"];
+  readonly status: StepRunRecord["status"];
+  readonly result: CaseResult | null;
+  readonly input_summary: Readonly<Record<string, unknown>>;
+  readonly output_summary: Readonly<Record<string, unknown>> | null;
+  readonly error: RunFailure | null;
+  readonly started_at: Date | string;
+  readonly finished_at: Date | string | null;
+  readonly duration_ms: number | null;
+}
+
+interface RunEventRow {
+  readonly id: string | number;
+  readonly run_id: string;
+  readonly event_type: string;
+  readonly data: Readonly<Record<string, unknown>>;
+  readonly created_at: Date | string;
+}
+
+export interface RunSnapshotCase {
+  readonly runCaseId: string;
+  readonly caseId: string;
+  readonly caseVersionId: string;
+  readonly name: string;
+  readonly version: number;
+  readonly sortOrder: number;
+  readonly definition: Readonly<Record<string, unknown>>;
+}
+
+export interface RunExecutionSnapshot {
+  readonly environment: Readonly<{
+    id: string;
+    baseUrl: string;
+    actionLevel: "read" | "write" | "dangerous";
+    allowlist: readonly Readonly<{
+      protocol: "http" | "https";
+      host: string;
+      ports: readonly number[];
+      pathPrefixes?: readonly string[];
+    }>[];
+  }>;
+  readonly suite: Readonly<{ id: string; name: string; diagnosticRetries: number }>;
+  readonly cases: readonly RunSnapshotCase[];
+}
+
+export interface CreateRunInput {
+  readonly triggerType: TestRunRecord["triggerType"];
+  readonly triggerSource: string;
+  readonly idempotencyKey: string;
+  readonly priority: number;
+  readonly systemId: string;
+  readonly environmentId: string;
+  readonly suiteId: string;
+  readonly testedVersion: string;
+}
+
+export interface SecretVariableReference {
+  readonly name: string;
+  readonly secretRef: string;
+}
+
+function isoTimestamp(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function nullableTimestamp(value: Date | string | null): string | null {
+  return value === null ? null : isoTimestamp(value);
+}
+
+function mapRun(row: RunRow): TestRunRecord {
+  return {
+    id: row.id,
+    sequenceNumber: Number(row.sequence_number),
+    triggerType: row.trigger_type,
+    triggerSource: row.trigger_source,
+    idempotencyKey: row.idempotency_key,
+    priority: row.priority,
+    systemId: row.system_id,
+    environmentId: row.environment_id,
+    suiteId: row.suite_id,
+    systemName: row.system_name,
+    environmentName: row.environment_name,
+    suiteName: row.suite_name,
+    testedVersion: row.tested_version,
+    platformVersion: row.platform_version,
+    status: row.status,
+    gateResult: row.gate_result,
+    summary: row.summary,
+    cancellationRequested: row.cancellation_requested,
+    firstFailure: row.first_failure,
+    workerId: row.worker_id,
+    workerImageDigest: row.worker_image_digest,
+    executorVersion: row.executor_version,
+    queuedAt: isoTimestamp(row.queued_at),
+    startedAt: nullableTimestamp(row.started_at),
+    finishedAt: nullableTimestamp(row.finished_at),
+    updatedAt: isoTimestamp(row.updated_at),
+  };
+}
+
+function mapRunCase(row: RunCaseRow): TestRunCaseRecord {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    caseId: row.case_id,
+    caseVersionId: row.case_version_id,
+    caseName: row.case_name,
+    version: row.version,
+    iteration: row.iteration,
+    sortOrder: row.sort_order,
+    status: row.status,
+    result: row.result,
+    attempts: row.attempts,
+    flaky: row.flaky,
+    firstFailure: row.first_failure,
+    cleanupStatus: row.cleanup_status,
+    startedAt: nullableTimestamp(row.started_at),
+    finishedAt: nullableTimestamp(row.finished_at),
+    durationMs: row.duration_ms,
+  };
+}
+
+function mapStep(row: StepRow): StepRunRecord {
+  return {
+    id: row.id,
+    runCaseId: row.run_case_id,
+    attempt: row.attempt,
+    stepPath: row.step_path,
+    stepId: row.step_id,
+    action: row.action,
+    phase: row.phase,
+    status: row.status,
+    result: row.result,
+    inputSummary: row.input_summary,
+    outputSummary: row.output_summary,
+    error: row.error,
+    startedAt: isoTimestamp(row.started_at),
+    finishedAt: nullableTimestamp(row.finished_at),
+    durationMs: row.duration_ms,
+  };
+}
+
+const runSelection = `
+  select r.*, s.name as system_name, e.name as environment_name, ts.name as suite_name
+  from test_runs r
+  join systems s on s.id = r.system_id
+  join environments e on e.id = r.environment_id
+  join test_suites ts on ts.id = r.suite_id`;
+
+export class TestRunStore {
+  readonly #pool: Pool;
+  readonly #secretKey?: Buffer;
+
+  constructor(pool: Pool, encodedSecretKey?: string) {
+    this.#pool = pool;
+    if (encodedSecretKey === undefined || encodedSecretKey.trim() === "") return;
+    const decoded = Buffer.from(encodedSecretKey, "base64");
+    if (decoded.length !== 32 || decoded.toString("base64") !== encodedSecretKey.trim()) {
+      throw new Error(
+        "PLATFORM_SECRET_ENCRYPTION_KEY must be a canonical base64-encoded 32-byte key",
+      );
+    }
+    this.#secretKey = decoded;
+  }
+
+  async createRun(
+    input: CreateRunInput,
+  ): Promise<Readonly<{ run: TestRunRecord; created: boolean }>> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        `${input.triggerSource}\u0000${input.systemId}\u0000${input.idempotencyKey}`,
+      ]);
+      const existing = await client.query<RunRow>(
+        `${runSelection}
+         where r.trigger_source = $1 and r.system_id = $2 and r.idempotency_key = $3`,
+        [input.triggerSource, input.systemId, input.idempotencyKey],
+      );
+      if (existing.rows[0] !== undefined) {
+        await client.query("commit");
+        return { run: mapRun(existing.rows[0]), created: false };
+      }
+      const context = await client.query<{
+        readonly system_name: string;
+        readonly environment_name: string;
+        readonly base_url: string;
+        readonly action_level: RunExecutionSnapshot["environment"]["actionLevel"];
+        readonly allowlist: RunExecutionSnapshot["environment"]["allowlist"];
+        readonly suite_name: string;
+        readonly diagnostic_retries: number;
+      }>(
+        `select s.name as system_name, e.name as environment_name, e.base_url, e.action_level,
+                e.allowlist, ts.name as suite_name,
+                ts.default_diagnostic_retries as diagnostic_retries
+         from systems s
+         join environments e on e.system_id = s.id and e.id = $2 and e.status = 'active'
+         join test_suites ts on ts.system_id = s.id and ts.id = $3
+         where s.id = $1 and s.status = 'active'`,
+        [input.systemId, input.environmentId, input.suiteId],
+      );
+      const runContext = context.rows[0];
+      if (runContext === undefined) throw new Error("RUN_CONTEXT_NOT_FOUND");
+      const cases = await client.query<{
+        readonly case_id: string;
+        readonly case_version_id: string;
+        readonly name: string;
+        readonly version: number;
+        readonly definition: Readonly<Record<string, unknown>>;
+        readonly sort_order: number;
+      }>(
+        `select tc.id as case_id, tcv.id as case_version_id, tc.name, tcv.version,
+                tcv.definition, sc.sort_order
+         from suite_cases sc
+         join test_cases tc on tc.id = sc.case_id and tc.status = 'published'
+         join test_case_versions tcv on tcv.id = tc.current_published_version_id
+         where sc.suite_id = $1
+         order by sc.sort_order, tc.id`,
+        [input.suiteId],
+      );
+      if (cases.rows.length === 0) throw new Error("RUN_SUITE_EMPTY");
+
+      const runId = randomUUID();
+      const snapshotCases = cases.rows.map((item) => ({
+        runCaseId: randomUUID(),
+        caseId: item.case_id,
+        caseVersionId: item.case_version_id,
+        name: item.name,
+        version: item.version,
+        sortOrder: item.sort_order,
+        definition: item.definition,
+      }));
+      const snapshot: RunExecutionSnapshot = {
+        environment: {
+          id: input.environmentId,
+          baseUrl: runContext.base_url,
+          actionLevel: runContext.action_level,
+          allowlist: runContext.allowlist,
+        },
+        suite: {
+          id: input.suiteId,
+          name: runContext.suite_name,
+          diagnosticRetries: runContext.diagnostic_retries,
+        },
+        cases: snapshotCases,
+      };
+      const summary: RunSummary = {
+        total: snapshotCases.length,
+        queued: snapshotCases.length,
+        running: 0,
+        passed: 0,
+        productFailed: 0,
+        testFailed: 0,
+        environmentFailed: 0,
+        infrastructureFailed: 0,
+        flaky: 0,
+        cancelled: 0,
+        skipped: 0,
+      };
+      await client.query(
+        `insert into test_runs
+           (id, trigger_type, trigger_source, idempotency_key, priority, system_id,
+            environment_id, suite_id, tested_version, platform_version, snapshot, summary)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb)`,
+        [
+          runId,
+          input.triggerType,
+          input.triggerSource,
+          input.idempotencyKey,
+          input.priority,
+          input.systemId,
+          input.environmentId,
+          input.suiteId,
+          input.testedVersion,
+          platformVersion,
+          JSON.stringify(snapshot),
+          JSON.stringify(summary),
+        ],
+      );
+      for (const item of snapshotCases) {
+        await client.query(
+          `insert into test_run_cases
+             (id, run_id, case_id, case_version_id, iteration, sort_order)
+           values ($1, $2, $3, $4, 1, $5)`,
+          [item.runCaseId, runId, item.caseId, item.caseVersionId, item.sortOrder],
+        );
+      }
+      await client.query(
+        `insert into run_events (run_id, event_type, data)
+         values ($1, 'run.queued', $2::jsonb)`,
+        [runId, JSON.stringify({ status: "queued", total: snapshotCases.length })],
+      );
+      await client.query("commit");
+      const created = await this.getRun(runId);
+      if (created === null) throw new Error("CREATED_RUN_NOT_FOUND");
+      return { run: created, created: true };
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listRuns(
+    filters: Readonly<{ systemId?: string; status?: RunStatus }> = {},
+  ): Promise<readonly TestRunRecord[]> {
+    const result = await this.#pool.query<RunRow>(
+      `${runSelection}
+       where ($1::uuid is null or r.system_id = $1)
+         and ($2::text is null or r.status = $2)
+       order by r.queued_at desc, r.id desc
+       limit 200`,
+      [filters.systemId ?? null, filters.status ?? null],
+    );
+    return result.rows.map(mapRun);
+  }
+
+  async getRun(id: string): Promise<TestRunRecord | null> {
+    const result = await this.#pool.query<RunRow>(`${runSelection} where r.id = $1`, [id]);
+    return result.rows[0] === undefined ? null : mapRun(result.rows[0]);
+  }
+
+  async getRunDetail(id: string): Promise<TestRunDetail | null> {
+    const run = await this.getRun(id);
+    if (run === null) return null;
+    const [cases, steps] = await Promise.all([
+      this.#pool.query<RunCaseRow>(
+        `select trc.*, tc.name as case_name, tcv.version
+         from test_run_cases trc
+         join test_cases tc on tc.id = trc.case_id
+         join test_case_versions tcv on tcv.id = trc.case_version_id
+         where trc.run_id = $1
+         order by trc.sort_order, trc.iteration`,
+        [id],
+      ),
+      this.#pool.query<StepRow>(
+        `select sr.* from step_runs sr
+         join test_run_cases trc on trc.id = sr.run_case_id
+         where trc.run_id = $1
+         order by trc.sort_order, sr.attempt, sr.started_at`,
+        [id],
+      ),
+    ]);
+    return { ...run, cases: cases.rows.map(mapRunCase), steps: steps.rows.map(mapStep) };
+  }
+
+  async listEvents(runId: string, afterId = 0): Promise<readonly RunEvent[]> {
+    const result = await this.#pool.query<RunEventRow>(
+      `select * from run_events where run_id = $1 and id > $2 order by id limit 500`,
+      [runId, afterId],
+    );
+    return result.rows.map((row) => ({
+      id: Number(row.id),
+      runId: row.run_id,
+      type: row.event_type,
+      data: row.data,
+      createdAt: isoTimestamp(row.created_at),
+    }));
+  }
+
+  async requestCancellation(id: string): Promise<TestRunRecord | null> {
+    const result = await this.#pool.query(
+      `update test_runs
+       set cancellation_requested = true,
+           status = case when status in ('preparing', 'running') then 'cancelling' else status end,
+           updated_at = now()
+       where id = $1 and status <> 'completed'`,
+      [id],
+    );
+    if ((result.rowCount ?? 0) > 0) {
+      await this.appendEvent(id, "run.cancellation_requested", {});
+    }
+    return this.getRun(id);
+  }
+
+  async claimRun(id: string, workerId: string): Promise<RunExecutionSnapshot | null> {
+    const result = await this.#pool.query<{
+      readonly snapshot: RunExecutionSnapshot;
+      readonly cancellation_requested: boolean;
+    }>(
+      `update test_runs
+       set status = case when cancellation_requested then 'cancelling' else 'preparing' end,
+           worker_id = $2,
+           worker_image_digest = (select image_digest from workers where id = $2),
+           executor_version = (select executor_version from workers where id = $2),
+           worker_heartbeat_at = now(),
+           started_at = coalesce(started_at, now()), updated_at = now()
+       where id = $1 and status = 'queued'
+       returning snapshot, cancellation_requested`,
+      [id, workerId],
+    );
+    const claimed = result.rows[0];
+    if (claimed === undefined) return null;
+    await this.appendEvent(
+      id,
+      claimed.cancellation_requested ? "run.cancelling" : "run.preparing",
+      {
+        workerId,
+      },
+    );
+    return claimed.snapshot;
+  }
+
+  async setRunStatus(id: string, status: RunStatus): Promise<boolean> {
+    if (!runStatuses.includes(status)) throw new Error(`Invalid run status: ${status}`);
+    const result = await this.#pool.query(
+      `update test_runs set status = $2, updated_at = now(),
+         finished_at = case when $2 = 'completed' then now() else finished_at end
+       where id = $1 and (
+         (status = 'queued' and $2 in ('preparing', 'cancelling')) or
+         (status = 'preparing' and $2 in ('running', 'cancelling', 'interrupted')) or
+         (status = 'running' and $2 in ('cancelling', 'cleaning', 'interrupted')) or
+         (status = 'cancelling' and $2 in ('cleaning', 'interrupted')) or
+         (status = 'cleaning' and $2 in ('completed', 'compensation_pending', 'interrupted')) or
+         (status = 'interrupted' and $2 in ('compensation_pending', 'completed')) or
+         (status = 'compensation_pending' and $2 = 'completed')
+       )`,
+      [id, status],
+    );
+    if ((result.rowCount ?? 0) === 0) {
+      if (status === "running" && (await this.isCancellationRequested(id))) return false;
+      throw new Error("INVALID_RUN_TRANSITION");
+    }
+    await this.appendEvent(id, `run.${status}`, { status });
+    return true;
+  }
+
+  async isCancellationRequested(id: string): Promise<boolean> {
+    const result = await this.#pool.query<{ readonly cancellation_requested: boolean }>(
+      "select cancellation_requested from test_runs where id = $1",
+      [id],
+    );
+    return result.rows[0]?.cancellation_requested ?? true;
+  }
+
+  async resolveSecretVariables(
+    runId: string,
+    references: readonly SecretVariableReference[],
+  ): Promise<Readonly<Record<string, string>>> {
+    if (references.length === 0) return {};
+    if (this.#secretKey === undefined) throw new Error("SECRET_VAULT_UNAVAILABLE");
+    const resolved = await this.#pool.query<{
+      readonly name: string;
+      readonly encrypted_value: Buffer;
+      readonly encryption_iv: Buffer;
+      readonly authentication_tag: Buffer;
+    }>(
+      `select requested.name, selected.encrypted_value, selected.encryption_iv,
+              selected.authentication_tag
+       from test_runs r
+       cross join lateral jsonb_to_recordset($2::jsonb)
+         as requested(name text, "secretRef" text)
+       join lateral (
+         select s.encrypted_value, s.encryption_iv, s.authentication_tag
+         from secrets s
+         where s.system_id = r.system_id
+           and s.key = requested."secretRef"
+           and (s.environment_id = r.environment_id or s.environment_id is null)
+         order by (s.environment_id = r.environment_id) desc nulls last, s.version desc
+         limit 1
+       ) selected on true
+       where r.id = $1`,
+      [runId, JSON.stringify(references)],
+    );
+    if (resolved.rows.length !== references.length) throw new Error("SECRET_REFERENCE_NOT_FOUND");
+    try {
+      return Object.fromEntries(
+        resolved.rows.map((secret) => {
+          const decipher = createDecipheriv(
+            "aes-256-gcm",
+            this.#secretKey as Buffer,
+            secret.encryption_iv,
+          );
+          decipher.setAuthTag(secret.authentication_tag);
+          const plaintext = Buffer.concat([
+            decipher.update(secret.encrypted_value),
+            decipher.final(),
+          ]).toString("utf8");
+          return [`case.${secret.name}`, plaintext];
+        }),
+      );
+    } catch {
+      throw new Error("SECRET_DECRYPTION_FAILED");
+    }
+  }
+
+  async heartbeat(id: string, workerId: string): Promise<void> {
+    await Promise.all([
+      this.#pool.query(
+        `update test_runs set worker_heartbeat_at = now(), updated_at = now()
+         where id = $1 and worker_id = $2 and status <> 'completed'`,
+        [id, workerId],
+      ),
+      this.#pool.query("update workers set last_seen_at = now() where id = $1", [workerId]),
+    ]);
+  }
+
+  async startCase(runId: string, runCaseId: string, attempt: number): Promise<void> {
+    await this.#pool.query(
+      `update test_run_cases
+       set status = 'running', attempts = $3, started_at = coalesce(started_at, now())
+       where id = $2 and run_id = $1`,
+      [runId, runCaseId, attempt],
+    );
+    await this.#refreshRunSummary(runId);
+    await this.appendEvent(runId, "case.started", { runCaseId, attempt });
+  }
+
+  async recordStep(
+    runId: string,
+    input: Readonly<{
+      id: string;
+      runCaseId: string;
+      attempt: number;
+      path: string;
+      stepId: string;
+      action: string;
+      phase: "main" | "finally";
+      status: StepRunRecord["status"];
+      result: CaseResult;
+      inputSummary: Readonly<Record<string, unknown>>;
+      outputSummary?: Readonly<Record<string, unknown>>;
+      error?: RunFailure;
+      startedAt: string;
+      durationMs: number;
+    }>,
+  ): Promise<void> {
+    await this.#pool.query(
+      `insert into step_runs
+         (id, run_case_id, attempt, step_path, step_id, action, phase, status, result,
+          input_summary, output_summary, error, started_at, finished_at, duration_ms)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
+               $12::jsonb, $13, now(), $14)`,
+      [
+        input.id,
+        input.runCaseId,
+        input.attempt,
+        input.path,
+        input.stepId,
+        input.action,
+        input.phase,
+        input.status,
+        input.result,
+        JSON.stringify(input.inputSummary),
+        input.outputSummary === undefined ? null : JSON.stringify(input.outputSummary),
+        input.error === undefined ? null : JSON.stringify(input.error),
+        input.startedAt,
+        input.durationMs,
+      ],
+    );
+    await this.appendEvent(runId, "step.completed", {
+      runCaseId: input.runCaseId,
+      stepId: input.stepId,
+      phase: input.phase,
+      result: input.result,
+    });
+  }
+
+  async finishCase(
+    runId: string,
+    runCaseId: string,
+    result: CaseResult,
+    cleanupStatus: CleanupStatus,
+    firstFailure: RunFailure | null,
+    startedAt: number,
+    flaky = false,
+  ): Promise<void> {
+    await this.#pool.query(
+      `update test_run_cases
+       set status = 'completed', result = $3, flaky = $4, first_failure = $5::jsonb,
+           cleanup_status = $6, finished_at = now(),
+           duration_ms = greatest(0, floor(extract(epoch from (clock_timestamp() - to_timestamp($7::double precision / 1000.0))) * 1000)::integer)
+       where id = $2 and run_id = $1`,
+      [
+        runId,
+        runCaseId,
+        result,
+        flaky,
+        firstFailure === null ? null : JSON.stringify(firstFailure),
+        cleanupStatus,
+        startedAt,
+      ],
+    );
+    await this.#refreshRunSummary(runId);
+    await this.appendEvent(runId, "case.completed", { runCaseId, result, cleanupStatus, flaky });
+  }
+
+  async completeRun(
+    id: string,
+    summary: RunSummary,
+    gateResult: GateResult,
+    firstFailure: RunFailure | null,
+  ): Promise<void> {
+    if (!gateResults.includes(gateResult)) throw new Error(`Invalid gate result: ${gateResult}`);
+    const result = await this.#pool.query(
+      `update test_runs
+       set status = 'completed', summary = $2::jsonb, gate_result = $3,
+           first_failure = $4::jsonb, finished_at = now(), updated_at = now()
+       where id = $1 and status in ('cleaning', 'interrupted', 'compensation_pending')`,
+      [
+        id,
+        JSON.stringify(summary),
+        gateResult,
+        firstFailure === null ? null : JSON.stringify(firstFailure),
+      ],
+    );
+    if ((result.rowCount ?? 0) === 0) throw new Error("INVALID_RUN_TRANSITION");
+    await this.appendEvent(id, "run.completed", { summary, gateResult, firstFailure });
+  }
+
+  async appendEvent(
+    runId: string,
+    type: string,
+    data: Readonly<Record<string, unknown>>,
+  ): Promise<void> {
+    await this.#pool.query(
+      `insert into run_events (run_id, event_type, data) values ($1, $2, $3::jsonb)`,
+      [runId, type, JSON.stringify(data)],
+    );
+  }
+
+  async #refreshRunSummary(runId: string): Promise<void> {
+    await this.#pool.query(
+      `with counts as (
+         select count(*)::integer as total,
+                count(*) filter (where status = 'queued')::integer as queued,
+                count(*) filter (where status = 'running')::integer as running,
+                count(*) filter (where result = 'passed')::integer as passed,
+                count(*) filter (where result = 'product_failed')::integer as product_failed,
+                count(*) filter (where result = 'test_failed')::integer as test_failed,
+                count(*) filter (where result = 'environment_failed')::integer as environment_failed,
+                count(*) filter (where result = 'infrastructure_failed')::integer as infrastructure_failed,
+                count(*) filter (where result = 'flaky')::integer as flaky,
+                count(*) filter (where result = 'cancelled')::integer as cancelled,
+                count(*) filter (where result = 'skipped')::integer as skipped
+         from test_run_cases where run_id = $1
+       )
+       update test_runs
+       set summary = jsonb_build_object(
+             'total', counts.total,
+             'queued', counts.queued,
+             'running', counts.running,
+             'passed', counts.passed,
+             'productFailed', counts.product_failed,
+             'testFailed', counts.test_failed,
+             'environmentFailed', counts.environment_failed,
+             'infrastructureFailed', counts.infrastructure_failed,
+             'flaky', counts.flaky,
+             'cancelled', counts.cancelled,
+             'skipped', counts.skipped
+           ),
+           updated_at = now()
+       from counts where test_runs.id = $1`,
+      [runId],
+    );
+  }
+
+  async registerWorker(
+    id: string,
+    input: Readonly<{
+      identity?: string;
+      imageDigest: string;
+      executorVersion: string;
+      concurrencySlots: number;
+      capabilities: readonly string[];
+    }>,
+  ): Promise<void> {
+    await this.#pool.query(
+      `insert into workers
+         (id, identity, image_digest, executor_version, capabilities, concurrency_slots)
+       values ($1, $2, $3, $4, $5::jsonb, $6)
+       on conflict (id) do update set identity = excluded.identity,
+         image_digest = excluded.image_digest, executor_version = excluded.executor_version,
+         capabilities = excluded.capabilities, concurrency_slots = excluded.concurrency_slots,
+         status = 'online', last_seen_at = now()`,
+      [
+        id,
+        input.identity ?? null,
+        input.imageDigest,
+        input.executorVersion,
+        JSON.stringify(input.capabilities),
+        input.concurrencySlots,
+      ],
+    );
+  }
+}
 
 export interface PlatformConfig {
   readonly nodeEnv: "development" | "test" | "production";

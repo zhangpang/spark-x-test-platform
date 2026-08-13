@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { ControlPlaneRepository, JsonObject } from "./control-plane/model.js";
 import { buildApiApplication } from "./app.js";
+import type { RunQueue, RunRouteStore } from "./run-routes.js";
 
 const environment = {
   NODE_ENV: "test",
@@ -36,7 +37,7 @@ describe("API service", () => {
     const response = await application.app.inject({ method: "GET", url: "/api/v1" });
     expect(response.json()).toMatchObject({
       name: "spark-x-test-platform",
-      phase: "M2-test-asset-control-plane",
+      phase: "M3-run-evidence-loop",
     });
   });
 
@@ -124,5 +125,77 @@ describe("API service", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
     expect(createCalled).toBe(false);
+  });
+
+  it("creates an immutable run and enqueues it exactly once", async () => {
+    const run = {
+      id: "00000000-0000-4000-8000-000000000101",
+      sequenceNumber: 42,
+      triggerType: "manual" as const,
+      triggerSource: "web-console",
+      idempotencyKey: "run-idempotency-key",
+      priority: 50,
+      systemId: "00000000-0000-4000-8000-000000000102",
+      environmentId: "00000000-0000-4000-8000-000000000103",
+      suiteId: "00000000-0000-4000-8000-000000000104",
+      systemName: "Sample",
+      environmentName: "Test",
+      suiteName: "Smoke",
+      testedVersion: "abc123",
+      platformVersion: "0.1.0",
+      status: "queued" as const,
+      gateResult: null,
+      summary: {
+        total: 1,
+        queued: 1,
+        running: 0,
+        passed: 0,
+        productFailed: 0,
+        testFailed: 0,
+        environmentFailed: 0,
+        infrastructureFailed: 0,
+        flaky: 0,
+        cancelled: 0,
+        skipped: 0,
+      },
+      cancellationRequested: false,
+      firstFailure: null,
+      workerId: null,
+      workerImageDigest: null,
+      executorVersion: null,
+      queuedAt: new Date(0).toISOString(),
+      startedAt: null,
+      finishedAt: null,
+      updatedAt: new Date(0).toISOString(),
+    };
+    const runStore = {
+      createRun: () => Promise.resolve({ run, created: true }),
+    } as unknown as RunRouteStore;
+    const queued: unknown[] = [];
+    const runQueue = {
+      add: (_name, data) => {
+        queued.push(data);
+        return Promise.resolve();
+      },
+    } satisfies RunQueue;
+    const application = buildApiApplication(environment, { runStore, runQueue });
+    applications.push(application);
+    const response = await application.app.inject({
+      method: "POST",
+      url: "/api/v1/runs",
+      payload: {
+        systemId: run.systemId,
+        environmentId: run.environmentId,
+        suiteId: run.suiteId,
+        idempotencyKey: run.idempotencyKey,
+        testedVersion: run.testedVersion,
+      },
+      headers: { "idempotency-key": run.idempotencyKey },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ id: run.id, status: "queued", sequenceNumber: 42 });
+    expect(queued).toEqual([
+      expect.objectContaining({ protocolVersion: "1.0", runId: run.id, priority: 50 }),
+    ]);
   });
 });

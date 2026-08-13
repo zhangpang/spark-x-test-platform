@@ -63,3 +63,110 @@ export interface TestRunJob {
   readonly queuedAt: string;
   readonly priority: number;
 }
+
+export const runCaseStatuses = ["queued", "running", "cleaning", "completed"] as const;
+export type RunCaseStatus = (typeof runCaseStatuses)[number];
+
+export const cleanupStatuses = ["pending", "not_required", "running", "passed", "failed"] as const;
+export type CleanupStatus = (typeof cleanupStatuses)[number];
+
+export interface RunSummary {
+  readonly total: number;
+  readonly queued: number;
+  readonly running: number;
+  readonly passed: number;
+  readonly productFailed: number;
+  readonly testFailed: number;
+  readonly environmentFailed: number;
+  readonly infrastructureFailed: number;
+  readonly flaky: number;
+  readonly cancelled: number;
+  readonly skipped: number;
+}
+
+export interface RunFailure {
+  readonly code: string;
+  readonly message: string;
+  readonly classification: Exclude<CaseResult, "passed" | "flaky" | "cancelled" | "skipped">;
+  readonly stepId?: string;
+}
+
+export interface TestRunRecord {
+  readonly id: string;
+  readonly sequenceNumber: number;
+  readonly triggerType: "manual" | "schedule" | "release" | "api";
+  readonly triggerSource: string;
+  readonly idempotencyKey: string;
+  readonly priority: number;
+  readonly systemId: string;
+  readonly environmentId: string;
+  readonly suiteId: string;
+  readonly systemName: string;
+  readonly environmentName: string;
+  readonly suiteName: string;
+  readonly testedVersion: string;
+  readonly platformVersion: string;
+  readonly status: RunStatus;
+  readonly gateResult: GateResult | null;
+  readonly summary: RunSummary;
+  readonly cancellationRequested: boolean;
+  readonly firstFailure: RunFailure | null;
+  readonly workerId: string | null;
+  readonly workerImageDigest: string | null;
+  readonly executorVersion: string | null;
+  readonly queuedAt: string;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
+  readonly updatedAt: string;
+}
+
+export interface TestRunCaseRecord {
+  readonly id: string;
+  readonly runId: string;
+  readonly caseId: string;
+  readonly caseVersionId: string;
+  readonly caseName: string;
+  readonly version: number;
+  readonly iteration: number;
+  readonly sortOrder: number;
+  readonly status: RunCaseStatus;
+  readonly result: CaseResult | null;
+  readonly attempts: number;
+  readonly flaky: boolean;
+  readonly firstFailure: RunFailure | null;
+  readonly cleanupStatus: CleanupStatus;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
+  readonly durationMs: number | null;
+}
+
+export interface StepRunRecord {
+  readonly id: string;
+  readonly runCaseId: string;
+  readonly attempt: number;
+  readonly stepPath: string;
+  readonly stepId: string;
+  readonly action: string;
+  readonly phase: "main" | "finally";
+  readonly status: "running" | "passed" | "failed" | "cancelled";
+  readonly result: CaseResult | null;
+  readonly inputSummary: Readonly<Record<string, unknown>>;
+  readonly outputSummary: Readonly<Record<string, unknown>> | null;
+  readonly error: RunFailure | null;
+  readonly startedAt: string;
+  readonly finishedAt: string | null;
+  readonly durationMs: number | null;
+}
+
+export interface TestRunDetail extends TestRunRecord {
+  readonly cases: readonly TestRunCaseRecord[];
+  readonly steps: readonly StepRunRecord[];
+}
+
+export interface RunEvent {
+  readonly id: number;
+  readonly runId: string;
+  readonly type: string;
+  readonly data: Readonly<Record<string, unknown>>;
+  readonly createdAt: string;
+}

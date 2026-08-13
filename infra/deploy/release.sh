@@ -166,14 +166,16 @@ smoke_platform() {
   local migration_count
   migration_count="$(run_compose exec -T postgres psql \
     -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc \
-    "select count(*) from platform_schema_migrations where version in ('0001_platform_bootstrap.sql', '0002_test_asset_control_plane.sql')")"
-  test "$migration_count" = "2"
+    "select count(*) from platform_schema_migrations where version in ('0001_platform_bootstrap.sql', '0002_test_asset_control_plane.sql', '0003_run_evidence_loop.sql')")"
+  test "$migration_count" = "3"
 
   local heartbeat_count
   heartbeat_count="$(run_compose exec -T postgres psql \
     -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc \
     "select count(distinct service_name) from service_heartbeats where service_name in ('scheduler', 'worker') and last_seen_at > now() - interval '90 seconds'")"
   test "$heartbeat_count" = "2"
+
+  run_compose exec -T api node --import tsx scripts/verify-m3-http-run.ts
 }
 
 case "$ACTION" in
