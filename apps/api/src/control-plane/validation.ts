@@ -36,7 +36,7 @@ function isJsonArray(value: unknown): value is readonly JsonValue[] {
 }
 
 function jsonEntries(value: JsonObject): readonly (readonly [string, JsonValue])[] {
-  return Object.entries(value) as [string, JsonValue][];
+  return Object.entries(value);
 }
 
 function isReference(value: string): boolean {
@@ -44,7 +44,7 @@ function isReference(value: string): boolean {
 }
 
 function canonicalize(value: JsonValue): string {
-  if (Array.isArray(value)) {
+  if (isJsonArray(value)) {
     return `[${value.map((item) => canonicalize(item)).join(",")}]`;
   }
   if (isObject(value)) {
@@ -66,7 +66,7 @@ function joinPath(parent: string, child: string | number): string {
 
 export function findPlaintextSecrets(value: JsonValue, path: string = "$"): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  if (Array.isArray(value)) {
+  if (isJsonArray(value)) {
     value.forEach((item, index) =>
       issues.push(...findPlaintextSecrets(item, joinPath(path, index))),
     );
@@ -111,7 +111,7 @@ export function findPlaintextSecrets(value: JsonValue, path: string = "$"): Vali
 }
 
 export function redactSecrets(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) return value.map((item) => redactSecrets(item));
+  if (isJsonArray(value)) return value.map((item) => redactSecrets(item));
   if (!isObject(value)) {
     if (
       typeof value === "string" &&
@@ -134,7 +134,7 @@ export function redactSecrets(value: JsonValue): JsonValue {
 export function collectSecretReferences(value: JsonValue): readonly string[] {
   const references = new Set<string>();
   const visit = (current: JsonValue): void => {
-    if (Array.isArray(current)) {
+    if (isJsonArray(current)) {
       current.forEach(visit);
       return;
     }
@@ -158,7 +158,7 @@ export function collectSecretReferences(value: JsonValue): readonly string[] {
 function collectSteps(definition: JsonObject): readonly JsonObject[] {
   const collected: JsonObject[] = [];
   const visit = (steps: JsonValue | undefined): void => {
-    if (!Array.isArray(steps)) return;
+    if (!isJsonArray(steps)) return;
     for (const step of steps) {
       if (!isObject(step)) continue;
       collected.push(step);
@@ -200,7 +200,7 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
         message: `当前平台版本未注册动作 ${step.action}。`,
       });
     }
-    if (Array.isArray(step.assertions)) {
+    if (isJsonArray(step.assertions)) {
       for (const [assertionIndex, assertion] of step.assertions.entries()) {
         if (
           isObject(assertion) &&
@@ -469,7 +469,7 @@ export function validateDefinition(
   if (
     metadata !== undefined &&
     (metadata.actionLevel === "write" || metadata.actionLevel === "dangerous") &&
-    (!Array.isArray(definition.finally) || definition.finally.length === 0)
+    (!isJsonArray(definition.finally) || definition.finally.length === 0)
   ) {
     issues.push({
       severity: "error",
