@@ -261,9 +261,7 @@ async function waitForRun(id: string): Promise<RunRecord> {
           resources: lastRun.resources,
           cleanupJob: lastRun.cleanupJob,
         };
-  throw new Error(
-    `run ${id} did not complete within 30 seconds: ${JSON.stringify(diagnostic)}`,
-  );
+  throw new Error(`run ${id} did not complete within 30 seconds: ${JSON.stringify(diagnostic)}`);
 }
 
 async function createRun(
