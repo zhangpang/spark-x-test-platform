@@ -692,11 +692,7 @@ export async function executeRunJob(
         attemptVariables,
       );
       if (cleanup.status === "passed") {
-        const registered = await store.markCaseResources(
-          job.runId,
-          item.runCaseId,
-          "passed",
-        );
+        const registered = await store.markCaseResources(job.runId, item.runCaseId, "passed");
         await store.releaseResourceLocks(
           job.runId,
           item.runCaseId,
@@ -710,8 +706,7 @@ export async function executeRunJob(
           cleanup.failure,
         );
         if (registered > 0) compensationRequired = true;
-        else
-          await store.releaseResourceLocks(job.runId, item.runCaseId, "no_side_effect");
+        else await store.releaseResourceLocks(job.runId, item.runCaseId, "no_side_effect");
       } else {
         const missingCleanup: RunFailure = {
           code: "REGISTERED_RESOURCE_NOT_CLEANED",
@@ -771,12 +766,7 @@ export async function executeRunJob(
       });
       return { summary, compensationPending: true };
     }
-    await store.completeRun(
-      job.runId,
-      summary,
-      gateResult,
-      firstFailure,
-    );
+    await store.completeRun(job.runId, summary, gateResult, firstFailure);
     return { summary };
   } finally {
     clearInterval(poll);
@@ -789,7 +779,8 @@ function caseSecretInputs(
   runCaseId: string,
 ): readonly SecretVariableReference[] {
   const definition = snapshot.cases.find((item) => item.runCaseId === runCaseId)?.definition;
-  const inputs = definition === undefined || !Array.isArray(definition.inputs) ? [] : definition.inputs;
+  const inputs =
+    definition === undefined || !Array.isArray(definition.inputs) ? [] : definition.inputs;
   return inputs.flatMap((candidate) => {
     const input = objectValue(candidate);
     return input !== null && typeof input.name === "string" && typeof input.secretRef === "string"

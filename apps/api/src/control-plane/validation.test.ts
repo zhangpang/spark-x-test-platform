@@ -226,10 +226,7 @@ describe("M2 asset validation", () => {
     });
     expect(result.valid).toBe(false);
     expect(result.issues.map((issue) => issue.code)).toEqual(
-      expect.arrayContaining([
-        "CLEANUP_REFERENCE_FORBIDDEN",
-        "RESOURCE_LOCK_REFERENCE_FORBIDDEN",
-      ]),
+      expect.arrayContaining(["CLEANUP_REFERENCE_FORBIDDEN", "RESOURCE_LOCK_REFERENCE_FORBIDDEN"]),
     );
   });
 });

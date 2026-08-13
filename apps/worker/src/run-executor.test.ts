@@ -322,7 +322,10 @@ describe("run worker", () => {
       }),
       new Response(null, { status: 500 }),
     ];
-    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(responses.shift() as Response)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(responses.shift() as Response)),
+    );
     const enqueueCleanup = vi.fn(() => Promise.resolve());
 
     await expect(executeRunJob(job, "worker-1", store, enqueueCleanup)).resolves.toMatchObject({

@@ -509,10 +509,7 @@ export class TestRunStore {
         `select * from resource_ledger where run_id = $1 order by created_at, id`,
         [id],
       ),
-      this.#pool.query<CleanupJobRow>(
-        `select * from cleanup_jobs where run_id = $1`,
-        [id],
-      ),
+      this.#pool.query<CleanupJobRow>(`select * from cleanup_jobs where run_id = $1`, [id]),
     ]);
     return {
       ...run,
@@ -872,7 +869,9 @@ export class TestRunStore {
   }
 
   async claimCleanupJob(id: string): Promise<CleanupWorkItem | null> {
-    const result = await this.#pool.query<CleanupJobRow & { readonly snapshot: RunExecutionSnapshot }>(
+    const result = await this.#pool.query<
+      CleanupJobRow & { readonly snapshot: RunExecutionSnapshot }
+    >(
       `update cleanup_jobs cj
        set status = 'running', attempts = attempts + 1,
            started_at = coalesce(started_at, now()), updated_at = now(), last_error = null

@@ -288,7 +288,8 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
     }
 
     const resource = isObject(step.resource) ? step.resource : undefined;
-    const cleanup = resource !== undefined && isObject(resource.cleanup) ? resource.cleanup : undefined;
+    const cleanup =
+      resource !== undefined && isObject(resource.cleanup) ? resource.cleanup : undefined;
     if (cleanup !== undefined) {
       if (typeof cleanup.action !== "string" || !availableActions.has(cleanup.action)) {
         issues.push({
@@ -301,7 +302,9 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
       const declaredSecrets = new Set(
         isJsonArray(definition.inputs)
           ? definition.inputs.flatMap((input) =>
-              isObject(input) && typeof input.name === "string" && typeof input.secretRef === "string"
+              isObject(input) &&
+              typeof input.name === "string" &&
+              typeof input.secretRef === "string"
                 ? [`case.${input.name}`]
                 : [],
             )
@@ -479,7 +482,8 @@ function validateHttpStepTargets(
       });
     }
     const resource = isObject(step.resource) ? step.resource : undefined;
-    const cleanup = resource !== undefined && isObject(resource.cleanup) ? resource.cleanup : undefined;
+    const cleanup =
+      resource !== undefined && isObject(resource.cleanup) ? resource.cleanup : undefined;
     if (
       cleanup?.action === "http:request" &&
       isObject(cleanup.params) &&
@@ -493,7 +497,11 @@ function validateHttpStepTargets(
       }
       const cleanupPort = Number.parseInt(
         cleanupTarget.port ||
-          (cleanupTarget.protocol === "https:" ? "443" : cleanupTarget.protocol === "http:" ? "80" : "0"),
+          (cleanupTarget.protocol === "https:"
+            ? "443"
+            : cleanupTarget.protocol === "http:"
+              ? "80"
+              : "0"),
         10,
       );
       const cleanupAllowed = environment.allowlist.some(

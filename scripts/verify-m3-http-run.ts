@@ -445,7 +445,10 @@ try {
   );
   check(compensatedRun.cases[0]?.cleanupStatus === "failed", "original cleanup failure was lost");
   check(compensatedRun.resources.length === 1, "created resource was not registered");
-  check(compensatedRun.resources[0]?.cleanupStatus === "passed", "compensation did not clean resource");
+  check(
+    compensatedRun.resources[0]?.cleanupStatus === "passed",
+    "compensation did not clean resource",
+  );
   check(compensatedRun.cleanupJob?.status === "succeeded", "cleanup job did not succeed");
   check((compensatedRun.cleanupJob?.attempts ?? 0) >= 1, "cleanup attempt was not recorded");
   const releasedLock = await pool.query<{ readonly release_reason: string | null }>(
