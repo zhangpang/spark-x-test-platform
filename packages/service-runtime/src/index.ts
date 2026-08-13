@@ -874,7 +874,7 @@ export class TestRunStore {
     >(
       `update cleanup_jobs cj
        set status = 'running', attempts = attempts + 1,
-           started_at = coalesce(started_at, now()), updated_at = now(), last_error = null
+           started_at = coalesce(cj.started_at, now()), updated_at = now(), last_error = null
        from test_runs r
        where cj.id = $1 and cj.run_id = r.id and cj.status in ('queued', 'running', 'failed')
        returning cj.*, r.snapshot`,

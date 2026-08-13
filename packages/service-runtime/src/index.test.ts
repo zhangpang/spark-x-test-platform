@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createPlatformDependencies,
   loadPlatformConfig,
   runDependencyProbe,
   serializeRunIdempotencyLockKey,
+  TestRunStore,
 } from "./index.js";
 
 const baseEnvironment = {
@@ -62,5 +63,18 @@ describe("run idempotency locking", () => {
     expect(serializeRunIdempotencyLockKey("ab", "c", "d")).not.toBe(
       serializeRunIdempotencyLockKey("a", "bc", "d"),
     );
+  });
+});
+
+describe("resource compensation persistence", () => {
+  it("qualifies the cleanup timestamp when claiming a job through an UPDATE FROM query", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const store = new TestRunStore({ query } as never);
+
+    await expect(store.claimCleanupJob("00000000-0000-4000-8000-000000000001")).resolves.toBeNull();
+
+    const sql = query.mock.calls[0]?.[0] as string | undefined;
+    expect(sql).toContain("started_at = coalesce(cj.started_at, now())");
+    expect(sql).not.toContain("started_at = coalesce(started_at, now())");
   });
 });
