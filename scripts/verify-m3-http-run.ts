@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
+import { Queue } from "bullmq";
 import { Pool } from "pg";
 
 interface RecordWithId {
@@ -38,8 +39,13 @@ interface RunRecord extends RecordWithId {
 const apiBase = process.env.M3_SMOKE_API_URL ?? "http://127.0.0.1:4100/api/v1";
 const databaseUrl = process.env.DATABASE_URL;
 if (databaseUrl === undefined || databaseUrl === "") throw new Error("DATABASE_URL is required");
+const redisUrl = process.env.REDIS_URL;
+if (redisUrl === undefined || redisUrl === "") throw new Error("REDIS_URL is required");
 
 const pool = new Pool({ connectionString: databaseUrl, max: 1 });
+const cleanupQueue = new Queue(`${process.env.PLATFORM_QUEUE_NAME ?? "test-runs"}-cleanup`, {
+  connection: { url: redisUrl },
+});
 const suffix = `${Date.now().toString(36)}${randomBytes(3).toString("hex")}`;
 const createdIds: string[] = [];
 let systemId: string | undefined;
@@ -261,7 +267,28 @@ async function waitForRun(id: string): Promise<RunRecord> {
           resources: lastRun.resources,
           cleanupJob: lastRun.cleanupJob,
         };
-  throw new Error(`run ${id} did not complete within 30 seconds: ${JSON.stringify(diagnostic)}`);
+  let queueDiagnostic: Readonly<Record<string, unknown>> = { inspected: false };
+  if (lastRun?.cleanupJob !== null && lastRun?.cleanupJob !== undefined) {
+    try {
+      const queuedJob = await cleanupQueue.getJob(lastRun.cleanupJob.id);
+      queueDiagnostic =
+        queuedJob === undefined
+          ? { inspected: true, present: false }
+          : {
+              inspected: true,
+              present: true,
+              state: await queuedJob.getState(),
+              attemptsMade: queuedJob.attemptsMade,
+              failedReason: queuedJob.failedReason || null,
+              workerCount: (await cleanupQueue.getWorkers()).length,
+            };
+    } catch {
+      queueDiagnostic = { inspected: false, error: "queue-diagnostic-unavailable" };
+    }
+  }
+  throw new Error(
+    `run ${id} did not complete within 30 seconds: ${JSON.stringify({ ...diagnostic, queueDiagnostic })}`,
+  );
 }
 
 async function createRun(
@@ -497,6 +524,6 @@ try {
   try {
     await cleanup();
   } finally {
-    await pool.end();
+    await Promise.all([pool.end(), cleanupQueue.close()]);
   }
 }
