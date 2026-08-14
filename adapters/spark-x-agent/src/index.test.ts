@@ -31,6 +31,33 @@ const conversationId = "00000000-0000-4000-8000-000000000202";
 const knowledgeBaseId = "00000000-0000-4000-8000-000000000210";
 const uploadedDocumentId = "00000000-0000-4000-8000-000000000211";
 const knowledgeDocumentId = "00000000-0000-4000-8000-000000000212";
+const skillId = "00000000-0000-4000-8000-000000000213";
+const skillPrompt = "Produce the trusted daily trade and port brief without exposing credentials.";
+const skillPromptSha256 = createHash("sha256").update(skillPrompt).digest("hex");
+
+function trustedSkillProjection(prompt = skillPrompt): Readonly<Record<string, unknown>> {
+  return {
+    id: skillId,
+    name: "trade-port-daily-brief",
+    display_name: "贸易与港口每日简报",
+    description: "trusted fixture",
+    category: "行业研究",
+    is_builtin: false,
+    is_enabled: true,
+    config: {
+      prompt_template: prompt,
+      source: "upload",
+      main_file: "trade-port-daily-brief.md",
+      durable_agent_task_v17: true,
+    },
+    assets: {
+      root_exists: true,
+      has_skill_md: true,
+      main_file: "trade-port-daily-brief.md",
+      asset_count: 1,
+    },
+  };
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -70,7 +97,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.5.0",
+      version: "0.6.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -118,6 +145,11 @@ describe("spark-x-agent adapter", () => {
           expect.objectContaining({
             key: "knowledge-base.cleanup",
             actionLevel: "dangerous",
+          }),
+          expect.objectContaining({
+            key: "skill.assert-trusted-publication",
+            actionLevel: "read",
+            producesResource: false,
           }),
           expect.objectContaining({
             key: "conversation.delete",
@@ -1292,6 +1324,134 @@ describe("spark-x-agent adapter", () => {
         method: "DELETE",
       },
     ]);
+  });
+
+  it("matches a trusted Skill across user and admin projections without returning its prompt", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [trustedSkillProjection()] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: trustedSkillProjection() }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { items: [trustedSkillProjection()], total: 1, page: 1, per_page: 100 },
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/skill.assert-trusted-publication",
+      environment,
+      { ...credentials, expectedPublicationSha256: skillPromptSha256 },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      skillId,
+      skillName: "trade-port-daily-brief",
+      available: true,
+      enabled: true,
+      builtin: false,
+      durableAgentTask: true,
+      userAdminProjectionMatched: true,
+      publicationHashMatched: true,
+      promptSha256: skillPromptSha256,
+      promptSizeBytes: new TextEncoder().encode(skillPrompt).byteLength,
+      assetRootPresent: true,
+      mainAssetPresent: true,
+      mainFileSha256: skillPromptSha256,
+    });
+    expect(fetcher.mock.calls.slice(1).map((call) => urlOf(call[0] as URL | RequestInfo))).toEqual([
+      "http://192.168.110.136/trade/api/skills",
+      "http://192.168.110.136/trade/api/skills/trade-port-daily-brief",
+      "http://192.168.110.136/trade/api/admin/skills?page=1&per_page=100",
+    ]);
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain(skillPrompt);
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("classifies a missing trusted Skill as an environment failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [] }));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/skill.assert-trusted-publication",
+        environment,
+        { ...credentials, expectedPublicationSha256: skillPromptSha256 },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_TRUSTED_SKILL_UNAVAILABLE",
+        classification: "environment_failed",
+      },
+    });
+  });
+
+  it("preserves a trusted Skill publication hash mismatch as a test failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [trustedSkillProjection()] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: trustedSkillProjection() }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { items: [trustedSkillProjection()], total: 1, page: 1, per_page: 100 },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/skill.assert-trusted-publication",
+        environment,
+        { ...credentials, expectedPublicationSha256: "a".repeat(64) },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_SKILL_PUBLICATION_HASH_MISMATCH",
+        classification: "test_failed",
+      },
+    });
+  });
+
+  it("classifies a trusted Skill runtime 5xx as an environment failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: false }, 503));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/skill.assert-trusted-publication",
+        environment,
+        { ...credentials, expectedPublicationSha256: skillPromptSha256 },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_SKILL_LIST_FAILED",
+        classification: "environment_failed",
+      },
+    });
   });
 
   it("revalidates redirects before sending credentials to a new target", async () => {

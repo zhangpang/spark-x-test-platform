@@ -187,10 +187,11 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.5.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
+当前 `0.6.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
 `chat.assert-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
-`knowledge-base.attach-upload`、`knowledge-base.wait-ready` 和 `knowledge-base.cleanup`。动作只调用适配器内
+`knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.cleanup` 和
+`skill.assert-trusted-publication`。动作只调用适配器内
 固定的 `/trade/api` 与 `/trade-domain-api` 路径，所有请求与
 重定向执行环境 allowlist 校验；登录 Token、用户密码和模型回答正文都不进入输出、日志、资源台账或
 结构化证据。`chat.ask` 只向此前已创建并登记的测试会话发送消息，将 SSE 限制在 1 MB 内，要求流中会话
@@ -215,3 +216,11 @@ SHA-256。创建动作只登记一个 `spark-x-agent-knowledge-base` 顶层资�
 先删除知识文档与 Parser 资源，再删除原始上传并归档知识库，因此普通 `finally` 和 Worker 中断后的独立补偿
 不依赖中间步骤是否完成捕获。解析服务缺失、配置错误或 5xx 归为 `environment_failed`，首次失败不会被清理
 或重试覆盖。
+
+SKILL 动作当前只读校验部署系统已经发布的固定 `trade-port-daily-brief`，不接受 Skill 名称、Prompt、文件、
+URL 或脚本参数。动作分别读取当前用户清单、用户详情和管理员清单，要求 UUID、名称、展示名、分类、启用状态、
+非内置标记、`durable_agent_task_v17` 有效能力、上传来源、主资产和资产摘要一致；原始 Prompt 只在 Worker 内存
+中计算 SHA-256，输出仅包含身份、状态、计数、布尔判定和哈希。受信任发布缺失归为 `environment_failed`，投影
+不一致归为 `product_failed`，精确发布哈希不匹配保留为 `test_failed`。当前被测系统的删除接口尚不能完整撤销
+不可变发布目录、授权和对象存储内容，因此适配器不会创建临时 Skill；实际注入用例将在依赖工具上线且被测系统
+具备完整回收语义后单独实现，避免产生无法补偿的残留资源。

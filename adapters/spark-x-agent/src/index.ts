@@ -24,6 +24,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/knowledge-base.attach-upload",
   "adapter:spark-x-agent/knowledge-base.wait-ready",
   "adapter:spark-x-agent/knowledge-base.cleanup",
+  "adapter:spark-x-agent/skill.assert-trusted-publication",
 ] as const;
 
 export type SparkXAgentAction = (typeof sparkXAgentActions)[number];
@@ -623,6 +624,62 @@ const conversationActionCapabilities = [
     },
   },
   {
+    key: "skill.assert-trusted-publication",
+    name: "校验受信任 Skill 发布",
+    description: "只读核对发布系统预置 Skill 的用户/管理员投影、有效能力、主资产和精确内容哈希。",
+    actionLevel: "read",
+    defaultTimeoutMs: 20_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "expectedPublicationSha256"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        expectedPublicationSha256: {
+          type: "string",
+          minLength: 64,
+          maxLength: 64,
+        },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "skillId",
+        "skillName",
+        "available",
+        "enabled",
+        "builtin",
+        "durableAgentTask",
+        "userAdminProjectionMatched",
+        "publicationHashMatched",
+        "promptSha256",
+        "promptSizeBytes",
+        "assetRootPresent",
+        "mainAssetPresent",
+        "mainFileSha256",
+      ],
+      properties: {
+        skillId: { type: "string", format: "uuid" },
+        skillName: { const: "trade-port-daily-brief" },
+        available: { const: true },
+        enabled: { const: true },
+        builtin: { const: false },
+        durableAgentTask: { const: true },
+        userAdminProjectionMatched: { const: true },
+        publicationHashMatched: { const: true },
+        promptSha256: { type: "string", minLength: 64, maxLength: 64 },
+        promptSizeBytes: { type: "integer", minimum: 1, maximum: 65_536 },
+        assetRootPresent: { const: true },
+        mainAssetPresent: { const: true },
+        mainFileSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
     key: "conversation.delete",
     name: "删除会话",
     description: "重新登录后按会话 ID 执行幂等清理，可用于 finally 与独立补偿任务。",
@@ -656,7 +713,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.5.0",
+  version: "0.6.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -673,7 +730,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "core-smoke-knowledge-base" as const;
+export const sparkXAgentAdapterPhase = "core-smoke-skill-publication" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -683,6 +740,10 @@ const safeToolCatalog = ["calculator", "echo", "time"] as const;
 const safeQualifiedToolNames = new Set(
   safeToolCatalog.map((name) => `${safeToolServerName}__${name}`),
 );
+const trustedSkillName = "trade-port-daily-brief";
+const trustedSkillDisplayName = "贸易与港口每日简报";
+const trustedSkillCategory = "行业研究";
+const trustedSkillMainFile = "trade-port-daily-brief.md";
 const privateCatalogFields = [
   "command",
   "args",
@@ -873,6 +934,14 @@ function dataEnvelope(body: unknown, code: string): Readonly<Record<string, unkn
   return data;
 }
 
+function successfulData(body: unknown, code: string): unknown {
+  const envelope = objectValue(body);
+  if (envelope?.success !== true || !Object.hasOwn(envelope, "data")) {
+    throw apiFailure(code, "星火 Agent 返回了不完整的结构化响应。");
+  }
+  return envelope.data;
+}
+
 function accepted(response: HttpExecutionResult, code: string): void {
   if (response.status < 200 || response.status >= 300) {
     throw apiFailure(code, `星火 Agent 接口返回 HTTP ${response.status}。`, response.status);
@@ -882,6 +951,13 @@ function accepted(response: HttpExecutionResult, code: string): void {
 function acceptedKnowledgeRuntime(response: HttpExecutionResult, code: string): void {
   if (response.status >= 500) {
     throw environmentFailure(code, `星火 Agent 知识库运行时返回 HTTP ${response.status}。`);
+  }
+  accepted(response, code);
+}
+
+function acceptedSkillRuntime(response: HttpExecutionResult, code: string): void {
+  if (response.status >= 500) {
+    throw environmentFailure(code, `星火 Agent Skill 运行时返回 HTTP ${response.status}。`);
   }
   accepted(response, code);
 }
@@ -1657,6 +1733,199 @@ export async function executeSparkXAgentAction(
   const username = requiredString(params, "username", variables, 200);
   const password = requiredString(params, "password", variables, 4_096);
   const token = await login(environment, username, password, remainingOptions());
+
+  if (action === "adapter:spark-x-agent/skill.assert-trusted-publication") {
+    const expectedPublicationSha256 = requiredSha256(
+      params,
+      "expectedPublicationSha256",
+      variables,
+    );
+    const availableResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath("/skills") },
+      remainingOptions(),
+    );
+    acceptedSkillRuntime(availableResponse, "SPARK_X_AGENT_SKILL_LIST_FAILED");
+    const availableData = successfulData(
+      availableResponse.body,
+      "SPARK_X_AGENT_SKILL_LIST_RESPONSE_INVALID",
+    );
+    if (!Array.isArray(availableData)) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_LIST_RESPONSE_INVALID",
+        "星火 Agent 用户 Skill 清单不是结构化数组。",
+      );
+    }
+    const availableMatches = availableData
+      .map(objectValue)
+      .filter(
+        (item): item is Readonly<Record<string, unknown>> =>
+          item !== null && item.name === trustedSkillName,
+      );
+    if (availableMatches.length === 0) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_TRUSTED_SKILL_UNAVAILABLE",
+        "受信任 Skill 未向当前测试用户开放，无法执行发布清单回归。",
+      );
+    }
+    if (availableMatches.length !== 1) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_PROJECTION_INVALID",
+        "星火 Agent 用户 Skill 清单包含重复的受信任发布投影。",
+      );
+    }
+
+    const detailResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/skills/${encodeURIComponent(trustedSkillName)}`) },
+      remainingOptions(),
+    );
+    acceptedSkillRuntime(detailResponse, "SPARK_X_AGENT_SKILL_DETAIL_FAILED");
+    const detail = objectValue(
+      successfulData(detailResponse.body, "SPARK_X_AGENT_SKILL_DETAIL_RESPONSE_INVALID"),
+    );
+    if (detail === null) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_DETAIL_RESPONSE_INVALID",
+        "星火 Agent 用户 Skill 详情不是结构化对象。",
+      );
+    }
+
+    const adminResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath("/admin/skills?page=1&per_page=100") },
+      remainingOptions(),
+    );
+    acceptedSkillRuntime(adminResponse, "SPARK_X_AGENT_SKILL_ADMIN_LIST_FAILED");
+    const adminData = dataEnvelope(
+      adminResponse.body,
+      "SPARK_X_AGENT_SKILL_ADMIN_LIST_RESPONSE_INVALID",
+    );
+    const adminItems = Array.isArray(adminData.items)
+      ? adminData.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : null;
+    if (adminItems === null) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_ADMIN_LIST_RESPONSE_INVALID",
+        "星火 Agent 管理员 Skill 清单缺少结构化项目数组。",
+      );
+    }
+    const adminMatches = adminItems.filter((item) => item.name === trustedSkillName);
+    if (adminMatches.length !== 1) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_PROJECTION_INVALID",
+        "星火 Agent 管理员 Skill 清单未形成唯一的受信任发布投影。",
+      );
+    }
+
+    const available = availableMatches[0];
+    const admin = adminMatches[0];
+    if (available === undefined || admin === undefined) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_PROJECTION_INVALID",
+        "星火 Agent 受信任 Skill 发布投影不完整。",
+      );
+    }
+    const projections = [available, detail, admin];
+    const skillId = available.id;
+    if (
+      typeof skillId !== "string" ||
+      !uuidPattern.test(skillId) ||
+      projections.some(
+        (item) =>
+          item.id !== skillId ||
+          item.name !== trustedSkillName ||
+          item.display_name !== trustedSkillDisplayName ||
+          item.category !== trustedSkillCategory ||
+          item.is_enabled !== true ||
+          item.is_builtin !== false,
+      )
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_PROJECTION_MISMATCH",
+        "受信任 Skill 的用户与管理员身份、状态或分类投影不一致。",
+      );
+    }
+
+    const availableConfig = objectValue(available.config);
+    const detailConfig = objectValue(detail.config);
+    const adminConfig = objectValue(admin.config);
+    const availableAssets = objectValue(available.assets);
+    const detailAssets = objectValue(detail.assets);
+    const adminAssets = objectValue(admin.assets);
+    if (
+      availableConfig === null ||
+      detailConfig === null ||
+      adminConfig === null ||
+      availableAssets === null ||
+      detailAssets === null ||
+      adminAssets === null
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_PROJECTION_INVALID",
+        "受信任 Skill 的能力配置或资产摘要不完整。",
+      );
+    }
+    const prompt = adminConfig.prompt_template;
+    const promptSizeBytes =
+      typeof prompt === "string" ? new TextEncoder().encode(prompt).byteLength : 0;
+    const configs = [availableConfig, detailConfig, adminConfig];
+    const assets = [availableAssets, detailAssets, adminAssets];
+    if (
+      typeof prompt !== "string" ||
+      promptSizeBytes < 1 ||
+      promptSizeBytes > 65_536 ||
+      prompt.includes("\u0000") ||
+      availableConfig.durable_agent_task_v17 !== true ||
+      detailConfig.durable_agent_task_v17 !== true ||
+      configs.some(
+        (config) =>
+          config.prompt_template !== prompt ||
+          config.source !== "upload" ||
+          config.main_file !== trustedSkillMainFile,
+      ) ||
+      assets.some(
+        (summary) =>
+          summary.root_exists !== true ||
+          summary.has_skill_md !== true ||
+          summary.main_file !== trustedSkillMainFile ||
+          !Number.isInteger(summary.asset_count) ||
+          Number(summary.asset_count) < 1,
+      )
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_PROJECTION_MISMATCH",
+        "受信任 Skill 的有效能力、发布来源或主资产投影与基线不一致。",
+      );
+    }
+    const promptSha256 = sha256(prompt);
+    if (promptSha256 !== expectedPublicationSha256) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SKILL_PUBLICATION_HASH_MISMATCH",
+        "受信任 Skill 的精确发布内容哈希与测试基线不一致。",
+      );
+    }
+    return {
+      skillId,
+      skillName: trustedSkillName,
+      available: true,
+      enabled: true,
+      builtin: false,
+      durableAgentTask: true,
+      userAdminProjectionMatched: true,
+      publicationHashMatched: true,
+      promptSha256,
+      promptSizeBytes,
+      assetRootPresent: true,
+      mainAssetPresent: true,
+      mainFileSha256: promptSha256,
+    };
+  }
 
   if (action === "adapter:spark-x-agent/knowledge-base.create") {
     const name = requiredString(params, "name", variables, 256);

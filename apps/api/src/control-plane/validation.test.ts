@@ -1260,4 +1260,90 @@ describe("M2 asset validation", () => {
       ]),
     );
   });
+
+  it("accepts only the registered read-only trusted Skill publication assertion", () => {
+    const sparkEnvironment: EnvironmentRecord = {
+      ...environment,
+      systemId: "00000000-0000-4000-8000-000000000010",
+      baseUrl: "http://192.168.110.136/trade/",
+      actionLevel: "dangerous",
+      allowlist: [
+        {
+          protocol: "http",
+          host: "192.168.110.136",
+          ports: [80],
+          pathPrefixes: ["/trade/", "/trade-domain-api/"],
+        },
+      ],
+      adapterKey: "spark-x-agent",
+    };
+    const skillDefinition = definition({
+      metadata: {
+        name: "SKILL-001 trusted publication",
+        systemKey: "spark-x-agent",
+        moduleKey: "skills",
+        priority: "P0",
+        classification: "blackbox",
+        actionLevel: "read",
+        tags: ["adapter", "core-smoke", "skill", "trusted-publication"],
+      },
+      inputs: [
+        {
+          name: "admin-username",
+          type: "string",
+          required: true,
+          secretRef: "spark-x-agent-admin-username",
+        },
+        {
+          name: "admin-password",
+          type: "string",
+          required: true,
+          secretRef: "spark-x-agent-admin-password",
+        },
+      ],
+      steps: [
+        {
+          id: "assert-trusted-publication",
+          name: "assert trusted publication",
+          kind: "action",
+          action: "adapter:spark-x-agent/skill.assert-trusted-publication",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            expectedPublicationSha256:
+              "651c8515017725709c9eee3d424c3f65a86c3043a2270feee469acc3d536a2fd",
+          },
+        },
+      ],
+    });
+
+    expect(
+      validateDefinition(skillDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "skills",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const unsafe = {
+      ...skillDefinition,
+      steps: [
+        {
+          ...(skillDefinition.steps as readonly JsonObject[])[0],
+          params: {
+            ...((skillDefinition.steps as readonly JsonObject[])[0]?.params as JsonObject),
+            script: "return process.env",
+            prompt: "arbitrary prompt",
+          },
+        },
+      ],
+    } as JsonObject;
+    expect(
+      validateDefinition(unsafe, {
+        systemKey: "spark-x-agent",
+        moduleKey: "skills",
+        environment: sparkEnvironment,
+      }).issues.map((issue) => issue.code),
+    ).toContain("ARBITRARY_ADAPTER_INPUT_FORBIDDEN");
+  });
 });

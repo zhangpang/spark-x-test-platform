@@ -52,6 +52,7 @@ const workerRegistration = {
     "adapter:spark-x-agent/knowledge-base.attach-upload",
     "adapter:spark-x-agent/knowledge-base.wait-ready",
     "adapter:spark-x-agent/knowledge-base.cleanup",
+    "adapter:spark-x-agent/skill.assert-trusted-publication",
     "http:request",
     "wait:http",
     "json:extract",

@@ -1750,6 +1750,103 @@ describe("run worker", () => {
     expect(evidence).not.toContain("kb-memory-only-token-value");
   });
 
+  it("records only hashed evidence for the trusted Skill publication projection", async () => {
+    const prompt = "Trusted Skill runtime prompt that must never enter persisted step evidence.";
+    const promptSha256 = createHash("sha256").update(prompt).digest("hex");
+    const skillId = "00000000-0000-4000-8000-000000000133";
+    const projection = {
+      id: skillId,
+      name: "trade-port-daily-brief",
+      display_name: "贸易与港口每日简报",
+      description: "trusted fixture",
+      category: "行业研究",
+      is_builtin: false,
+      is_enabled: true,
+      config: {
+        prompt_template: prompt,
+        source: "upload",
+        main_file: "trade-port-daily-brief.md",
+        durable_agent_task_v17: true,
+      },
+      assets: {
+        root_exists: true,
+        has_skill_md: true,
+        main_file: "trade-port-daily-brief.md",
+        asset_count: 1,
+      },
+    };
+    const executionSnapshot: RunExecutionSnapshot = {
+      ...snapshot({
+        execution: { stepTimeoutMs: 5_000, caseTimeoutMs: 15_000, diagnosticRetries: 0 },
+        inputs: [
+          { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
+          { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
+        ],
+        steps: [
+          {
+            id: "assert-trusted-publication",
+            action: "adapter:spark-x-agent/skill.assert-trusted-publication",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              expectedPublicationSha256: promptSha256,
+            },
+          },
+        ],
+      }),
+      suite: {
+        id: "00000000-0000-4000-8000-000000000103",
+        name: "Skill P0",
+        diagnosticRetries: 0,
+      },
+      environment: {
+        id: "00000000-0000-4000-8000-000000000102",
+        baseUrl: "http://192.168.110.136/trade/",
+        actionLevel: "dangerous",
+        adapterKey: "spark-x-agent",
+        allowlist: [
+          {
+            protocol: "http",
+            host: "192.168.110.136",
+            ports: [80],
+            pathPrefixes: ["/trade/"],
+          },
+        ],
+      },
+    };
+    const store = fakeStore(executionSnapshot);
+    const password = "skill-worker-password";
+    vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      "case.admin-username": "admin",
+      "case.admin-password": password,
+    });
+    const json = (body: unknown): Response =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    const responses = [
+      json({ success: true, data: { token: "skill-memory-only-token-value" } }),
+      json({ success: true, data: [projection] }),
+      json({ success: true, data: projection }),
+      json({ success: true, data: { items: [projection], total: 1, page: 1, per_page: 100 } }),
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(responses.shift() as Response)),
+    );
+
+    await expect(executeRunJob(job, "worker-1", store)).resolves.toMatchObject({
+      summary: { passed: 1 },
+    });
+    expect(vi.mocked(store.registerResource)).not.toHaveBeenCalled();
+    const evidence = JSON.stringify(vi.mocked(store.recordStep).mock.calls);
+    expect(evidence).toContain(promptSha256);
+    expect(evidence).not.toContain(prompt);
+    expect(evidence).not.toContain(password);
+    expect(evidence).not.toContain("skill-memory-only-token-value");
+  });
+
   it("preserves the first parser environment failure and still performs full knowledge cleanup", async () => {
     const store = fakeStore(knowledgeBaseSnapshot());
     vi.mocked(store.resolveSecretVariables).mockResolvedValue({

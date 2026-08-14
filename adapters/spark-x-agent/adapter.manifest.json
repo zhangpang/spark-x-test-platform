@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -652,6 +652,62 @@
             "rawDocumentDeleted": { "type": "boolean" },
             "knowledgeBaseArchived": { "type": "boolean" },
             "alreadyMissing": { "type": "boolean" }
+          }
+        }
+      },
+      {
+        "key": "skill.assert-trusted-publication",
+        "name": "校验受信任 Skill 发布",
+        "description": "只读核对发布系统预置 Skill 的用户/管理员投影、有效能力、主资产和精确内容哈希。",
+        "actionLevel": "read",
+        "defaultTimeoutMs": 20000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "expectedPublicationSha256"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "expectedPublicationSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skillId",
+            "skillName",
+            "available",
+            "enabled",
+            "builtin",
+            "durableAgentTask",
+            "userAdminProjectionMatched",
+            "publicationHashMatched",
+            "promptSha256",
+            "promptSizeBytes",
+            "assetRootPresent",
+            "mainAssetPresent",
+            "mainFileSha256"
+          ],
+          "properties": {
+            "skillId": { "type": "string", "format": "uuid" },
+            "skillName": { "const": "trade-port-daily-brief" },
+            "available": { "const": true },
+            "enabled": { "const": true },
+            "builtin": { "const": false },
+            "durableAgentTask": { "const": true },
+            "userAdminProjectionMatched": { "const": true },
+            "publicationHashMatched": { "const": true },
+            "promptSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "promptSizeBytes": { "type": "integer", "minimum": 1, "maximum": 65536 },
+            "assetRootPresent": { "const": true },
+            "mainAssetPresent": { "const": true },
+            "mainFileSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
           }
         }
       },

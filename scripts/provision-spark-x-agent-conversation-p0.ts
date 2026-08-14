@@ -63,10 +63,13 @@ interface RunDetail extends IdentifiedRecord {
 const apiBase = process.env.SPARK_X_TEST_PLATFORM_API_URL ?? "http://127.0.0.1:4100/api/v1";
 const runSmoke = process.env.SPARK_X_AGENT_RUN_SMOKE === "true";
 const runKnowledgeSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_SMOKE === "true";
+const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
 const useExistingSecrets = process.env.SPARK_X_AGENT_USE_EXISTING_SECRETS === "true";
 const testedVersion = process.env.SPARK_X_AGENT_TESTED_VERSION?.trim() || "test-environment";
 const adminUsername = process.env.SPARK_X_AGENT_ADMIN_USERNAME?.trim() || "admin";
 const passwordFile = process.env.SPARK_X_AGENT_ADMIN_PASSWORD_FILE?.trim();
+const trustedSkillPublicationSha256 =
+  "651c8515017725709c9eee3d424c3f65a86c3043a2270feee469acc3d536a2fd";
 
 function check(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -760,6 +763,61 @@ function knowledgeBaseDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function skillPublicationDefinition(): Readonly<Record<string, unknown>> {
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "SKILL-001 受信任 Skill 发布清单与能力投影",
+      description:
+        "只读校验部署内置贸易港口日报 Skill 的用户与管理员投影、有效 Task 能力、主资产和精确发布哈希。",
+      systemKey: "spark-x-agent",
+      moduleKey: "skills",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "read",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "skill", "p0", "core-smoke", "trusted-publication", "read-only"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 20_000,
+      caseTimeoutMs: 60_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: [],
+    steps: [
+      {
+        id: "assert-trusted-skill-publication",
+        name: "校验受信任 Skill 发布清单与能力投影",
+        kind: "action",
+        action: "adapter:spark-x-agent/skill.assert-trusted-publication",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          expectedPublicationSha256: trustedSkillPublicationSha256,
+        },
+      },
+    ],
+    finally: [],
+  };
+}
+
 async function ensureCase(
   systemId: string,
   moduleId: string,
@@ -891,9 +949,9 @@ async function executeSmoke(
   check(accepted.status === 202, "Spark X Agent core smoke run was not newly accepted");
   const run = await waitForRun(accepted.body.id);
   check(run.gateResult === "passed", `Spark X Agent core smoke gate is ${String(run.gateResult)}`);
-  check(run.summary.passed === 5, "Spark X Agent core smoke cases did not all pass");
+  check(run.summary.passed === 6, "Spark X Agent core smoke cases did not all pass");
   check(run.firstFailure === null, "Spark X Agent core smoke retained an unexpected first failure");
-  check(run.cases.length === 5, "Spark X Agent core smoke run case linkage is incomplete");
+  check(run.cases.length === 6, "Spark X Agent core smoke run case linkage is incomplete");
   check(
     run.cases.every((item) => item.result === "passed"),
     "Spark X Agent core smoke case failed",
@@ -903,8 +961,8 @@ async function executeSmoke(
     "Spark X Agent core smoke finally cleanup did not pass",
   );
   check(
-    run.steps.length === 18,
-    "Spark X Agent core smoke did not record fourteen main steps and four finally steps",
+    run.steps.length === 19,
+    "Spark X Agent core smoke did not record fifteen main steps and four finally steps",
   );
   check(
     run.steps.every((step) => step.status === "passed"),
@@ -931,6 +989,7 @@ async function executeSmoke(
         "main:adapter:spark-x-agent/knowledge-base.attach-upload",
         "main:adapter:spark-x-agent/knowledge-base.wait-ready",
         "finally:adapter:spark-x-agent/knowledge-base.cleanup",
+        "main:adapter:spark-x-agent/skill.assert-trusted-publication",
       ].join(","),
     "Spark X Agent core smoke structured step sequence is incorrect",
   );
@@ -1022,6 +1081,7 @@ async function executeSmoke(
     "TOOL-002 persisted messages or public trace are not linked to the streamed evidence",
   );
   assertKnowledgeEvidence(run);
+  assertSkillEvidence(run);
   const evidence = JSON.stringify(run);
   if (password !== undefined) {
     check(
@@ -1035,6 +1095,53 @@ async function executeSmoke(
     "Spark X Agent tool arguments or result leaked into structured evidence",
   );
   return run;
+}
+
+function assertSkillEvidence(run: RunDetail): void {
+  const skill = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/skill.assert-trusted-publication",
+  );
+  const summary = skill?.outputSummary;
+  check(summary !== null && summary !== undefined, "SKILL-001 output evidence is missing");
+  check(
+    summary.skillName === "trade-port-daily-brief" &&
+      typeof summary.skillId === "string" &&
+      summary.available === true &&
+      summary.enabled === true &&
+      summary.builtin === false &&
+      summary.durableAgentTask === true &&
+      summary.userAdminProjectionMatched === true &&
+      summary.publicationHashMatched === true &&
+      summary.promptSha256 === trustedSkillPublicationSha256 &&
+      summary.mainFileSha256 === trustedSkillPublicationSha256 &&
+      typeof summary.promptSizeBytes === "number" &&
+      summary.promptSizeBytes > 0 &&
+      summary.promptSizeBytes <= 65_536 &&
+      summary.assetRootPresent === true &&
+      summary.mainAssetPresent === true,
+    "SKILL-001 trusted publication evidence is incomplete or not linked to the exact hash",
+  );
+  check(
+    Object.keys(summary).sort().join(",") ===
+      [
+        "assetRootPresent",
+        "available",
+        "builtin",
+        "durableAgentTask",
+        "enabled",
+        "mainAssetPresent",
+        "mainFileSha256",
+        "promptSha256",
+        "promptSizeBytes",
+        "publicationHashMatched",
+        "skillId",
+        "skillName",
+        "userAdminProjectionMatched",
+      ]
+        .sort()
+        .join(","),
+    "SKILL-001 evidence contains unregistered fields that could expose Skill content",
+  );
 }
 
 function assertKnowledgeEvidence(run: RunDetail): void {
@@ -1163,6 +1270,55 @@ async function executeKnowledgeSmoke(
   return run;
 }
 
+async function executeSkillSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-skills-p0-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-skills-p0-verification",
+      priority: 95,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent Skill run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(run.gateResult === "passed", `Spark X Agent Skill gate is ${String(run.gateResult)}`);
+  check(run.summary.passed === 1, "Spark X Agent Skill case did not pass");
+  check(run.firstFailure === null, "Spark X Agent Skill run retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent Skill case failed",
+  );
+  check(
+    run.steps.length === 1 &&
+      run.steps[0]?.phase === "main" &&
+      run.steps[0].action === "adapter:spark-x-agent/skill.assert-trusted-publication" &&
+      run.steps[0].status === "passed",
+    "Spark X Agent Skill structured step sequence is incomplete",
+  );
+  check(run.resources.length === 0, "read-only Skill assertion unexpectedly registered a resource");
+  check(run.cleanupJob === null, "read-only Skill assertion unexpectedly required compensation");
+  assertSkillEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into Skill evidence",
+    );
+  }
+  return run;
+}
+
 const password = useExistingSecrets ? undefined : await readPassword();
 const system = await ensureSystem();
 const modules = await ensureModules(system.id);
@@ -1174,6 +1330,8 @@ const tools = modules.get("tools");
 check(tools !== undefined, "tools module was not provisioned");
 const knowledgeBase = modules.get("knowledge-base");
 check(knowledgeBase !== undefined, "knowledge-base module was not provisioned");
+const skills = modules.get("skills");
+check(skills !== undefined, "skills module was not provisioned");
 const environment = await ensureEnvironment(system.id);
 if (password !== undefined) await upsertSecrets(system.id, environment.id, password);
 const conversation = await ensureCase(
@@ -1216,6 +1374,14 @@ const knowledgeBaseCase = await ensureCase(
   knowledgeBaseDefinition(),
   "新增固定 PDF 上传、知识解析版本证据和统一清理 P0 闭环",
 );
+const skillPublicationCase = await ensureCase(
+  system.id,
+  skills.id,
+  environment.id,
+  "SKILL-001 受信任 Skill 发布清单与能力投影",
+  skillPublicationDefinition(),
+  "新增受信任 Skill 用户/管理员投影、有效能力、主资产和精确哈希 P0 校验",
+);
 const conversationSuite = await ensureSuite(
   system.id,
   "spark-x-agent-conversation-p0",
@@ -1237,36 +1403,50 @@ const knowledgeBaseSuite = await ensureSuite(
   "KB-001 固定 PDF 上传、解析版本与内容哈希、资源登记和完整清理闭环。",
   [knowledgeBaseCase.testCase.id],
 );
+const skillSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-skills-p0",
+  "星火 Agent Skill P0 纵向切片",
+  "SKILL-001 受信任 Skill 发布清单、有效能力、主资产和精确内容哈希只读证据闭环。",
+  [skillPublicationCase.testCase.id],
+);
 const suite = await ensureSuite(
   system.id,
   "spark-x-agent-core-smoke",
   "星火 Agent 核心冒烟",
-  "发布后核心冒烟套件；当前包含 CONV-001、CHAT-001、TOOL-001/002 与 KB-001，后续按模块扩充到 10～12 条 P0。",
+  "发布后核心冒烟套件；当前包含 CONV-001、CHAT-001、TOOL-001/002、KB-001 与 SKILL-001，后续按模块扩充到 10～12 条 P0。",
   [
     conversation.testCase.id,
     chatCase.testCase.id,
     toolCatalogCase.testCase.id,
     toolInvocationCase.testCase.id,
     knowledgeBaseCase.testCase.id,
+    skillPublicationCase.testCase.id,
   ],
 );
 check(
-  !(runSmoke && runKnowledgeSmoke),
-  "SPARK_X_AGENT_RUN_SMOKE and SPARK_X_AGENT_RUN_KNOWLEDGE_SMOKE cannot both be true",
+  [runSmoke, runKnowledgeSmoke, runSkillSmoke].filter(Boolean).length <= 1,
+  "only one Spark X Agent smoke mode can be true",
 );
 const run = runSmoke
   ? await executeSmoke(system.id, environment.id, suite.id, password)
   : runKnowledgeSmoke
     ? await executeKnowledgeSmoke(system.id, environment.id, knowledgeBaseSuite.id, password)
-    : undefined;
-const scenario = runKnowledgeSmoke ? "spark-x-agent-knowledge-base-p0" : "spark-x-agent-core-smoke";
+    : runSkillSmoke
+      ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
+      : undefined;
+const scenario = runKnowledgeSmoke
+  ? "spark-x-agent-knowledge-base-p0"
+  : runSkillSmoke
+    ? "spark-x-agent-skills-p0"
+    : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
     status: run === undefined ? "provisioned" : "passed",
     scenario,
-    assertions: run === undefined ? 0 : runKnowledgeSmoke ? 16 : 50,
-    caseCount: 5,
+    assertions: run === undefined ? 0 : runKnowledgeSmoke ? 16 : runSkillSmoke ? 12 : 62,
+    caseCount: 6,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
     systemId: system.id,
@@ -1281,9 +1461,12 @@ console.info(
     toolInvocationCaseVersionId: toolInvocationCase.version.id,
     knowledgeBaseCaseId: knowledgeBaseCase.testCase.id,
     knowledgeBaseCaseVersionId: knowledgeBaseCase.version.id,
+    skillPublicationCaseId: skillPublicationCase.testCase.id,
+    skillPublicationCaseVersionId: skillPublicationCase.version.id,
     conversationSuiteId: conversationSuite.id,
     toolSuiteId: toolSuite.id,
     knowledgeBaseSuiteId: knowledgeBaseSuite.id,
+    skillSuiteId: skillSuite.id,
     suiteId: suite.id,
     ...(run === undefined ? {} : { runId: run.id, gateResult: run.gateResult }),
   }),

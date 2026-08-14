@@ -48,6 +48,7 @@ const availableActions = new Set([
   "adapter:spark-x-agent/knowledge-base.attach-upload",
   "adapter:spark-x-agent/knowledge-base.wait-ready",
   "adapter:spark-x-agent/knowledge-base.cleanup",
+  "adapter:spark-x-agent/skill.assert-trusted-publication",
 ]);
 const availableCompensationActions = new Set([
   "http:request",
@@ -69,6 +70,7 @@ const sparkXAgentActionLevels = new Map<string, ActionLevel>([
   ["adapter:spark-x-agent/knowledge-base.attach-upload", "write"],
   ["adapter:spark-x-agent/knowledge-base.wait-ready", "write"],
   ["adapter:spark-x-agent/knowledge-base.cleanup", "dangerous"],
+  ["adapter:spark-x-agent/skill.assert-trusted-publication", "read"],
 ]);
 const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
   ["adapter:spark-x-agent/conversation.create", new Set(["username", "password", "title"])],
@@ -149,6 +151,10 @@ const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
   [
     "adapter:spark-x-agent/knowledge-base.cleanup",
     new Set(["username", "password", "knowledgeBaseId"]),
+  ],
+  [
+    "adapter:spark-x-agent/skill.assert-trusted-publication",
+    new Set(["username", "password", "expectedPublicationSha256"]),
   ],
 ]);
 const waitJsonPathPattern = /^\$(?:\.[a-zA-Z0-9_-]+){0,20}$/;
