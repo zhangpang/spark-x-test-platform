@@ -32,7 +32,11 @@ describe("HTTP wait executor", () => {
           condition: { path: "$.body.state", operator: "equals", expected: "ready" },
         },
         { "step.task-id": "task-42" },
-        { timeoutMs: 1_000, signal: new AbortController().signal, fetcher: fetcher as typeof fetch },
+        {
+          timeoutMs: 1_000,
+          signal: new AbortController().signal,
+          fetcher: fetcher as typeof fetch,
+        },
       ),
     ).resolves.toMatchObject({
       attempts: 2,
@@ -55,7 +59,11 @@ describe("HTTP wait executor", () => {
           condition: { path: "$.status", operator: "equals", expected: 200 },
         },
         {},
-        { timeoutMs: 1_000, signal: new AbortController().signal, fetcher: fetcher as typeof fetch },
+        {
+          timeoutMs: 1_000,
+          signal: new AbortController().signal,
+          fetcher: fetcher as typeof fetch,
+        },
       ),
     ).rejects.toMatchObject({ failure: { code: "TARGET_NOT_ALLOWED" } });
   });

@@ -1,13 +1,5 @@
-import {
-  executeHttpRequest,
-  type HttpExecutionResult,
-  type HttpStepParameters,
-} from "./http.js";
-import {
-  ExecutorFailure,
-  interpolateValue,
-  type HttpExecutionEnvironment,
-} from "./base.js";
+import { executeHttpRequest, type HttpExecutionResult, type HttpStepParameters } from "./http.js";
+import { ExecutorFailure, interpolateValue, type HttpExecutionEnvironment } from "./base.js";
 
 export type WaitConditionOperator = "equals" | "not-equals" | "contains" | "exists";
 
@@ -178,7 +170,8 @@ function conditionMatches(
   );
   if (condition.operator === "exists") return selected.found;
   const expected = interpolateValue(condition.expected, variables);
-  if (condition.operator === "equals") return selected.found && valuesEqual(selected.value, expected);
+  if (condition.operator === "equals")
+    return selected.found && valuesEqual(selected.value, expected);
   if (condition.operator === "not-equals") {
     return !selected.found || !valuesEqual(selected.value, expected);
   }

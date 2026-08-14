@@ -612,11 +612,7 @@ try {
     "first product failure was not preserved",
   );
 
-  const acceptedWait = await createRun(
-    passingWaitSuite.body.id,
-    environment.body.id,
-    randomUUID(),
-  );
+  const acceptedWait = await createRun(passingWaitSuite.body.id, environment.body.id, randomUUID());
   const passingWaitRun = await waitForRun(acceptedWait.body.id);
   check(passingWaitRun.gateResult === "passed", "passing wait run gate was not passed");
   check(passingWaitRun.summary.passed === 1, "passing wait run summary was not aggregated");
@@ -634,11 +630,7 @@ try {
     "secret leaked into wait evidence",
   );
 
-  const failedWait = await createRun(
-    failingWaitSuite.body.id,
-    environment.body.id,
-    randomUUID(),
-  );
+  const failedWait = await createRun(failingWaitSuite.body.id, environment.body.id, randomUUID());
   const failingWaitRun = await waitForRun(failedWait.body.id);
   check(failingWaitRun.gateResult === "blocked", "wait timeout did not block the gate");
   check(

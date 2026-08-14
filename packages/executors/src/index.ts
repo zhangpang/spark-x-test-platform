@@ -10,11 +10,7 @@ export {
   type HttpTargetRule,
 } from "./base.js";
 
-export {
-  executeHttpRequest,
-  type HttpExecutionResult,
-  type HttpStepParameters,
-} from "./http.js";
+export { executeHttpRequest, type HttpExecutionResult, type HttpStepParameters } from "./http.js";
 
 export interface ExecutorDescriptor {
   readonly key: string;
