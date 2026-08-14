@@ -18,6 +18,7 @@ import {
   BrowserExecutorFailure,
   createChromiumSession,
   executeHttpRequest,
+  executeWaitHttp,
   ExecutorFailure,
   interpolateString,
   type BrowserAction,
@@ -26,6 +27,7 @@ import {
   type ExecutorArtifact,
   type HttpExecutionResult,
   type HttpStepParameters,
+  type WaitHttpParameters,
 } from "@spark-x-test/executors";
 import { redactEvidence } from "@spark-x-test/reporting";
 import type {
@@ -249,6 +251,10 @@ function httpParameters(params: Readonly<Record<string, unknown>>): HttpStepPara
   };
 }
 
+function waitHttpParameters(params: Readonly<Record<string, unknown>>): WaitHttpParameters {
+  return params as unknown as WaitHttpParameters;
+}
+
 function captureValues(
   output: Readonly<Record<string, unknown>>,
   capture: Readonly<Record<string, string>>,
@@ -337,6 +343,19 @@ async function executeStep(
         headers: response.headers,
         body: response.body,
         url: response.url,
+      };
+    } else if (step.action === "wait:http") {
+      const response = await executeWaitHttp(
+        snapshot.environment,
+        waitHttpParameters(step.params),
+        variables,
+        { timeoutMs, signal },
+      );
+      output = {
+        attempts: response.attempts,
+        elapsedMs: response.elapsedMs,
+        matched: response.matched,
+        lastResponse: response.lastResponse,
       };
     } else if (browserActions.includes(step.action as BrowserAction)) {
       const response = await (

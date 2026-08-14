@@ -37,6 +37,7 @@ const workerRegistration = {
   concurrencySlots: concurrency,
   capabilities: [
     "http:request",
+    "wait:http",
     "browser:navigate",
     "browser:click",
     "browser:fill",

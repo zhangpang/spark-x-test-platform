@@ -379,6 +379,55 @@ describe("run worker", () => {
     );
   });
 
+  it("polls an allowlisted HTTP target and records the final structured wait evidence", async () => {
+    const store = fakeStore(
+      snapshot({
+        execution: { stepTimeoutMs: 1_000, caseTimeoutMs: 5_000 },
+        steps: [
+          {
+            id: "wait-index",
+            action: "wait:http",
+            params: {
+              path: "/tasks/task-42",
+              intervalMs: 100,
+              condition: { path: "$.body.state", operator: "equals", expected: "ready" },
+            },
+            capture: { state: "$.lastResponse.body.state" },
+          },
+        ],
+      }),
+    );
+    const responses = [
+      new Response(JSON.stringify({ state: "processing" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response(JSON.stringify({ state: "ready" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ];
+    const fetchMock = vi.fn(() => Promise.resolve(responses.shift() as Response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(executeRunJob(job, "worker-1", store)).resolves.toMatchObject({
+      summary: { passed: 1 },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(store.recordStep).toHaveBeenCalledWith(
+      job.runId,
+      expect.objectContaining({
+        action: "wait:http",
+        status: "passed",
+        outputSummary: expect.objectContaining({
+          attempts: 2,
+          matched: true,
+          lastResponse: expect.objectContaining({ body: { state: "ready" } }),
+        }),
+      }),
+    );
+  });
+
   it("registers a nested response resource and queues compensation after cleanup fails", async () => {
     const store = fakeStore(
       snapshot({

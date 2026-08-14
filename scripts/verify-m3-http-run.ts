@@ -20,7 +20,12 @@ interface RunRecord extends RecordWithId {
     result: string | null;
     cleanupStatus: string;
   }>[];
-  readonly steps: readonly Readonly<{ status: string; phase: string }>[];
+  readonly steps: readonly Readonly<{
+    status: string;
+    phase: string;
+    action: string;
+    outputSummary: Readonly<Record<string, unknown>> | null;
+  }>[];
   readonly resources: readonly Readonly<{
     cleanupStatus: string;
     systemResourceId: string;
@@ -137,6 +142,58 @@ function httpDefinition(
   };
 }
 
+function waitHttpDefinition(
+  systemKey: string,
+  moduleKey: string,
+  name: string,
+  expectedStatus: number,
+): Readonly<Record<string, unknown>> {
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name,
+      systemKey,
+      moduleKey,
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "read",
+      tags: ["m3-smoke", "wait-http"],
+    },
+    inputs: [
+      {
+        name: "smoke-token",
+        type: "string",
+        required: true,
+        secretRef: "m3-smoke-token",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: expectedStatus === 200 ? 2_000 : 400,
+      caseTimeoutMs: expectedStatus === 200 ? 3_000 : 1_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: [],
+    steps: [
+      {
+        id: "wait-api-health",
+        name: "轮询 API 健康状态",
+        kind: "action",
+        action: "wait:http",
+        params: {
+          path: "/api/v1/healthz",
+          headers: { "x-m3-smoke-token": "${case.smoke-token}" },
+          intervalMs: 100,
+          condition: { path: "$.status", operator: "equals", expected: expectedStatus },
+        },
+        capture: { "response-status": "$.lastResponse.status" },
+        assertions: [],
+      },
+    ],
+    finally: [],
+  };
+}
+
 async function createPublishedCase(
   moduleId: string,
   environmentId: string,
@@ -151,6 +208,35 @@ async function createPublishedCase(
       moduleId,
       definition: httpDefinition(systemKey, moduleKey, name, expectedStatus),
       changeNote: "M3 release smoke",
+    },
+  });
+  createdIds.push(created.body.id, created.body.currentDraftVersionId);
+  const validation = await api<{ readonly valid: boolean }>(
+    `/test-case-versions/${created.body.currentDraftVersionId}/validations`,
+    { method: "POST", body: { environmentId } },
+  );
+  check(validation.body.valid, `${name} did not pass static validation`);
+  await api(`/test-cases/${created.body.id}/publish`, {
+    method: "POST",
+    body: { versionId: created.body.currentDraftVersionId },
+  });
+  return created.body.id;
+}
+
+async function createPublishedWaitCase(
+  moduleId: string,
+  environmentId: string,
+  systemKey: string,
+  moduleKey: string,
+  name: string,
+  expectedStatus: number,
+): Promise<string> {
+  const created = await api<CaseRecord>("/test-cases", {
+    method: "POST",
+    body: {
+      moduleId,
+      definition: waitHttpDefinition(systemKey, moduleKey, name, expectedStatus),
+      changeNote: "M3 wait executor release smoke",
     },
   });
   createdIds.push(created.body.id, created.body.currentDraftVersionId);
@@ -418,6 +504,22 @@ try {
     systemKey,
     moduleKey,
   );
+  const passingWaitCaseId = await createPublishedWaitCase(
+    module.body.id,
+    environment.body.id,
+    systemKey,
+    moduleKey,
+    "M3 passing HTTP wait",
+    200,
+  );
+  const failingWaitCaseId = await createPublishedWaitCase(
+    module.body.id,
+    environment.body.id,
+    systemKey,
+    moduleKey,
+    "M3 HTTP wait timeout",
+    599,
+  );
 
   const passingSuite = await api<RecordWithId>("/test-suites", {
     method: "POST",
@@ -455,6 +557,30 @@ try {
     },
   });
   createdIds.push(resourceSuite.body.id);
+  const passingWaitSuite = await api<RecordWithId>("/test-suites", {
+    method: "POST",
+    body: {
+      systemId,
+      key: "passing-http-wait",
+      name: "Passing HTTP wait",
+      caseIds: [passingWaitCaseId],
+      defaultConcurrency: 1,
+      defaultDiagnosticRetries: 0,
+    },
+  });
+  createdIds.push(passingWaitSuite.body.id);
+  const failingWaitSuite = await api<RecordWithId>("/test-suites", {
+    method: "POST",
+    body: {
+      systemId,
+      key: "failing-http-wait",
+      name: "Failing HTTP wait",
+      caseIds: [failingWaitCaseId],
+      defaultConcurrency: 1,
+      defaultDiagnosticRetries: 0,
+    },
+  });
+  createdIds.push(failingWaitSuite.body.id);
 
   const idempotencyKey = randomUUID();
   const accepted = await createRun(passingSuite.body.id, environment.body.id, idempotencyKey);
@@ -486,6 +612,44 @@ try {
     "first product failure was not preserved",
   );
 
+  const acceptedWait = await createRun(
+    passingWaitSuite.body.id,
+    environment.body.id,
+    randomUUID(),
+  );
+  const passingWaitRun = await waitForRun(acceptedWait.body.id);
+  check(passingWaitRun.gateResult === "passed", "passing wait run gate was not passed");
+  check(passingWaitRun.summary.passed === 1, "passing wait run summary was not aggregated");
+  check(passingWaitRun.steps[0]?.action === "wait:http", "wait step action evidence is missing");
+  check(
+    passingWaitRun.steps[0]?.outputSummary?.matched === true,
+    "wait step did not persist its matched result",
+  );
+  check(
+    Number(passingWaitRun.steps[0]?.outputSummary?.attempts) >= 1,
+    "wait step did not persist its attempt count",
+  );
+  check(
+    !JSON.stringify(passingWaitRun).includes(syntheticSecret),
+    "secret leaked into wait evidence",
+  );
+
+  const failedWait = await createRun(
+    failingWaitSuite.body.id,
+    environment.body.id,
+    randomUUID(),
+  );
+  const failingWaitRun = await waitForRun(failedWait.body.id);
+  check(failingWaitRun.gateResult === "blocked", "wait timeout did not block the gate");
+  check(
+    failingWaitRun.summary.productFailed === 1,
+    "wait timeout was not classified as product failure",
+  );
+  check(
+    failingWaitRun.firstFailure?.code === "WAIT_CONDITION_TIMEOUT",
+    "wait timeout did not preserve its stable root failure",
+  );
+
   const compensated = await createRun(resourceSuite.body.id, environment.body.id, randomUUID());
   const compensatedRun = await waitForRun(compensated.body.id);
   check(compensatedRun.gateResult === "inconclusive", "cleanup failure gate was not inconclusive");
@@ -515,9 +679,11 @@ try {
     JSON.stringify({
       status: "passed",
       scenario: "m3-http-run-evidence-loop",
-      assertions: 25,
+      assertions: 34,
       passingRunId: passingRun.id,
       failingRunId: failingRun.id,
+      passingWaitRunId: passingWaitRun.id,
+      failingWaitRunId: failingWaitRun.id,
       compensatedRunId: compensatedRun.id,
     }),
   );

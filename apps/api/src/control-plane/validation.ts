@@ -26,6 +26,7 @@ const actionRank: Readonly<Record<ActionLevel, number>> = {
 };
 const availableActions = new Set([
   "http:request",
+  "wait:http",
   "browser:navigate",
   "browser:click",
   "browser:fill",
@@ -33,6 +34,8 @@ const availableActions = new Set([
 ]);
 const availableCompensationActions = new Set(["http:request"]);
 const availableAssertions = new Set(["status:equals"]);
+const waitJsonPathPattern = /^\$(?:\.[a-zA-Z0-9_-]+){0,20}$/;
+const waitOperators = new Set(["equals", "not-equals", "contains", "exists"]);
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -294,6 +297,76 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
         }
       }
     }
+    if (step.action === "wait:http") {
+      const path = step.params.path;
+      if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) {
+        issues.push({
+          severity: "error",
+          code: "WAIT_HTTP_PATH_INVALID",
+          path: `$.steps.${id}.params.path`,
+          message: "HTTP 轮询只能填写以 / 开头的相对路径，目标主机由环境提供。",
+        });
+      }
+      if (
+        ["url", "baseUrl", "host", "method", "body", "script", "code"].some(
+          (name) => name in params,
+        )
+      ) {
+        issues.push({
+          severity: "error",
+          code: "ARBITRARY_WAIT_INPUT_FORBIDDEN",
+          path: `$.steps.${id}.params`,
+          message: "HTTP 轮询仅允许 GET 相对路径与声明式条件，不得指定目标主机、请求体或脚本。",
+        });
+      }
+      if (
+        step.params.intervalMs !== undefined &&
+        (!Number.isInteger(step.params.intervalMs) ||
+          (step.params.intervalMs as number) < 100 ||
+          (step.params.intervalMs as number) > 30_000)
+      ) {
+        issues.push({
+          severity: "error",
+          code: "WAIT_INTERVAL_INVALID",
+          path: `$.steps.${id}.params.intervalMs`,
+          message: "HTTP 轮询间隔必须是 100 到 30000 毫秒之间的整数。",
+        });
+      }
+      if (
+        step.params.headers !== undefined &&
+        (!isObject(step.params.headers) ||
+          Object.values(step.params.headers).some((value) => typeof value !== "string"))
+      ) {
+        issues.push({
+          severity: "error",
+          code: "WAIT_HEADERS_INVALID",
+          path: `$.steps.${id}.params.headers`,
+          message: "HTTP 轮询请求头必须是字符串键值对。",
+        });
+      }
+      const condition = isObject(step.params.condition) ? step.params.condition : undefined;
+      if (
+        condition === undefined ||
+        typeof condition.path !== "string" ||
+        !waitJsonPathPattern.test(condition.path) ||
+        typeof condition.operator !== "string" ||
+        !waitOperators.has(condition.operator)
+      ) {
+        issues.push({
+          severity: "error",
+          code: "WAIT_CONDITION_INVALID",
+          path: `$.steps.${id}.params.condition`,
+          message: "HTTP 轮询条件必须使用受限 JSON 路径和已注册比较符。",
+        });
+      } else if (condition.operator !== "exists" && !("expected" in condition)) {
+        issues.push({
+          severity: "error",
+          code: "WAIT_EXPECTED_VALUE_REQUIRED",
+          path: `$.steps.${id}.params.condition.expected`,
+          message: `HTTP 轮询条件 ${condition.operator} 必须声明 expected。`,
+        });
+      }
+    }
     if (step.action.startsWith("browser:")) {
       if (
         ["url", "baseUrl", "host", "script", "javascript", "evaluate", "code"].some(
@@ -523,7 +596,7 @@ function validateStepTargets(
   for (const step of collectSteps(definition)) {
     const action = typeof step.action === "string" ? step.action : "";
     if (
-      !["http:request", "browser:navigate"].includes(action) ||
+      !["http:request", "browser:navigate", "wait:http"].includes(action) ||
       !isObject(step.params) ||
       typeof step.params.path !== "string"
     ) {
@@ -557,7 +630,7 @@ function validateStepTargets(
             ? "BROWSER_TARGET_NOT_ALLOWLISTED"
             : "HTTP_TARGET_NOT_ALLOWLISTED",
         path: `$.steps.${typeof step.id === "string" ? step.id : "unknown"}.params.path`,
-        message: `${action === "browser:navigate" ? "浏览器" : "HTTP"} 路径 ${step.params.path} 不在环境目标白名单内。`,
+        message: `${action === "browser:navigate" ? "浏览器" : action === "wait:http" ? "HTTP 轮询" : "HTTP"} 路径 ${step.params.path} 不在环境目标白名单内。`,
       });
     }
     const resource = isObject(step.resource) ? step.resource : undefined;

@@ -174,6 +174,62 @@ describe("M2 asset validation", () => {
     );
   });
 
+  it("accepts bounded HTTP polling and rejects arbitrary wait inputs", () => {
+    const polling = definition({
+      steps: [
+        {
+          id: "wait-index",
+          name: "wait for index",
+          kind: "action",
+          action: "wait:http",
+          timeoutMs: 5_000,
+          params: {
+            path: "/tasks/${run.id}",
+            intervalMs: 250,
+            condition: { path: "$.body.state", operator: "equals", expected: "ready" },
+          },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(polling, {
+        systemKey: "sample-system",
+        moduleKey: "order",
+        environment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const unsafe = definition({
+      steps: [
+        {
+          id: "wait-index",
+          name: "unsafe wait",
+          kind: "action",
+          action: "wait:http",
+          params: {
+            path: "https://bypass.test/tasks/1",
+            method: "POST",
+            script: "return response.body.ready",
+            condition: { path: "$[0]", operator: "eval" },
+          },
+        },
+      ],
+    });
+    const result = validateDefinition(unsafe, {
+      systemKey: "sample-system",
+      moduleKey: "order",
+      environment,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining([
+        "WAIT_HTTP_PATH_INVALID",
+        "ARBITRARY_WAIT_INPUT_FORBIDDEN",
+        "WAIT_CONDITION_INVALID",
+      ]),
+    );
+  });
+
   it("requires cleanup and sufficient environment privilege for write cases", () => {
     const writeDefinition = definition({
       metadata: {
