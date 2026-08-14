@@ -771,4 +771,246 @@ describe("run worker", () => {
     );
     expect(store.completeCompensation).toHaveBeenCalledWith(cleanupJob.cleanupJobId);
   });
+
+  it("executes the Spark X Agent conversation lifecycle without persisting credentials", async () => {
+    const conversationId = "00000000-0000-4000-8000-000000000109";
+    const password = "adapter-password-that-must-not-persist";
+    const title = `spark-x-regression-${job.runId}`;
+    const executionSnapshot: RunExecutionSnapshot = {
+      ...snapshot({
+        inputs: [
+          { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
+          { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
+        ],
+        resourceLocks: ["spark-x-agent-conversation:${run.id}"],
+        steps: [
+          {
+            id: "create-conversation",
+            action: "adapter:spark-x-agent/conversation.create",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              title: "spark-x-regression-${run.id}",
+            },
+            capture: { "conversation-id": "$.conversationId" },
+            resource: {
+              type: "spark-x-agent-conversation",
+              id: "${step.conversation-id}",
+              cleanup: {
+                action: "adapter:spark-x-agent/conversation.delete",
+                params: {
+                  username: "${case.admin-username}",
+                  password: "${case.admin-password}",
+                  conversationId: "${resource.id}",
+                },
+              },
+            },
+          },
+          {
+            id: "assert-recent",
+            action: "adapter:spark-x-agent/conversation.assert-recent",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${step.conversation-id}",
+              title: "spark-x-regression-${run.id}",
+            },
+          },
+        ],
+        finally: [
+          {
+            id: "delete-conversation",
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${step.conversation-id}",
+            },
+          },
+        ],
+      }),
+      environment: {
+        id: "00000000-0000-4000-8000-000000000102",
+        baseUrl: "http://192.168.110.136/trade/",
+        actionLevel: "dangerous",
+        adapterKey: "spark-x-agent",
+        allowlist: [
+          {
+            protocol: "http",
+            host: "192.168.110.136",
+            ports: [80],
+            pathPrefixes: ["/trade/"],
+          },
+        ],
+      },
+    };
+    const store = fakeStore(executionSnapshot);
+    vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      "case.admin-username": "admin",
+      "case.admin-password": password,
+    });
+    const responses = [
+      { success: true, data: { token: "adapter-memory-only-token-value" } },
+      { success: true, data: { id: conversationId, title } },
+      { success: true, data: { token: "adapter-memory-only-token-value" } },
+      {
+        success: true,
+        data: {
+          items: [
+            {
+              id: conversationId,
+              title,
+              is_pinned: false,
+              message_count: 0,
+            },
+          ],
+        },
+      },
+      { success: true, data: { token: "adapter-memory-only-token-value" } },
+      { success: true, message: "deleted" },
+    ];
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(responses.shift()), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(executeRunJob(job, "worker-1", store)).resolves.toMatchObject({
+      summary: { passed: 1 },
+    });
+
+    expect(store.registerResource).toHaveBeenCalledWith(
+      job.runId,
+      expect.objectContaining({
+        resourceType: "spark-x-agent-conversation",
+        systemResourceId: conversationId,
+        cleanupDefinition: expect.objectContaining({
+          action: "adapter:spark-x-agent/conversation.delete",
+        }),
+      }),
+    );
+    const evidence = JSON.stringify(vi.mocked(store.recordStep).mock.calls);
+    expect(evidence).not.toContain(password);
+    expect(evidence).not.toContain("adapter-memory-only-token-value");
+    expect(
+      vi.mocked(store.recordStep).mock.calls.map(([, input]) => [input.action, input.phase]),
+    ).toEqual([
+      ["adapter:spark-x-agent/conversation.create", "main"],
+      ["adapter:spark-x-agent/conversation.assert-recent", "main"],
+      ["adapter:spark-x-agent/conversation.delete", "finally"],
+    ]);
+  });
+
+  it("re-authenticates Spark X Agent cleanup from persisted resource data", async () => {
+    const cleanupJob = {
+      protocolVersion: "1.0" as const,
+      cleanupJobId: "00000000-0000-4000-8000-000000000110",
+      runId: job.runId,
+      queuedAt: new Date(0).toISOString(),
+    };
+    const definition = {
+      inputs: [
+        { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
+        { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
+      ],
+      steps: [],
+    };
+    const compensationSnapshot: RunExecutionSnapshot = {
+      ...snapshot(definition),
+      environment: {
+        id: "00000000-0000-4000-8000-000000000102",
+        baseUrl: "http://192.168.110.136/trade/",
+        actionLevel: "dangerous",
+        adapterKey: "spark-x-agent",
+        allowlist: [
+          {
+            protocol: "http",
+            host: "192.168.110.136",
+            ports: [80],
+            pathPrefixes: ["/trade/"],
+          },
+        ],
+      },
+    };
+    const store = {
+      claimCleanupJob: vi.fn(() =>
+        Promise.resolve({
+          id: cleanupJob.cleanupJobId,
+          runId: job.runId,
+          attempts: 1,
+          summary: {
+            total: 1,
+            queued: 0,
+            running: 0,
+            passed: 0,
+            productFailed: 0,
+            testFailed: 0,
+            environmentFailed: 0,
+            infrastructureFailed: 1,
+            flaky: 0,
+            cancelled: 0,
+            skipped: 0,
+          },
+          gateResult: "inconclusive",
+          firstFailure: null,
+          snapshot: compensationSnapshot,
+        }),
+      ),
+      resolveSecretVariables: vi.fn(() =>
+        Promise.resolve({
+          "case.admin-username": "admin",
+          "case.admin-password": "compensation-password",
+        }),
+      ),
+      listResourcesForCleanup: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "00000000-0000-4000-8000-000000000111",
+            runCaseId: "00000000-0000-4000-8000-000000000104",
+            systemResourceId: "00000000-0000-4000-8000-000000000112",
+            cleanupDefinition: {
+              action: "adapter:spark-x-agent/conversation.delete",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                conversationId: "${resource.id}",
+              },
+            },
+          },
+        ]),
+      ),
+      markResourceCleanup: vi.fn(() => Promise.resolve()),
+      renewResourceLocks: vi.fn(() => Promise.resolve()),
+      failCleanupJob: vi.fn(() => Promise.resolve()),
+      completeCompensation: vi.fn(() => Promise.resolve()),
+    } as unknown as CompensationExecutionStore;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ success: true, data: { token: "compensation-memory-token" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(executeCompensationJob(cleanupJob, store)).resolves.toEqual({ cleaned: 1 });
+    expect(requestUrl(fetchMock.mock.calls[1]?.[0])).toBe(
+      "http://192.168.110.136/trade/api/conversations/00000000-0000-4000-8000-000000000112",
+    );
+    expect(store.markResourceCleanup).toHaveBeenLastCalledWith(
+      "00000000-0000-4000-8000-000000000111",
+      "passed",
+    );
+  });
 });

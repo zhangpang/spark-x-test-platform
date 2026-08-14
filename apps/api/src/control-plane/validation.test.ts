@@ -540,4 +540,140 @@ describe("M2 asset validation", () => {
       expect.arrayContaining(["CLEANUP_REFERENCE_FORBIDDEN", "RESOURCE_LOCK_REFERENCE_FORBIDDEN"]),
     );
   });
+
+  it("accepts a traceable Spark X Agent conversation case with adapter compensation", () => {
+    const sparkEnvironment: EnvironmentRecord = {
+      ...environment,
+      systemId: "00000000-0000-4000-8000-000000000010",
+      baseUrl: "http://192.168.110.136/trade/",
+      actionLevel: "dangerous",
+      allowlist: [
+        {
+          protocol: "http",
+          host: "192.168.110.136",
+          ports: [80],
+          pathPrefixes: ["/trade/"],
+        },
+      ],
+      adapterKey: "spark-x-agent",
+    };
+    const adapterDefinition = definition({
+      metadata: {
+        name: "CONV-001 recent conversation lifecycle",
+        systemKey: "spark-x-agent",
+        moduleKey: "recent-conversations",
+        priority: "P0",
+        classification: "blackbox",
+        actionLevel: "dangerous",
+        tags: ["adapter", "core-smoke"],
+      },
+      inputs: [
+        {
+          name: "admin-username",
+          type: "string",
+          required: true,
+          secretRef: "spark-x-agent-admin-username",
+        },
+        {
+          name: "admin-password",
+          type: "string",
+          required: true,
+          secretRef: "spark-x-agent-admin-password",
+        },
+      ],
+      resourceLocks: ["spark-x-agent-conversation:${run.id}"],
+      steps: [
+        {
+          id: "create-conversation",
+          name: "create conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.create",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            title: "spark-x-regression-${run.id}",
+          },
+          capture: { "conversation-id": "$.conversationId" },
+          resource: {
+            type: "spark-x-agent-conversation",
+            id: "${step.conversation-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/conversation.delete",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                conversationId: "${resource.id}",
+              },
+            },
+          },
+        },
+        {
+          id: "assert-recent",
+          name: "assert recent conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.assert-recent",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            title: "spark-x-regression-${run.id}",
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "delete-conversation",
+          name: "delete conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.delete",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+          },
+        },
+      ],
+    });
+
+    expect(
+      validateDefinition(adapterDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "recent-conversations",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const unsafe = definition({
+      metadata: adapterDefinition.metadata,
+      inputs: adapterDefinition.inputs,
+      steps: [
+        {
+          id: "create-conversation",
+          name: "unsafe create",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.create",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            title: "untraceable",
+            script: "return process.env",
+          },
+        },
+      ],
+      finally: adapterDefinition.finally,
+    });
+    expect(
+      validateDefinition(unsafe, {
+        systemKey: "spark-x-agent",
+        moduleKey: "recent-conversations",
+        environment: sparkEnvironment,
+      }).issues.map((issue) => issue.code),
+    ).toEqual(
+      expect.arrayContaining([
+        "ARBITRARY_ADAPTER_INPUT_FORBIDDEN",
+        "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
+        "RUN_TRACEABILITY_REQUIRED",
+      ]),
+    );
+  });
 });

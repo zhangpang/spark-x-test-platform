@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  executeSparkXAgentAction,
+  sparkXAgentActions,
+} from "@spark-x-test/adapter-spark-x-agent";
 import type {
   CaseResult,
   CleanupStatus,
@@ -305,6 +309,16 @@ function assertionValue(value: unknown, variables: Readonly<Record<string, unkno
   return matched === null ? value : variables[matched[1] as string];
 }
 
+function assertSparkXAgentEnvironment(snapshot: RunExecutionSnapshot): void {
+  if (snapshot.environment.adapterKey !== "spark-x-agent") {
+    throw new ExecutorFailure({
+      code: "SPARK_X_AGENT_ENVIRONMENT_MISMATCH",
+      message: "当前运行环境未绑定 spark-x-agent 适配器。",
+      classification: "test_failed",
+    });
+  }
+}
+
 function assertResponse(
   assertions: readonly Readonly<Record<string, unknown>>[],
   variables: Readonly<Record<string, unknown>>,
@@ -393,6 +407,15 @@ async function executeStep(
       output = executeJsonExtract(step.params as unknown as JsonExtractParameters, variables);
     } else if (step.action === "json:assert") {
       output = executeJsonAssert(step.params as unknown as JsonAssertParameters, variables);
+    } else if (sparkXAgentActions.includes(step.action as (typeof sparkXAgentActions)[number])) {
+      assertSparkXAgentEnvironment(snapshot);
+      output = await executeSparkXAgentAction(
+        step.action,
+        snapshot.environment,
+        step.params,
+        variables,
+        { timeoutMs, signal },
+      );
     } else if (browserActions.includes(step.action as BrowserAction)) {
       const response = await (
         await getBrowserSession()
@@ -954,26 +977,52 @@ export async function executeCompensationJob(
         secretsByCase.set(resource.runCaseId, secrets);
       }
       const definition = resource.cleanupDefinition;
-      if (definition.action !== "http:request" || objectValue(definition.params) === null) {
+      if (
+        definition.action !== "http:request" &&
+        definition.action !== "adapter:spark-x-agent/conversation.delete"
+      ) {
         throw new ExecutorFailure({
           code: "CLEANUP_EXECUTOR_NOT_AVAILABLE",
           message: `补偿执行器 ${String(definition.action)} 尚未注册。`,
           classification: "test_failed",
         });
       }
-      const params = objectValue(definition.params) as Readonly<Record<string, unknown>>;
-      const response = await executeHttpRequest(
-        work.snapshot.environment,
-        httpParameters(params),
-        { "run.id": work.runId, "resource.id": resource.systemResourceId, ...secrets },
-        { timeoutMs: 30_000 },
-      );
-      if (response.status < 200 || response.status >= 300) {
+      if (objectValue(definition.params) === null) {
         throw new ExecutorFailure({
-          code: "CLEANUP_HTTP_STATUS_FAILED",
-          message: `资源补偿返回 HTTP ${response.status}。`,
-          classification: "environment_failed",
+          code: "CLEANUP_PARAMETERS_INVALID",
+          message: "资源补偿参数无效。",
+          classification: "test_failed",
         });
+      }
+      const params = objectValue(definition.params) as Readonly<Record<string, unknown>>;
+      const variables = {
+        "run.id": work.runId,
+        "resource.id": resource.systemResourceId,
+        ...secrets,
+      };
+      if (definition.action === "http:request") {
+        const response = await executeHttpRequest(
+          work.snapshot.environment,
+          httpParameters(params),
+          variables,
+          { timeoutMs: 30_000 },
+        );
+        if (response.status < 200 || response.status >= 300) {
+          throw new ExecutorFailure({
+            code: "CLEANUP_HTTP_STATUS_FAILED",
+            message: `资源补偿返回 HTTP ${response.status}。`,
+            classification: "environment_failed",
+          });
+        }
+      } else {
+        assertSparkXAgentEnvironment(work.snapshot);
+        await executeSparkXAgentAction(
+          definition.action,
+          work.snapshot.environment,
+          params,
+          variables,
+          { timeoutMs: 30_000 },
+        );
       }
       await store.markResourceCleanup(resource.id, "passed");
       cleaned += 1;

@@ -36,6 +36,9 @@ const workerRegistration = {
   executorVersion: platformVersion,
   concurrencySlots: concurrency,
   capabilities: [
+    "adapter:spark-x-agent/conversation.create",
+    "adapter:spark-x-agent/conversation.assert-recent",
+    "adapter:spark-x-agent/conversation.delete",
     "http:request",
     "wait:http",
     "json:extract",

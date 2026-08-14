@@ -167,6 +167,7 @@ export interface RunExecutionSnapshot {
     id: string;
     baseUrl: string;
     actionLevel: "read" | "write" | "dangerous";
+    adapterKey?: string;
     allowlist: readonly Readonly<{
       protocol: "http" | "https";
       host: string;
@@ -462,11 +463,12 @@ export class TestRunStore {
         readonly base_url: string;
         readonly action_level: RunExecutionSnapshot["environment"]["actionLevel"];
         readonly allowlist: RunExecutionSnapshot["environment"]["allowlist"];
+        readonly adapter_key: string | null;
         readonly suite_name: string;
         readonly diagnostic_retries: number;
       }>(
         `select s.name as system_name, e.name as environment_name, e.base_url, e.action_level,
-                e.allowlist, ts.name as suite_name,
+                e.allowlist, e.adapter_key, ts.name as suite_name,
                 ts.default_diagnostic_retries as diagnostic_retries
          from systems s
          join environments e on e.system_id = s.id and e.id = $2 and e.status = 'active'
@@ -511,6 +513,7 @@ export class TestRunStore {
           baseUrl: runContext.base_url,
           actionLevel: runContext.action_level,
           allowlist: runContext.allowlist,
+          ...(runContext.adapter_key === null ? {} : { adapterKey: runContext.adapter_key }),
         },
         suite: {
           id: input.suiteId,

@@ -20,6 +20,7 @@
     "sourceMap": true,
     "baseUrl": ".",
     "paths": {
+      "@spark-x-test/adapter-spark-x-agent": ["adapters/spark-x-agent/src/index.ts"],
       "@spark-x-test/contracts": ["packages/contracts/src/index.ts"],
       "@spark-x-test/case-schema": ["packages/case-schema/src/index.ts"],
       "@spark-x-test/adapter-sdk": ["packages/adapter-sdk/src/index.ts"],

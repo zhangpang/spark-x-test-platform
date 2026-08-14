@@ -35,9 +35,34 @@ const availableActions = new Set([
   "browser:click",
   "browser:fill",
   "browser:assert-text",
+  "adapter:spark-x-agent/conversation.create",
+  "adapter:spark-x-agent/conversation.assert-recent",
+  "adapter:spark-x-agent/conversation.delete",
 ]);
-const availableCompensationActions = new Set(["http:request"]);
+const availableCompensationActions = new Set([
+  "http:request",
+  "adapter:spark-x-agent/conversation.delete",
+]);
 const availableAssertions = new Set(["status:equals"]);
+const sparkXAgentActionLevels = new Map<string, ActionLevel>([
+  ["adapter:spark-x-agent/conversation.create", "write"],
+  ["adapter:spark-x-agent/conversation.assert-recent", "write"],
+  ["adapter:spark-x-agent/conversation.delete", "dangerous"],
+]);
+const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
+  [
+    "adapter:spark-x-agent/conversation.create",
+    new Set(["username", "password", "title"]),
+  ],
+  [
+    "adapter:spark-x-agent/conversation.assert-recent",
+    new Set(["username", "password", "conversationId", "title"]),
+  ],
+  [
+    "adapter:spark-x-agent/conversation.delete",
+    new Set(["username", "password", "conversationId"]),
+  ],
+]);
 const waitJsonPathPattern = /^\$(?:\.[a-zA-Z0-9_-]+){0,20}$/;
 const waitOperators = new Set(["equals", "not-equals", "contains", "exists"]);
 const jsonPathPattern = /^\$(?:(?:\.[a-zA-Z0-9_-]+)|(?:\[(?:0|[1-9][0-9]{0,5})\])){0,20}$/;
@@ -241,6 +266,86 @@ function validateInputDefaults(definition: JsonObject): ValidationIssue[] {
   });
 }
 
+function validateSparkXAgentAction(
+  action: string,
+  params: JsonObject,
+  path: string,
+  definition: JsonObject,
+  resource: JsonObject | undefined,
+): ValidationIssue[] {
+  const allowed = sparkXAgentActionParameters.get(action);
+  if (allowed === undefined) return [];
+  const issues: ValidationIssue[] = [];
+  const metadata = isObject(definition.metadata) ? definition.metadata : undefined;
+  if (metadata?.systemKey !== "spark-x-agent") {
+    issues.push({
+      severity: "error",
+      code: "ADAPTER_SYSTEM_MISMATCH",
+      path: `${path}.action`,
+      message: "星火 Agent 适配器动作只能用于 spark-x-agent 系统用例。",
+    });
+  }
+  const extra = Object.keys(params).filter((key) => !allowed.has(key));
+  if (extra.length > 0) {
+    issues.push({
+      severity: "error",
+      code: "ARBITRARY_ADAPTER_INPUT_FORBIDDEN",
+      path: `${path}.params`,
+      message: `星火 Agent 适配器只接受已注册参数，不允许 ${extra.join("、")}。`,
+    });
+  }
+  for (const name of allowed) {
+    if (typeof params[name] !== "string" || (params[name] as string).trim() === "") {
+      issues.push({
+        severity: "error",
+        code: "ADAPTER_PARAMETER_INVALID",
+        path: `${path}.params.${name}`,
+        message: `星火 Agent 适配器参数 ${name} 必须是非空字符串。`,
+      });
+    }
+  }
+  const requiredLevel = sparkXAgentActionLevels.get(action);
+  if (
+    requiredLevel !== undefined &&
+    typeof metadata?.actionLevel === "string" &&
+    metadata.actionLevel in actionRank &&
+    actionRank[metadata.actionLevel as ActionLevel] < actionRank[requiredLevel]
+  ) {
+    issues.push({
+      severity: "error",
+      code: "ACTION_LEVEL_UNDERSPECIFIED",
+      path: "$.metadata.actionLevel",
+      message: `${action} 至少需要 ${requiredLevel} 动作等级。`,
+    });
+  }
+  if (
+    action === "adapter:spark-x-agent/conversation.create" &&
+    (resource === undefined ||
+      !isObject(resource.cleanup) ||
+      resource.cleanup.action !== "adapter:spark-x-agent/conversation.delete")
+  ) {
+    issues.push({
+      severity: "error",
+      code: "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
+      path: `${path}.resource`,
+      message: "创建星火 Agent 会话必须登记资源并声明适配器删除补偿。",
+    });
+  }
+  if (
+    action === "adapter:spark-x-agent/conversation.create" &&
+    typeof params.title === "string" &&
+    !params.title.includes("${run.id}")
+  ) {
+    issues.push({
+      severity: "error",
+      code: "RUN_TRACEABILITY_REQUIRED",
+      path: `${path}.params.title`,
+      message: "测试会话标题必须包含 ${run.id}，以便追踪和残留数据审计。",
+    });
+  }
+  return issues;
+}
+
 function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const stepIds = new Set<string>();
@@ -293,6 +398,15 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
         message: `当前平台版本未注册动作 ${step.action}。`,
       });
     }
+    issues.push(
+      ...validateSparkXAgentAction(
+        step.action,
+        params,
+        `$.steps.${id}`,
+        definition,
+        isObject(step.resource) ? step.resource : undefined,
+      ),
+    );
     if (isJsonArray(step.assertions)) {
       for (const [assertionIndex, assertion] of step.assertions.entries()) {
         if (
@@ -674,6 +788,20 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
           }
         }
       }
+      if (
+        cleanup.action === "adapter:spark-x-agent/conversation.delete" &&
+        isObject(cleanup.params)
+      ) {
+        issues.push(
+          ...validateSparkXAgentAction(
+            cleanup.action,
+            cleanup.params,
+            `$.steps.${id}.resource.cleanup`,
+            definition,
+            undefined,
+          ),
+        );
+      }
     }
   }
   return issues;
@@ -934,6 +1062,20 @@ export function validateDefinition(
   if (context.environment !== undefined) {
     issues.push(...validateEnvironmentTarget(context.environment));
     issues.push(...validateStepTargets(definition, context.environment));
+    if (
+      collectSteps(definition).some(
+        (step) =>
+          typeof step.action === "string" && step.action.startsWith("adapter:spark-x-agent/"),
+      ) &&
+      context.environment.adapterKey !== "spark-x-agent"
+    ) {
+      issues.push({
+        severity: "error",
+        code: "ADAPTER_ENVIRONMENT_MISMATCH",
+        path: "$.environment.adapterKey",
+        message: "星火 Agent 适配器动作只能发布到绑定 spark-x-agent 的环境。",
+      });
+    }
     if (
       metadata !== undefined &&
       typeof metadata.actionLevel === "string" &&

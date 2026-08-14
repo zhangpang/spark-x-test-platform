@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -17,7 +17,94 @@
     }
   },
   "capabilities": {
-    "actions": [],
+    "actions": [
+      {
+        "key": "conversation.create",
+        "name": "创建会话",
+        "description": "使用受控登录凭据创建带运行标识的星火 Agent 会话。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 20000,
+        "producesResource": true,
+        "cleanupAction": "conversation.delete",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "title"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["conversationId", "title"],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "title": { "type": "string" }
+          }
+        }
+      },
+      {
+        "key": "conversation.assert-recent",
+        "name": "校验最近会话",
+        "description": "验证新会话出现在最近会话列表的首个非置顶位置。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 20000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "conversationId", "title"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["conversationId", "listed", "recentPosition", "messageCount"],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "listed": { "const": true },
+            "recentPosition": { "type": "integer", "minimum": 0 },
+            "messageCount": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      {
+        "key": "conversation.delete",
+        "name": "删除会话",
+        "description": "重新登录后按会话 ID 执行幂等清理，可用于 finally 与独立补偿任务。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 20000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "conversationId"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["conversationId", "deleted"],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "deleted": { "type": "boolean" },
+            "alreadyMissing": { "type": "boolean" }
+          }
+        }
+      }
+    ],
     "assertions": [],
     "fixtures": [],
     "telemetry": []

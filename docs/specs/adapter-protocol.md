@@ -23,12 +23,16 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
   "capabilities": {
-    "actions": [],
+    "actions": [
+      { "key": "conversation.create" },
+      { "key": "conversation.assert-recent" },
+      { "key": "conversation.delete" }
+    ],
     "assertions": [],
     "fixtures": [],
     "telemetry": ["conversation", "tool-call", "document-hit", "final-answer"]
@@ -180,3 +184,9 @@ telemetry.*
 ```
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
+
+当前 `0.2.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent` 和
+`conversation.delete`。三个动作只调用适配器内固定的 `/trade/api` 路径，所有请求与重定向复用平台
+allowlist 校验；登录 Token 只保留在动作内存中，不进入输出、日志、资源台账或证据。创建动作必须登记
+`spark-x-agent-conversation` 资源，删除动作会重新登录，因此同一定义既可用于普通 `finally`，也可由独立
+补偿 Worker 在原 Worker 中断后执行。HTTP 404 作为已经清理成功处理，不触发掩盖根因的重试。

@@ -5,6 +5,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@spark-x-test/adapter-spark-x-agent": fileURLToPath(
+        new URL("./adapters/spark-x-agent/src/index.ts", import.meta.url),
+      ),
       "@spark-x-test/contracts": fileURLToPath(
         new URL("./packages/contracts/src/index.ts", import.meta.url),
       ),
