@@ -93,4 +93,6 @@
 与 Worker 中断后的独立补偿共用同一删除动作。测试环境资产由
 `scripts/provision-spark-x-agent-conversation-p0.ts` 幂等创建；脚本同时维护独立 CONV 诊断套件和当前含两条
 案例的 `spark-x-agent-core-smoke`，从文件或标准输入读取管理员密码，只向平台密钥库提交且不打印密钥。
+已配置环境可设置 `SPARK_X_AGENT_USE_EXISTING_SECRETS=true`，此时脚本不读取也不更新密钥，仅复用平台密钥库
+中已有的引用值，适合发布后无人值守回归。
 当前进度为核心冒烟 2/10～12；仍以跨七个模块的 P0 全部落地为完成条件。

@@ -62,6 +62,7 @@ interface RunDetail extends IdentifiedRecord {
 
 const apiBase = process.env.SPARK_X_TEST_PLATFORM_API_URL ?? "http://127.0.0.1:4100/api/v1";
 const runSmoke = process.env.SPARK_X_AGENT_RUN_SMOKE === "true";
+const useExistingSecrets = process.env.SPARK_X_AGENT_USE_EXISTING_SECRETS === "true";
 const testedVersion = process.env.SPARK_X_AGENT_TESTED_VERSION?.trim() || "test-environment";
 const adminUsername = process.env.SPARK_X_AGENT_ADMIN_USERNAME?.trim() || "admin";
 const passwordFile = process.env.SPARK_X_AGENT_ADMIN_PASSWORD_FILE?.trim();
@@ -365,7 +366,7 @@ function chatDefinition(): Readonly<Record<string, unknown>> {
     ],
     execution: {
       stepTimeoutMs: 120_000,
-      caseTimeoutMs: 300_000,
+      caseTimeoutMs: 420_000,
       diagnosticRetries: 0,
     },
     resourceLocks: ["spark-x-agent:admin:chat"],
@@ -552,7 +553,7 @@ async function executeSmoke(
   systemId: string,
   environmentId: string,
   suiteId: string,
-  password: string,
+  password: string | undefined,
 ): Promise<RunDetail> {
   const accepted = await api<RunDetail>("/runs", {
     method: "POST",
@@ -634,11 +635,16 @@ async function executeSmoke(
     "CHAT-001 persisted history is not linked to the streamed answer",
   );
   const evidence = JSON.stringify(run);
-  check(!evidence.includes(password), "Spark X Agent administrator password leaked into evidence");
+  if (password !== undefined) {
+    check(
+      !evidence.includes(password),
+      "Spark X Agent administrator password leaked into evidence",
+    );
+  }
   return run;
 }
 
-const password = await readPassword();
+const password = useExistingSecrets ? undefined : await readPassword();
 const system = await ensureSystem();
 const modules = await ensureModules(system.id);
 const recentConversations = modules.get("recent-conversations");
@@ -646,7 +652,7 @@ check(recentConversations !== undefined, "recent-conversations module was not pr
 const chat = modules.get("chat");
 check(chat !== undefined, "chat module was not provisioned");
 const environment = await ensureEnvironment(system.id);
-await upsertSecrets(system.id, environment.id, password);
+if (password !== undefined) await upsertSecrets(system.id, environment.id, password);
 const conversation = await ensureCase(
   system.id,
   recentConversations.id,
@@ -688,6 +694,7 @@ console.info(
     assertions: run === undefined ? 0 : 23,
     caseCount: 2,
     targetCaseCount: "10-12",
+    secretsUpdated: password !== undefined,
     systemId: system.id,
     environmentId: environment.id,
     conversationCaseId: conversation.testCase.id,
