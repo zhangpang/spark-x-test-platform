@@ -212,9 +212,10 @@ function ArtifactPreviewDialog(
   }
 
   function handleDialogClosed(): void {
-    triggerRef.current?.focus();
+    const trigger = triggerRef.current;
     triggerRef.current = null;
     props.onClose();
+    if (trigger !== null) window.requestAnimationFrame(() => trigger.focus());
   }
 
   return (
