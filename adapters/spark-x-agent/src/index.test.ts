@@ -1,4 +1,4 @@
-import type { HttpExecutionEnvironment } from "@spark-x-test/executors";
+import { ExecutorFailure, type HttpExecutionEnvironment } from "@spark-x-test/executors";
 import { describe, expect, it, vi } from "vitest";
 
 import { executeSparkXAgentAction, sparkXAgentAdapterManifest } from "./index.js";
@@ -138,17 +138,21 @@ describe("spark-x-agent adapter", () => {
       }),
     );
 
-    await expect(
-      executeSparkXAgentAction(
+    let caught: unknown;
+    try {
+      await executeSparkXAgentAction(
         "adapter:spark-x-agent/conversation.delete",
         environment,
         { ...credentials, conversationId },
         variables,
         { timeoutMs: 5_000, fetcher },
-      ),
-    ).rejects.toMatchObject({
-      failure: expect.objectContaining({ code: "TARGET_NOT_ALLOWED" }),
-    });
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ExecutorFailure);
+    if (!(caught instanceof ExecutorFailure)) throw new Error("expected ExecutorFailure");
+    expect(caught.failure.code).toBe("TARGET_NOT_ALLOWED");
     expect(fetcher).toHaveBeenCalledOnce();
   });
 

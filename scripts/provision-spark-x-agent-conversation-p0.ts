@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 interface IdentifiedRecord {
@@ -72,13 +73,7 @@ function check(condition: unknown, message: string): asserts condition {
 async function readPassword(): Promise<string> {
   const raw =
     passwordFile === undefined || passwordFile === ""
-      ? await (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of process.stdin) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
-          return Buffer.concat(chunks).toString("utf8");
-        })()
+      ? readFileSync(0, "utf8")
       : await readFile(passwordFile, "utf8");
   const password = raw.replace(/[\r\n]+$/u, "");
   check(password.length >= 12, "Spark X Agent administrator password is missing or invalid");
@@ -337,12 +332,9 @@ async function ensureCase(
   environmentId: string,
 ): Promise<Readonly<{ testCase: CaseRecord; version: CaseVersionRecord }>> {
   const definition = conversationDefinition();
-  const cases = (
-    await api<{ readonly items: CaseRecord[] }>(`/test-cases?systemId=${systemId}`)
-  ).body.items;
-  let testCase = cases.find(
-    (candidate) => candidate.name === "CONV-001 最近会话创建、排序与清理",
-  );
+  const cases = (await api<{ readonly items: CaseRecord[] }>(`/test-cases?systemId=${systemId}`))
+    .body.items;
+  let testCase = cases.find((candidate) => candidate.name === "CONV-001 最近会话创建、排序与清理");
   let version: CaseVersionRecord;
   if (testCase === undefined) {
     testCase = (
@@ -356,9 +348,8 @@ async function ensureCase(
       })
     ).body;
     check(testCase.currentDraftVersionId !== null, "new case does not have a draft version");
-    const createdVersions = (
-      await api<CaseVersionRecord[]>(`/test-cases/${testCase.id}/versions`)
-    ).body;
+    const createdVersions = (await api<CaseVersionRecord[]>(`/test-cases/${testCase.id}/versions`))
+      .body;
     const createdVersion = createdVersions.find(
       (candidate) => candidate.id === testCase?.currentDraftVersionId,
     );
@@ -411,9 +402,7 @@ async function ensureSuite(systemId: string, caseId: string): Promise<SuiteRecor
     defaultDiagnosticRetries: 0,
   };
   const suites = (await api<{ readonly items: SuiteRecord[] }>("/test-suites")).body.items;
-  const existing = suites.find(
-    (suite) => suite.systemId === systemId && suite.key === input.key,
-  );
+  const existing = suites.find((suite) => suite.systemId === systemId && suite.key === input.key);
   return existing === undefined
     ? (await api<SuiteRecord>("/test-suites", { method: "POST", body: input })).body
     : (
@@ -463,7 +452,10 @@ async function executeSmoke(
   check(run.cases[0]?.result === "passed", "Spark X Agent P0 run case did not pass");
   check(run.cases[0]?.cleanupStatus === "passed", "Spark X Agent P0 finally cleanup did not pass");
   check(run.steps.length === 3, "Spark X Agent P0 did not record two main steps and finally");
-  check(run.steps.every((step) => step.status === "passed"), "Spark X Agent P0 step failed");
+  check(
+    run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent P0 step failed",
+  );
   check(
     run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
       [
@@ -492,11 +484,7 @@ const recentConversations = modules.get("recent-conversations");
 check(recentConversations !== undefined, "recent-conversations module was not provisioned");
 const environment = await ensureEnvironment(system.id);
 await upsertSecrets(system.id, environment.id, password);
-const { testCase, version } = await ensureCase(
-  system.id,
-  recentConversations.id,
-  environment.id,
-);
+const { testCase, version } = await ensureCase(system.id, recentConversations.id, environment.id);
 const suite = await ensureSuite(system.id, testCase.id);
 const run = runSmoke
   ? await executeSmoke(system.id, environment.id, suite.id, password)

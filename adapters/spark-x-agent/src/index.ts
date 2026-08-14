@@ -168,8 +168,7 @@ function apiFailure(code: string, message: string, status?: number): ExecutorFai
   return new ExecutorFailure({
     code,
     message,
-    classification:
-      status === 401 || status === 403 ? "environment_failed" : "product_failed",
+    classification: status === 401 || status === 403 ? "environment_failed" : "product_failed",
   });
 }
 
@@ -199,11 +198,16 @@ async function executeSparkXAgentRequest(
   signal: AbortSignal | undefined,
   fetcher: typeof fetch | undefined,
 ): Promise<HttpExecutionResult> {
-  return executeHttpRequest(environment, parameters, {}, {
-    timeoutMs,
-    ...(signal === undefined ? {} : { signal }),
-    ...(fetcher === undefined ? {} : { fetcher }),
-  });
+  return executeHttpRequest(
+    environment,
+    parameters,
+    {},
+    {
+      timeoutMs,
+      ...(signal === undefined ? {} : { signal }),
+      ...(fetcher === undefined ? {} : { fetcher }),
+    },
+  );
 }
 
 async function login(

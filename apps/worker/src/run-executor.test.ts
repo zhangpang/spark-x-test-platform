@@ -883,16 +883,15 @@ describe("run worker", () => {
       summary: { passed: 1 },
     });
 
-    expect(store.registerResource).toHaveBeenCalledWith(
-      job.runId,
-      expect.objectContaining({
-        resourceType: "spark-x-agent-conversation",
-        systemResourceId: conversationId,
-        cleanupDefinition: expect.objectContaining({
-          action: "adapter:spark-x-agent/conversation.delete",
-        }),
-      }),
-    );
+    const registeredResourceCall = vi.mocked(store.registerResource).mock.calls[0];
+    expect(registeredResourceCall?.[0]).toBe(job.runId);
+    expect(registeredResourceCall?.[1]).toMatchObject({
+      resourceType: "spark-x-agent-conversation",
+      systemResourceId: conversationId,
+      cleanupDefinition: {
+        action: "adapter:spark-x-agent/conversation.delete",
+      },
+    });
     const evidence = JSON.stringify(vi.mocked(store.recordStep).mock.calls);
     expect(evidence).not.toContain(password);
     expect(evidence).not.toContain("adapter-memory-only-token-value");
@@ -989,7 +988,7 @@ describe("run worker", () => {
       completeCompensation: vi.fn(() => Promise.resolve()),
     } as unknown as CompensationExecutionStore;
     const fetchMock = vi
-      .fn()
+      .fn<typeof fetch>()
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({ success: true, data: { token: "compensation-memory-token" } }),

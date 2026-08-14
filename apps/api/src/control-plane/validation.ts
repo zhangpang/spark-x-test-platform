@@ -50,10 +50,7 @@ const sparkXAgentActionLevels = new Map<string, ActionLevel>([
   ["adapter:spark-x-agent/conversation.delete", "dangerous"],
 ]);
 const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
-  [
-    "adapter:spark-x-agent/conversation.create",
-    new Set(["username", "password", "title"]),
-  ],
+  ["adapter:spark-x-agent/conversation.create", new Set(["username", "password", "title"])],
   [
     "adapter:spark-x-agent/conversation.assert-recent",
     new Set(["username", "password", "conversationId", "title"]),
@@ -295,7 +292,7 @@ function validateSparkXAgentAction(
     });
   }
   for (const name of allowed) {
-    if (typeof params[name] !== "string" || (params[name] as string).trim() === "") {
+    if (typeof params[name] !== "string" || params[name].trim() === "") {
       issues.push({
         severity: "error",
         code: "ADAPTER_PARAMETER_INVALID",

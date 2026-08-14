@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import {
-  executeSparkXAgentAction,
-  sparkXAgentActions,
-} from "@spark-x-test/adapter-spark-x-agent";
+import { executeSparkXAgentAction, sparkXAgentActions } from "@spark-x-test/adapter-spark-x-agent";
 import type {
   CaseResult,
   CleanupStatus,
