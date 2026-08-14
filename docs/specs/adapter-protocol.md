@@ -187,9 +187,11 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.4.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
+当前 `0.5.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
 `chat.assert-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
-`conversation.delete`。动作只调用适配器内固定的 `/trade/api` 路径，所有请求与
+`conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
+`knowledge-base.attach-upload`、`knowledge-base.wait-ready` 和 `knowledge-base.cleanup`。动作只调用适配器内
+固定的 `/trade/api` 与 `/trade-domain-api` 路径，所有请求与
 重定向执行环境 allowlist 校验；登录 Token、用户密码和模型回答正文都不进入输出、日志、资源台账或
 结构化证据。`chat.ask` 只向此前已创建并登记的测试会话发送消息，将 SSE 限制在 1 MB 内，要求流中会话
 ID 与登记 ID 一致、存在内容事件和唯一终态 `done`，并只输出事件计数、长度与最终回答 SHA-256；
@@ -205,3 +207,11 @@ SHA-256。参数、结果、最终回答、凭据和 Token 均不进入平台证
 `builtin-demo` 未上线或目录不完整属于测试环境前置条件失败，稳定归类为 `environment_failed`；TOOL-002 在
 登记会话资源后、模型调用前重复执行该前置检查，既避免把环境缺口误报为模型或产品失败，也保证失败后
 `finally` 已持有可清理的会话 ID。
+
+KNOWLEDGE-BASE 动作不接受文件路径、文件内容、URL 或脚本参数；上传内容只能由适配器仓库代码生成固定的
+小型 PDF，并以知识库 UUID 作为幂等键。短期签名解析源只在 Worker 内存中从原始文档接口传递给知识库接口，
+不会进入输出或证据。完成判定同时核对知识库文档计数、解析终态、单一当前版本、Parser 版本和原始 PDF
+SHA-256。创建动作只登记一个 `spark-x-agent-knowledge-base` 顶层资源；统一清理动作根据该 UUID 恢复原始上传，
+先删除知识文档与 Parser 资源，再删除原始上传并归档知识库，因此普通 `finally` 和 Worker 中断后的独立补偿
+不依赖中间步骤是否完成捕获。解析服务缺失、配置错误或 5xx 归为 `environment_failed`，首次失败不会被清理
+或重试覆盖。

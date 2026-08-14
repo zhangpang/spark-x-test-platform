@@ -73,6 +73,7 @@
 
 - `spark-x-agent-conversation-p0`：开发期可独立验收的 `CONV-001` 纵向切片；完成核心冒烟后仍保留为快速诊断套件；
 - `spark-x-agent-tools-p0`：`TOOL-001/002` 内置只读工具目录、调用、结果回填、历史证据与清理闭环；
+- `spark-x-agent-knowledge-base-p0`：`KB-001` 固定 PDF 上传、解析版本和内容哈希、资源登记与完整清理闭环；
 - `spark-x-agent-core-smoke`：所有 P0 中每个模块至少一个主路径，目标 10～12 个案例；
 - `spark-x-agent-full-regression`：全部 32 个案例；
 - 每个模块独立套件：聊天、工具、知识库、Skill、MCP、自动任务、最近会话；
@@ -89,13 +90,15 @@
 
 ## 10. 当前实现检查点
 
-`CONV-001`、`CHAT-001` 与 `TOOL-001/002` 已具备用例定义和受信任适配器执行闭环。CONV 覆盖创建会话、
+`CONV-001`、`CHAT-001`、`TOOL-001/002` 与 `KB-001` 已具备用例定义和受信任适配器执行闭环。CONV 覆盖创建会话、
 最近排序和清理；CHAT 覆盖真实模型 SSE 终态、回答哈希、历史持久化一致性和清理；TOOL 覆盖普通用户工具
 目录的凭据边界、管理员目录的只读风险策略、单次 `builtin-demo__calculator` 参数与结果、结果进入最终回复，
-以及消息历史和公开执行轨迹与流式证据的 SHA-256 关联。会话型案例都登记资源台账，普通 `finally` 与 Worker
+以及消息历史和公开执行轨迹与流式证据的 SHA-256 关联。KB 仅上传适配器生成的固定 PDF，校验知识文档解析
+终态、单一当前版本、Parser 版本和文件 SHA-256，并通过一个顶层知识库资源完成知识文档、Parser、原始上传和
+知识库的统一清理。会话型案例和知识库案例都登记资源台账，普通 `finally` 与 Worker
 中断后的独立补偿共用同一删除动作。测试环境资产由
-`scripts/provision-spark-x-agent-conversation-p0.ts` 幂等创建；脚本同时维护 CONV、TOOL 诊断套件和当前含四条
+`scripts/provision-spark-x-agent-conversation-p0.ts` 幂等创建；脚本同时维护 CONV、TOOL、KB 诊断套件和当前含五条
 案例的 `spark-x-agent-core-smoke`，从文件或标准输入读取管理员密码，只向平台密钥库提交且不打印密钥。
 已配置环境可设置 `SPARK_X_AGENT_USE_EXISTING_SECRETS=true`，此时脚本不读取也不更新密钥，仅复用平台密钥库
 中已有的引用值，适合发布后无人值守回归。
-当前进度为核心冒烟 4/10～12；仍以跨七个模块的 P0 全部落地为完成条件。
+当前进度为核心冒烟 5/10～12；仍以跨七个模块的 P0 全部落地为完成条件。

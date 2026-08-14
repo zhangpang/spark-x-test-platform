@@ -62,6 +62,7 @@ interface RunDetail extends IdentifiedRecord {
 
 const apiBase = process.env.SPARK_X_TEST_PLATFORM_API_URL ?? "http://127.0.0.1:4100/api/v1";
 const runSmoke = process.env.SPARK_X_AGENT_RUN_SMOKE === "true";
+const runKnowledgeSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_SMOKE === "true";
 const useExistingSecrets = process.env.SPARK_X_AGENT_USE_EXISTING_SECRETS === "true";
 const testedVersion = process.env.SPARK_X_AGENT_TESTED_VERSION?.trim() || "test-environment";
 const adminUsername = process.env.SPARK_X_AGENT_ADMIN_USERNAME?.trim() || "admin";
@@ -187,7 +188,7 @@ async function ensureEnvironment(systemId: string): Promise<EnvironmentRecord> {
         protocol: "http",
         host: "192.168.110.136",
         ports: [80],
-        pathPrefixes: ["/trade/"],
+        pathPrefixes: ["/trade/", "/trade-domain-api/"],
       },
     ],
     timezone: "Asia/Shanghai",
@@ -629,6 +630,136 @@ function toolInvocationDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function knowledgeBaseDefinition(): Readonly<Record<string, unknown>> {
+  const title = "spark-x-kb-${run.id}.pdf";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "KB-001 固定 PDF 入库、解析证据与完整清理",
+      description:
+        "创建带 run_id 的私有知识库，仅上传适配器内置 PDF，校验解析版本与内容哈希，并完整删除文档、原始上传和知识库。",
+      systemKey: "spark-x-agent",
+      moduleKey: "knowledge-base",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "knowledge-base", "p0", "core-smoke", "fixed-fixture"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 180_000,
+      caseTimeoutMs: 480_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:knowledge-base"],
+    steps: [
+      {
+        id: "create-knowledge-base",
+        name: "创建并登记私有知识库",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          name: "spark-x-kb-${run.id}",
+          description: "Spark X Test Platform KB-001 fixed fixture",
+        },
+        capture: { "knowledge-base-id": "$.knowledgeBaseId" },
+        resource: {
+          type: "spark-x-agent-knowledge-base",
+          id: "${step.knowledge-base-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/knowledge-base.cleanup",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              knowledgeBaseId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "upload-knowledge-fixture",
+        name: "上传适配器内置固定 PDF",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.upload-fixture",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.knowledge-base-id}",
+        },
+        capture: {
+          "uploaded-document-id": "$.uploadedDocumentId",
+          "fixture-sha256": "$.fixtureSha256",
+        },
+      },
+      {
+        id: "attach-knowledge-fixture",
+        name: "以内存短期源地址绑定固定 PDF",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.attach-upload",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.knowledge-base-id}",
+          uploadedDocumentId: "${step.uploaded-document-id}",
+          title,
+        },
+        capture: { "knowledge-document-id": "$.knowledgeDocumentId" },
+      },
+      {
+        id: "wait-knowledge-ready",
+        name: "校验解析终态、版本和内容哈希",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.wait-ready",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.knowledge-base-id}",
+          knowledgeDocumentId: "${step.knowledge-document-id}",
+          expectedFixtureSha256: "${step.fixture-sha256}",
+          expectedTitle: title,
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "cleanup-knowledge-base",
+        name: "删除知识文档与原始上传并归档知识库",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.cleanup",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.knowledge-base-id}",
+        },
+      },
+    ],
+  };
+}
+
 async function ensureCase(
   systemId: string,
   moduleId: string,
@@ -728,7 +859,7 @@ async function ensureSuite(
 }
 
 async function waitForRun(runId: string): Promise<RunDetail> {
-  const deadline = Date.now() + 600_000;
+  const deadline = Date.now() + 900_000;
   let last: RunDetail | undefined;
   while (Date.now() < deadline) {
     last = (await api<RunDetail>(`/runs/${runId}`)).body;
@@ -760,9 +891,9 @@ async function executeSmoke(
   check(accepted.status === 202, "Spark X Agent core smoke run was not newly accepted");
   const run = await waitForRun(accepted.body.id);
   check(run.gateResult === "passed", `Spark X Agent core smoke gate is ${String(run.gateResult)}`);
-  check(run.summary.passed === 4, "Spark X Agent core smoke cases did not all pass");
+  check(run.summary.passed === 5, "Spark X Agent core smoke cases did not all pass");
   check(run.firstFailure === null, "Spark X Agent core smoke retained an unexpected first failure");
-  check(run.cases.length === 4, "Spark X Agent core smoke run case linkage is incomplete");
+  check(run.cases.length === 5, "Spark X Agent core smoke run case linkage is incomplete");
   check(
     run.cases.every((item) => item.result === "passed"),
     "Spark X Agent core smoke case failed",
@@ -772,8 +903,8 @@ async function executeSmoke(
     "Spark X Agent core smoke finally cleanup did not pass",
   );
   check(
-    run.steps.length === 13,
-    "Spark X Agent core smoke did not record ten main steps and three finally steps",
+    run.steps.length === 18,
+    "Spark X Agent core smoke did not record fourteen main steps and four finally steps",
   );
   check(
     run.steps.every((step) => step.status === "passed"),
@@ -795,12 +926,20 @@ async function executeSmoke(
         "main:adapter:spark-x-agent/tool.invoke-safe",
         "main:adapter:spark-x-agent/tool.assert-history",
         "finally:adapter:spark-x-agent/conversation.delete",
+        "main:adapter:spark-x-agent/knowledge-base.create",
+        "main:adapter:spark-x-agent/knowledge-base.upload-fixture",
+        "main:adapter:spark-x-agent/knowledge-base.attach-upload",
+        "main:adapter:spark-x-agent/knowledge-base.wait-ready",
+        "finally:adapter:spark-x-agent/knowledge-base.cleanup",
       ].join(","),
     "Spark X Agent core smoke structured step sequence is incorrect",
   );
-  check(run.resources.length === 3, "Spark X Agent core smoke resource ledger linkage is missing");
+  check(run.resources.length === 4, "Spark X Agent core smoke resource ledger linkage is missing");
   check(
-    run.resources.every((resource) => resource.resourceType === "spark-x-agent-conversation"),
+    run.resources.filter((resource) => resource.resourceType === "spark-x-agent-conversation")
+      .length === 3 &&
+      run.resources.filter((resource) => resource.resourceType === "spark-x-agent-knowledge-base")
+        .length === 1,
     "Spark X Agent core smoke resource type is incorrect",
   );
   check(
@@ -882,6 +1021,7 @@ async function executeSmoke(
         toolInvocation.outputSummary.finalContentSha256,
     "TOOL-002 persisted messages or public trace are not linked to the streamed evidence",
   );
+  assertKnowledgeEvidence(run);
   const evidence = JSON.stringify(run);
   if (password !== undefined) {
     check(
@@ -897,6 +1037,132 @@ async function executeSmoke(
   return run;
 }
 
+function assertKnowledgeEvidence(run: RunDetail): void {
+  const upload = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/knowledge-base.upload-fixture",
+  );
+  const attach = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/knowledge-base.attach-upload",
+  );
+  const ready = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/knowledge-base.wait-ready",
+  );
+  const cleanup = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/knowledge-base.cleanup",
+  );
+  check(
+    upload?.outputSummary?.uploaded === true &&
+      typeof upload.outputSummary.uploadedDocumentId === "string" &&
+      typeof upload.outputSummary.fixtureSizeBytes === "number" &&
+      upload.outputSummary.fixtureSizeBytes > 0 &&
+      typeof upload.outputSummary.fixtureSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(upload.outputSummary.fixtureSha256) &&
+      typeof upload.outputSummary.fileNameSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(upload.outputSummary.fileNameSha256),
+    "KB-001 fixed upload evidence is incomplete",
+  );
+  check(
+    attach?.outputSummary?.attached === true &&
+      attach.outputSummary.uploadedDocumentId === upload.outputSummary.uploadedDocumentId &&
+      typeof attach.outputSummary.knowledgeDocumentId === "string" &&
+      typeof attach.outputSummary.documentStatus === "string" &&
+      typeof attach.outputSummary.titleSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(attach.outputSummary.titleSha256),
+    "KB-001 attach evidence is incomplete",
+  );
+  check(
+    ready?.outputSummary?.ready === true &&
+      ready.outputSummary.documentStatus === "completed" &&
+      ready.outputSummary.documentCount === 1 &&
+      ready.outputSummary.readyDocumentCount === 1 &&
+      ready.outputSummary.currentVersionNumber === 1 &&
+      ready.outputSummary.versionCount === 1 &&
+      ready.outputSummary.parserVersionPresent === true &&
+      ready.outputSummary.contentHashMatched === true &&
+      ready.outputSummary.titleMatched === true &&
+      ready.outputSummary.fixtureSha256 === upload.outputSummary.fixtureSha256,
+    "KB-001 parser version evidence is incomplete or not linked to the upload hash",
+  );
+  check(
+    cleanup?.outputSummary?.cleaned === true &&
+      cleanup.outputSummary.knowledgeDocumentDeleteCount === 1 &&
+      cleanup.outputSummary.rawDocumentDeleted === true &&
+      cleanup.outputSummary.knowledgeBaseArchived === true,
+    "KB-001 full cleanup evidence is incomplete",
+  );
+  const evidence = JSON.stringify({ upload, attach, ready, cleanup });
+  check(
+    !evidence.includes("source_url") &&
+      !evidence.includes("parser-source") &&
+      !evidence.includes("SPARK_X_KB_FIXTURE") &&
+      !evidence.includes("B2C-KB-001") &&
+      !evidence.includes("AMOUNT_CNY"),
+    "KB-001 signed source URL or fixture contents leaked into structured evidence",
+  );
+}
+
+async function executeKnowledgeSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-knowledge-base-p0-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-knowledge-base-p0-verification",
+      priority: 95,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent knowledge-base run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(
+    run.gateResult === "passed",
+    `Spark X Agent knowledge-base gate is ${String(run.gateResult)}`,
+  );
+  check(run.summary.passed === 1, "Spark X Agent knowledge-base case did not pass");
+  check(run.firstFailure === null, "Spark X Agent knowledge-base retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent knowledge-base case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/knowledge-base.create",
+        "main:adapter:spark-x-agent/knowledge-base.upload-fixture",
+        "main:adapter:spark-x-agent/knowledge-base.attach-upload",
+        "main:adapter:spark-x-agent/knowledge-base.wait-ready",
+        "finally:adapter:spark-x-agent/knowledge-base.cleanup",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent knowledge-base structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 1 &&
+      run.resources[0]?.resourceType === "spark-x-agent-knowledge-base" &&
+      run.resources[0].cleanupStatus === "passed" &&
+      run.resources[0].cleanupDefinition.action === "adapter:spark-x-agent/knowledge-base.cleanup",
+    "Spark X Agent knowledge-base resource ledger or cleanup definition is incomplete",
+  );
+  check(run.cleanupJob === null, "normal knowledge-base run unexpectedly required compensation");
+  assertKnowledgeEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into KB evidence",
+    );
+  }
+  return run;
+}
+
 const password = useExistingSecrets ? undefined : await readPassword();
 const system = await ensureSystem();
 const modules = await ensureModules(system.id);
@@ -906,6 +1172,8 @@ const chat = modules.get("chat");
 check(chat !== undefined, "chat module was not provisioned");
 const tools = modules.get("tools");
 check(tools !== undefined, "tools module was not provisioned");
+const knowledgeBase = modules.get("knowledge-base");
+check(knowledgeBase !== undefined, "knowledge-base module was not provisioned");
 const environment = await ensureEnvironment(system.id);
 if (password !== undefined) await upsertSecrets(system.id, environment.id, password);
 const conversation = await ensureCase(
@@ -940,6 +1208,14 @@ const toolInvocationCase = await ensureCase(
   toolInvocationDefinition(),
   "新增安全工具调用、结果回填和历史公开轨迹证据闭环",
 );
+const knowledgeBaseCase = await ensureCase(
+  system.id,
+  knowledgeBase.id,
+  environment.id,
+  "KB-001 固定 PDF 入库、解析证据与完整清理",
+  knowledgeBaseDefinition(),
+  "新增固定 PDF 上传、知识解析版本证据和统一清理 P0 闭环",
+);
 const conversationSuite = await ensureSuite(
   system.id,
   "spark-x-agent-conversation-p0",
@@ -954,28 +1230,43 @@ const toolSuite = await ensureSuite(
   "TOOL-001/002 内置只读工具目录、调用、结果回填、历史证据与会话清理闭环。",
   [toolCatalogCase.testCase.id, toolInvocationCase.testCase.id],
 );
+const knowledgeBaseSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-knowledge-base-p0",
+  "星火 Agent 知识库 P0 纵向切片",
+  "KB-001 固定 PDF 上传、解析版本与内容哈希、资源登记和完整清理闭环。",
+  [knowledgeBaseCase.testCase.id],
+);
 const suite = await ensureSuite(
   system.id,
   "spark-x-agent-core-smoke",
   "星火 Agent 核心冒烟",
-  "发布后核心冒烟套件；当前包含 CONV-001、CHAT-001 与 TOOL-001/002，后续按模块扩充到 10～12 条 P0。",
+  "发布后核心冒烟套件；当前包含 CONV-001、CHAT-001、TOOL-001/002 与 KB-001，后续按模块扩充到 10～12 条 P0。",
   [
     conversation.testCase.id,
     chatCase.testCase.id,
     toolCatalogCase.testCase.id,
     toolInvocationCase.testCase.id,
+    knowledgeBaseCase.testCase.id,
   ],
+);
+check(
+  !(runSmoke && runKnowledgeSmoke),
+  "SPARK_X_AGENT_RUN_SMOKE and SPARK_X_AGENT_RUN_KNOWLEDGE_SMOKE cannot both be true",
 );
 const run = runSmoke
   ? await executeSmoke(system.id, environment.id, suite.id, password)
-  : undefined;
+  : runKnowledgeSmoke
+    ? await executeKnowledgeSmoke(system.id, environment.id, knowledgeBaseSuite.id, password)
+    : undefined;
+const scenario = runKnowledgeSmoke ? "spark-x-agent-knowledge-base-p0" : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
     status: run === undefined ? "provisioned" : "passed",
-    scenario: "spark-x-agent-core-smoke",
-    assertions: run === undefined ? 0 : 38,
-    caseCount: 4,
+    scenario,
+    assertions: run === undefined ? 0 : runKnowledgeSmoke ? 16 : 50,
+    caseCount: 5,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
     systemId: system.id,
@@ -988,8 +1279,11 @@ console.info(
     toolCatalogCaseVersionId: toolCatalogCase.version.id,
     toolInvocationCaseId: toolInvocationCase.testCase.id,
     toolInvocationCaseVersionId: toolInvocationCase.version.id,
+    knowledgeBaseCaseId: knowledgeBaseCase.testCase.id,
+    knowledgeBaseCaseVersionId: knowledgeBaseCase.version.id,
     conversationSuiteId: conversationSuite.id,
     toolSuiteId: toolSuite.id,
+    knowledgeBaseSuiteId: knowledgeBaseSuite.id,
     suiteId: suite.id,
     ...(run === undefined ? {} : { runId: run.id, gateResult: run.gateResult }),
   }),

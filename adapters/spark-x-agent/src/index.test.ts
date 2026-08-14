@@ -13,7 +13,7 @@ const environment: HttpExecutionEnvironment = {
       protocol: "http",
       host: "192.168.110.136",
       ports: [80],
-      pathPrefixes: ["/trade/"],
+      pathPrefixes: ["/trade/", "/trade-domain-api/"],
     },
   ],
 };
@@ -28,6 +28,9 @@ const variables = {
   "run.id": "00000000-0000-4000-8000-000000000201",
 };
 const conversationId = "00000000-0000-4000-8000-000000000202";
+const knowledgeBaseId = "00000000-0000-4000-8000-000000000210";
+const uploadedDocumentId = "00000000-0000-4000-8000-000000000211";
+const knowledgeDocumentId = "00000000-0000-4000-8000-000000000212";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -67,7 +70,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.4.0",
+      version: "0.5.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -94,6 +97,27 @@ describe("spark-x-agent adapter", () => {
           expect.objectContaining({
             key: "tool.assert-history",
             actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "knowledge-base.create",
+            producesResource: true,
+            cleanupAction: "knowledge-base.cleanup",
+          }),
+          expect.objectContaining({
+            key: "knowledge-base.upload-fixture",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "knowledge-base.attach-upload",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "knowledge-base.wait-ready",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "knowledge-base.cleanup",
+            actionLevel: "dangerous",
           }),
           expect.objectContaining({
             key: "conversation.delete",
@@ -882,6 +906,392 @@ describe("spark-x-agent adapter", () => {
       assistantContentSha256: assistantHash,
       assistantFinishReason: "stop",
     });
+  });
+
+  it("creates a traceable private knowledge base with only hashed name evidence", async () => {
+    const name = `spark-x-kb-${variables["run.id"]}`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            id: knowledgeBaseId,
+            name,
+            status: "active",
+            visibility: "private",
+          },
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/knowledge-base.create",
+      environment,
+      {
+        ...credentials,
+        name: "spark-x-kb-${run.id}",
+        description: "fixed fixture",
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      knowledgeBaseId,
+      created: true,
+      active: true,
+      nameSha256: createHash("sha256").update(name).digest("hex"),
+    });
+    expect(urlOf(fetcher.mock.calls[1]?.[0] as URL | RequestInfo)).toBe(
+      "http://192.168.110.136/trade-domain-api/knowledge-bases",
+    );
+    expect(JSON.stringify(output)).not.toContain(name);
+  });
+
+  it("uploads only the built-in PDF fixture and returns bounded hash evidence", async () => {
+    let uploadedBytes: Uint8Array | undefined;
+    let uploadedName: string | undefined;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockImplementationOnce(async (_input, init) => {
+        const form = init?.body;
+        expect(form).toBeInstanceOf(FormData);
+        if (!(form instanceof FormData)) throw new Error("expected multipart form");
+        const rawMetadata = form.get("metadata");
+        const file = form.get("file");
+        expect(typeof rawMetadata).toBe("string");
+        expect(file).toBeInstanceOf(Blob);
+        if (typeof rawMetadata !== "string" || !(file instanceof Blob)) {
+          throw new Error("expected fixed fixture multipart body");
+        }
+        const metadata = JSON.parse(rawMetadata) as Readonly<Record<string, unknown>>;
+        uploadedBytes = new Uint8Array(await file.arrayBuffer());
+        uploadedName = (file as Blob & { readonly name?: string }).name;
+        const contentSha256 = createHash("sha256").update(uploadedBytes).digest("hex");
+        expect(metadata).toEqual({
+          filename: uploadedName,
+          mime_type: "application/pdf",
+          size_bytes: uploadedBytes.byteLength,
+          sha256: contentSha256,
+          conversation_id: null,
+          folder_id: null,
+        });
+        return jsonResponse({
+          success: true,
+          data: {
+            id: uploadedDocumentId,
+            name: uploadedName,
+            size_bytes: uploadedBytes.byteLength,
+            content_sha256: contentSha256,
+          },
+        });
+      });
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/knowledge-base.upload-fixture",
+      environment,
+      { ...credentials, knowledgeBaseId },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(urlOf(fetcher.mock.calls[1]?.[0] as URL | RequestInfo)).toBe(
+      "http://192.168.110.136/trade/api/documents/upload",
+    );
+    expect(new Headers(fetcher.mock.calls[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      knowledgeBaseId,
+    );
+    expect(uploadedName).toBe(`spark-x-kb-${knowledgeBaseId}.pdf`);
+    expect(new TextDecoder().decode(uploadedBytes)).toContain("SPARK_X_KB_FIXTURE");
+    expect(output).toMatchObject({
+      knowledgeBaseId,
+      uploadedDocumentId,
+      uploaded: true,
+      fixtureSizeBytes: uploadedBytes?.byteLength,
+    });
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain("SPARK_X_KB_FIXTURE");
+    expect(serialized).not.toContain("B2C-KB-001");
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("revalidates a fixture upload redirect before resending credentials", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 307,
+          headers: { location: "http://attacker.invalid/collect" },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.upload-fixture",
+        environment,
+        { ...credentials, knowledgeBaseId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: { code: "TARGET_NOT_ALLOWED", classification: "test_failed" },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the signed parser source in memory while attaching the uploaded fixture", async () => {
+    const signedSource =
+      "http://192.168.110.136:9000/parser/source.pdf?X-Amz-Signature=secret-value";
+    const title = `spark-x-kb-${variables["run.id"]}.pdf`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { document_id: uploadedDocumentId, url: signedSource },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            id: knowledgeDocumentId,
+            knowledge_base_id: knowledgeBaseId,
+            rust_document_id: uploadedDocumentId,
+            title,
+            status: "pending",
+            parse_job_id: "parse-job-1",
+          },
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/knowledge-base.attach-upload",
+      environment,
+      {
+        ...credentials,
+        knowledgeBaseId,
+        uploadedDocumentId,
+        title: "spark-x-kb-${run.id}.pdf",
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    const attachBody = fetcher.mock.calls[2]?.[1]?.body;
+    expect(typeof attachBody).toBe("string");
+    if (typeof attachBody !== "string") throw new Error("expected JSON attach body");
+    expect(JSON.parse(attachBody)).toEqual({
+      rust_document_id: uploadedDocumentId,
+      source_url: signedSource,
+      title,
+      metadata: { fixture: "spark-x-test-platform" },
+    });
+    expect(output).toMatchObject({
+      knowledgeBaseId,
+      knowledgeDocumentId,
+      uploadedDocumentId,
+      attached: true,
+      parseJobPresent: true,
+      documentStatus: "pending",
+    });
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain(signedSource);
+    expect(serialized).not.toContain("secret-value");
+  });
+
+  it("links the completed knowledge version to the fixed upload hash", async () => {
+    const fixtureSha256 = "a".repeat(64);
+    const title = `spark-x-kb-${variables["run.id"]}.pdf`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            id: knowledgeDocumentId,
+            knowledge_base_id: knowledgeBaseId,
+            title,
+            status: "completed",
+            current_version_id: "parser-version-1",
+            current_version_number: 1,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            id: knowledgeBaseId,
+            status: "active",
+            document_count: 1,
+            ready_document_count: 1,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                knowledge_document_id: knowledgeDocumentId,
+                version_number: 1,
+                status: "completed",
+                content_hash: fixtureSha256,
+                parser_version_id: "parser-version-1",
+              },
+            ],
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.wait-ready",
+        environment,
+        {
+          ...credentials,
+          knowledgeBaseId,
+          knowledgeDocumentId,
+          expectedFixtureSha256: fixtureSha256,
+          expectedTitle: "spark-x-kb-${run.id}.pdf",
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).resolves.toEqual({
+      knowledgeBaseId,
+      knowledgeDocumentId,
+      ready: true,
+      documentStatus: "completed",
+      documentCount: 1,
+      readyDocumentCount: 1,
+      currentVersionNumber: 1,
+      versionCount: 1,
+      parserVersionPresent: true,
+      contentHashMatched: true,
+      titleMatched: true,
+      fixtureSha256,
+      pollAttempts: 1,
+    });
+  });
+
+  it("classifies parser runtime failures as environment failures", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: false }, 500));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.wait-ready",
+        environment,
+        {
+          ...credentials,
+          knowledgeBaseId,
+          knowledgeDocumentId,
+          expectedFixtureSha256: "a".repeat(64),
+          expectedTitle: "spark-x-kb-${run.id}.pdf",
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_KNOWLEDGE_REFRESH_FAILED",
+        classification: "environment_failed",
+      },
+    });
+  });
+
+  it("deletes knowledge documents and raw upload before archiving the registered base", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { items: [{ id: knowledgeDocumentId, status: "completed" }] },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: {} }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            id: uploadedDocumentId,
+            name: "fixture.pdf",
+            size_bytes: 100,
+            content_sha256: "a".repeat(64),
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: {} }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: {} }));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.cleanup",
+        environment,
+        { ...credentials, knowledgeBaseId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).resolves.toEqual({
+      knowledgeBaseId,
+      cleaned: true,
+      knowledgeDocumentDeleteCount: 1,
+      rawDocumentDeleted: true,
+      knowledgeBaseArchived: true,
+    });
+    expect(
+      fetcher.mock.calls.slice(1).map((call) => ({
+        url: urlOf(call[0] as URL | RequestInfo),
+        method: call[1]?.method,
+      })),
+    ).toEqual([
+      {
+        url: `http://192.168.110.136/trade-domain-api/knowledge-bases/${knowledgeBaseId}/documents?include_archived=true`,
+        method: "GET",
+      },
+      {
+        url: `http://192.168.110.136/trade-domain-api/knowledge-bases/${knowledgeBaseId}/documents/${knowledgeDocumentId}`,
+        method: "DELETE",
+      },
+      {
+        url: `http://192.168.110.136/trade/api/documents/upload-status/${knowledgeBaseId}`,
+        method: "GET",
+      },
+      {
+        url: `http://192.168.110.136/trade/api/documents/${uploadedDocumentId}`,
+        method: "DELETE",
+      },
+      {
+        url: `http://192.168.110.136/trade-domain-api/knowledge-bases/${knowledgeBaseId}`,
+        method: "DELETE",
+      },
+    ]);
   });
 
   it("revalidates redirects before sending credentials to a new target", async () => {

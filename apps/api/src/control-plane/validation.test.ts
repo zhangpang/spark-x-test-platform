@@ -1064,4 +1064,200 @@ describe("M2 asset validation", () => {
       expect.arrayContaining(["ARBITRARY_ADAPTER_INPUT_FORBIDDEN", "RUN_TRACEABILITY_REQUIRED"]),
     );
   });
+
+  it("accepts a fixed-fixture knowledge-base lifecycle and rejects arbitrary upload or cleanup scope", () => {
+    const sparkEnvironment: EnvironmentRecord = {
+      ...environment,
+      systemId: "00000000-0000-4000-8000-000000000010",
+      baseUrl: "http://192.168.110.136/trade/",
+      actionLevel: "dangerous",
+      allowlist: [
+        {
+          protocol: "http",
+          host: "192.168.110.136",
+          ports: [80],
+          pathPrefixes: ["/trade/", "/trade-domain-api/"],
+        },
+      ],
+      adapterKey: "spark-x-agent",
+    };
+    const inputs = [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ];
+    const knowledgeDefinition = definition({
+      metadata: {
+        name: "KB-001 fixed fixture lifecycle",
+        systemKey: "spark-x-agent",
+        moduleKey: "knowledge-base",
+        priority: "P0",
+        classification: "blackbox",
+        actionLevel: "dangerous",
+        tags: ["adapter", "core-smoke", "knowledge-base"],
+      },
+      inputs,
+      execution: {
+        stepTimeoutMs: 180_000,
+        caseTimeoutMs: 480_000,
+        diagnosticRetries: 0,
+      },
+      resourceLocks: ["spark-x-agent:admin:knowledge-base"],
+      steps: [
+        {
+          id: "create-knowledge-base",
+          name: "create knowledge base",
+          kind: "action",
+          action: "adapter:spark-x-agent/knowledge-base.create",
+          timeoutMs: 20_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            name: "spark-x-kb-${run.id}",
+            description: "fixed fixture",
+          },
+          capture: { "knowledge-base-id": "$.knowledgeBaseId" },
+          resource: {
+            type: "spark-x-agent-knowledge-base",
+            id: "${step.knowledge-base-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/knowledge-base.cleanup",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                knowledgeBaseId: "${resource.id}",
+              },
+            },
+          },
+        },
+        {
+          id: "upload-fixture",
+          name: "upload fixture",
+          kind: "action",
+          action: "adapter:spark-x-agent/knowledge-base.upload-fixture",
+          timeoutMs: 180_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            knowledgeBaseId: "${step.knowledge-base-id}",
+          },
+          capture: {
+            "uploaded-document-id": "$.uploadedDocumentId",
+            "fixture-sha256": "$.fixtureSha256",
+          },
+        },
+        {
+          id: "attach-fixture",
+          name: "attach fixture",
+          kind: "action",
+          action: "adapter:spark-x-agent/knowledge-base.attach-upload",
+          timeoutMs: 30_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            knowledgeBaseId: "${step.knowledge-base-id}",
+            uploadedDocumentId: "${step.uploaded-document-id}",
+            title: "spark-x-kb-${run.id}.pdf",
+          },
+          capture: { "knowledge-document-id": "$.knowledgeDocumentId" },
+        },
+        {
+          id: "wait-ready",
+          name: "wait ready",
+          kind: "action",
+          action: "adapter:spark-x-agent/knowledge-base.wait-ready",
+          timeoutMs: 180_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            knowledgeBaseId: "${step.knowledge-base-id}",
+            knowledgeDocumentId: "${step.knowledge-document-id}",
+            expectedFixtureSha256: "${step.fixture-sha256}",
+            expectedTitle: "spark-x-kb-${run.id}.pdf",
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "cleanup-knowledge-base",
+          name: "cleanup knowledge base",
+          kind: "action",
+          action: "adapter:spark-x-agent/knowledge-base.cleanup",
+          timeoutMs: 180_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            knowledgeBaseId: "${step.knowledge-base-id}",
+          },
+        },
+      ],
+    });
+
+    expect(
+      validateDefinition(knowledgeDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "knowledge-base",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const steps = knowledgeDefinition.steps as readonly JsonObject[];
+    const unsafe = {
+      ...knowledgeDefinition,
+      steps: [
+        {
+          ...steps[0],
+          params: {
+            ...(steps[0]?.params as JsonObject),
+            name: "untraceable",
+          },
+          capture: { "knowledge-base-id": "$.wrongId" },
+          resource: {
+            ...(steps[0]?.resource as JsonObject),
+            cleanup: {
+              action: "adapter:spark-x-agent/knowledge-base.cleanup",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                knowledgeBaseId: "00000000-0000-4000-8000-000000000099",
+              },
+            },
+          },
+        },
+        {
+          ...steps[1],
+          params: {
+            ...(steps[1]?.params as JsonObject),
+            file: "../../secret.txt",
+            sourceUrl: "http://attacker.invalid/file",
+            script: "return process.env",
+          },
+        },
+      ],
+      finally: [],
+    } as JsonObject;
+    expect(
+      validateDefinition(unsafe, {
+        systemKey: "spark-x-agent",
+        moduleKey: "knowledge-base",
+        environment: sparkEnvironment,
+      }).issues.map((issue) => issue.code),
+    ).toEqual(
+      expect.arrayContaining([
+        "RUN_TRACEABILITY_REQUIRED",
+        "ADAPTER_RESOURCE_ID_CAPTURE_REQUIRED",
+        "CLEANUP_RESOURCE_SCOPE_REQUIRED",
+        "ARBITRARY_ADAPTER_INPUT_FORBIDDEN",
+      ]),
+    );
+  });
 });

@@ -43,10 +43,16 @@ const availableActions = new Set([
   "adapter:spark-x-agent/tool.assert-safe-catalog",
   "adapter:spark-x-agent/tool.invoke-safe",
   "adapter:spark-x-agent/tool.assert-history",
+  "adapter:spark-x-agent/knowledge-base.create",
+  "adapter:spark-x-agent/knowledge-base.upload-fixture",
+  "adapter:spark-x-agent/knowledge-base.attach-upload",
+  "adapter:spark-x-agent/knowledge-base.wait-ready",
+  "adapter:spark-x-agent/knowledge-base.cleanup",
 ]);
 const availableCompensationActions = new Set([
   "http:request",
   "adapter:spark-x-agent/conversation.delete",
+  "adapter:spark-x-agent/knowledge-base.cleanup",
 ]);
 const availableAssertions = new Set(["status:equals"]);
 const sparkXAgentActionLevels = new Map<string, ActionLevel>([
@@ -58,6 +64,11 @@ const sparkXAgentActionLevels = new Map<string, ActionLevel>([
   ["adapter:spark-x-agent/tool.assert-safe-catalog", "read"],
   ["adapter:spark-x-agent/tool.invoke-safe", "write"],
   ["adapter:spark-x-agent/tool.assert-history", "write"],
+  ["adapter:spark-x-agent/knowledge-base.create", "write"],
+  ["adapter:spark-x-agent/knowledge-base.upload-fixture", "write"],
+  ["adapter:spark-x-agent/knowledge-base.attach-upload", "write"],
+  ["adapter:spark-x-agent/knowledge-base.wait-ready", "write"],
+  ["adapter:spark-x-agent/knowledge-base.cleanup", "dangerous"],
 ]);
 const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
   ["adapter:spark-x-agent/conversation.create", new Set(["username", "password", "title"])],
@@ -111,6 +122,33 @@ const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
       "expectedArgumentsSha256",
       "expectedResultSha256",
     ]),
+  ],
+  [
+    "adapter:spark-x-agent/knowledge-base.create",
+    new Set(["username", "password", "name", "description"]),
+  ],
+  [
+    "adapter:spark-x-agent/knowledge-base.upload-fixture",
+    new Set(["username", "password", "knowledgeBaseId"]),
+  ],
+  [
+    "adapter:spark-x-agent/knowledge-base.attach-upload",
+    new Set(["username", "password", "knowledgeBaseId", "uploadedDocumentId", "title"]),
+  ],
+  [
+    "adapter:spark-x-agent/knowledge-base.wait-ready",
+    new Set([
+      "username",
+      "password",
+      "knowledgeBaseId",
+      "knowledgeDocumentId",
+      "expectedFixtureSha256",
+      "expectedTitle",
+    ]),
+  ],
+  [
+    "adapter:spark-x-agent/knowledge-base.cleanup",
+    new Set(["username", "password", "knowledgeBaseId"]),
   ],
 ]);
 const waitJsonPathPattern = /^\$(?:\.[a-zA-Z0-9_-]+){0,20}$/;
@@ -382,6 +420,20 @@ function validateSparkXAgentAction(
     });
   }
   if (
+    action === "adapter:spark-x-agent/knowledge-base.create" &&
+    (resource === undefined ||
+      resource.type !== "spark-x-agent-knowledge-base" ||
+      !isObject(resource.cleanup) ||
+      resource.cleanup.action !== "adapter:spark-x-agent/knowledge-base.cleanup")
+  ) {
+    issues.push({
+      severity: "error",
+      code: "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
+      path: `${path}.resource`,
+      message: "创建星火 Agent 知识库必须登记专用资源并声明统一知识库补偿。",
+    });
+  }
+  if (
     action === "adapter:spark-x-agent/conversation.create" &&
     typeof params.title === "string" &&
     !params.title.includes("${run.id}")
@@ -391,6 +443,18 @@ function validateSparkXAgentAction(
       code: "RUN_TRACEABILITY_REQUIRED",
       path: `${path}.params.title`,
       message: "测试会话标题必须包含 ${run.id}，以便追踪和残留数据审计。",
+    });
+  }
+  if (
+    action === "adapter:spark-x-agent/knowledge-base.create" &&
+    typeof params.name === "string" &&
+    !params.name.includes("${run.id}")
+  ) {
+    issues.push({
+      severity: "error",
+      code: "RUN_TRACEABILITY_REQUIRED",
+      path: `${path}.params.name`,
+      message: "测试知识库名称必须包含 ${run.id}，以便追踪和残留数据审计。",
     });
   }
   if (
@@ -757,6 +821,26 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
       }
     }
 
+    if (step.action === "adapter:spark-x-agent/knowledge-base.create") {
+      const resource = isObject(step.resource) ? step.resource : undefined;
+      const resourceReference =
+        typeof resource?.id === "string"
+          ? /^\$\{step\.([a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*)\}$/i.exec(resource.id)
+          : null;
+      const capture = isObject(step.capture) ? step.capture : undefined;
+      if (
+        resourceReference?.[1] === undefined ||
+        capture?.[resourceReference[1]] !== "$.knowledgeBaseId"
+      ) {
+        issues.push({
+          severity: "error",
+          code: "ADAPTER_RESOURCE_ID_CAPTURE_REQUIRED",
+          path: `$.steps.${id}.resource.id`,
+          message: "知识库资源 ID 必须精确引用该创建步骤从 $.knowledgeBaseId 捕获的变量。",
+        });
+      }
+    }
+
     if (isJsonArray(step.assertions)) {
       validateReferences(step.assertions, `$.steps.${id}.assertions`);
     }
@@ -797,6 +881,17 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
             message: `资源补偿只能引用 resource.id 或已声明的密钥输入，不能引用 ${reference}。`,
           });
         }
+      }
+      if (
+        cleanup.action === "adapter:spark-x-agent/knowledge-base.cleanup" &&
+        (!isObject(cleanup.params) || cleanup.params.knowledgeBaseId !== "${resource.id}")
+      ) {
+        issues.push({
+          severity: "error",
+          code: "CLEANUP_RESOURCE_SCOPE_REQUIRED",
+          path: `$.steps.${id}.resource.cleanup.params.knowledgeBaseId`,
+          message: "知识库补偿只能使用 ${resource.id} 清理本次登记资源。",
+        });
       }
       if (cleanup.action === "http:request" && isObject(cleanup.params)) {
         const method = cleanup.params.method;
@@ -852,7 +947,8 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
         }
       }
       if (
-        cleanup.action === "adapter:spark-x-agent/conversation.delete" &&
+        (cleanup.action === "adapter:spark-x-agent/conversation.delete" ||
+          cleanup.action === "adapter:spark-x-agent/knowledge-base.cleanup") &&
         isObject(cleanup.params)
       ) {
         issues.push(

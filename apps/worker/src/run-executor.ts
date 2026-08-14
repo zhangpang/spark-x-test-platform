@@ -976,7 +976,8 @@ export async function executeCompensationJob(
       const definition = resource.cleanupDefinition;
       if (
         definition.action !== "http:request" &&
-        definition.action !== "adapter:spark-x-agent/conversation.delete"
+        definition.action !== "adapter:spark-x-agent/conversation.delete" &&
+        definition.action !== "adapter:spark-x-agent/knowledge-base.cleanup"
       ) {
         throw new ExecutorFailure({
           code: "CLEANUP_EXECUTOR_NOT_AVAILABLE",
@@ -1018,7 +1019,12 @@ export async function executeCompensationJob(
           work.snapshot.environment,
           params,
           variables,
-          { timeoutMs: 30_000 },
+          {
+            timeoutMs:
+              definition.action === "adapter:spark-x-agent/knowledge-base.cleanup"
+                ? 180_000
+                : 30_000,
+          },
         );
       }
       await store.markResourceCleanup(resource.id, "passed");

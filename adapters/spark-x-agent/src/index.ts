@@ -19,6 +19,11 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/tool.assert-safe-catalog",
   "adapter:spark-x-agent/tool.invoke-safe",
   "adapter:spark-x-agent/tool.assert-history",
+  "adapter:spark-x-agent/knowledge-base.create",
+  "adapter:spark-x-agent/knowledge-base.upload-fixture",
+  "adapter:spark-x-agent/knowledge-base.attach-upload",
+  "adapter:spark-x-agent/knowledge-base.wait-ready",
+  "adapter:spark-x-agent/knowledge-base.cleanup",
 ] as const;
 
 export type SparkXAgentAction = (typeof sparkXAgentActions)[number];
@@ -405,6 +410,219 @@ const conversationActionCapabilities = [
     },
   },
   {
+    key: "knowledge-base.create",
+    name: "创建知识库测试资源",
+    description: "创建名称含运行标识的私有知识库，并登记统一清理资源。",
+    actionLevel: "write",
+    defaultTimeoutMs: 20_000,
+    producesResource: true,
+    cleanupAction: "knowledge-base.cleanup",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "name", "description"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        name: { type: "string", minLength: 1, maxLength: 256 },
+        description: { type: "string", minLength: 1, maxLength: 4_000 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["knowledgeBaseId", "created", "active", "nameSha256"],
+      properties: {
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        created: { const: true },
+        active: { const: true },
+        nameSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
+    key: "knowledge-base.upload-fixture",
+    name: "上传固定知识库文件",
+    description: "只上传适配器内置的受控 PDF 测试夹具，不接受页面或用例提供的任意文件内容。",
+    actionLevel: "write",
+    defaultTimeoutMs: 180_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "knowledgeBaseId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        knowledgeBaseId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "knowledgeBaseId",
+        "uploadedDocumentId",
+        "uploaded",
+        "fixtureSizeBytes",
+        "fixtureSha256",
+        "fileNameSha256",
+      ],
+      properties: {
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        uploadedDocumentId: { type: "string", format: "uuid" },
+        uploaded: { const: true },
+        fixtureSizeBytes: { type: "integer", minimum: 1, maximum: 1_000_000 },
+        fixtureSha256: { type: "string", minLength: 64, maxLength: 64 },
+        fileNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
+    key: "knowledge-base.attach-upload",
+    name: "将固定文件加入知识库",
+    description: "以内存中的短期解析源地址将已上传夹具绑定到本次运行创建的知识库。",
+    actionLevel: "write",
+    defaultTimeoutMs: 30_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "knowledgeBaseId", "uploadedDocumentId", "title"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        uploadedDocumentId: { type: "string", format: "uuid" },
+        title: { type: "string", minLength: 1, maxLength: 512 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "knowledgeBaseId",
+        "knowledgeDocumentId",
+        "uploadedDocumentId",
+        "attached",
+        "parseJobPresent",
+        "documentStatus",
+        "titleSha256",
+      ],
+      properties: {
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        knowledgeDocumentId: { type: "string", format: "uuid" },
+        uploadedDocumentId: { type: "string", format: "uuid" },
+        attached: { const: true },
+        parseJobPresent: { type: "boolean" },
+        documentStatus: {
+          type: "string",
+          enum: ["pending", "processing", "completed", "failed"],
+        },
+        titleSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
+    key: "knowledge-base.wait-ready",
+    name: "等待知识文档解析就绪",
+    description: "有界轮询知识文档状态，并校验知识库计数、当前版本和内容哈希一致。",
+    actionLevel: "write",
+    defaultTimeoutMs: 180_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "knowledgeBaseId",
+        "knowledgeDocumentId",
+        "expectedFixtureSha256",
+        "expectedTitle",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        knowledgeDocumentId: { type: "string", format: "uuid" },
+        expectedFixtureSha256: { type: "string", minLength: 64, maxLength: 64 },
+        expectedTitle: { type: "string", minLength: 1, maxLength: 512 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "knowledgeBaseId",
+        "knowledgeDocumentId",
+        "ready",
+        "documentStatus",
+        "documentCount",
+        "readyDocumentCount",
+        "currentVersionNumber",
+        "versionCount",
+        "parserVersionPresent",
+        "contentHashMatched",
+        "titleMatched",
+        "fixtureSha256",
+        "pollAttempts",
+      ],
+      properties: {
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        knowledgeDocumentId: { type: "string", format: "uuid" },
+        ready: { const: true },
+        documentStatus: { const: "completed" },
+        documentCount: { const: 1 },
+        readyDocumentCount: { const: 1 },
+        currentVersionNumber: { const: 1 },
+        versionCount: { const: 1 },
+        parserVersionPresent: { const: true },
+        contentHashMatched: { const: true },
+        titleMatched: { const: true },
+        fixtureSha256: { type: "string", minLength: 64, maxLength: 64 },
+        pollAttempts: { type: "integer", minimum: 1, maximum: 120 },
+      },
+    },
+  },
+  {
+    key: "knowledge-base.cleanup",
+    name: "清理知识库测试资源",
+    description: "按已登记知识库 ID 删除其文档与原始上传，并幂等归档知识库。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 180_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "knowledgeBaseId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        knowledgeBaseId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "knowledgeBaseId",
+        "cleaned",
+        "knowledgeDocumentDeleteCount",
+        "rawDocumentDeleted",
+        "knowledgeBaseArchived",
+      ],
+      properties: {
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        cleaned: { const: true },
+        knowledgeDocumentDeleteCount: { type: "integer", minimum: 0 },
+        rawDocumentDeleted: { type: "boolean" },
+        knowledgeBaseArchived: { type: "boolean" },
+        alreadyMissing: { type: "boolean" },
+      },
+    },
+  },
+  {
     key: "conversation.delete",
     name: "删除会话",
     description: "重新登录后按会话 ID 执行幂等清理，可用于 finally 与独立补偿任务。",
@@ -438,7 +656,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.4.0",
+  version: "0.5.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -455,7 +673,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "core-smoke-tools" as const;
+export const sparkXAgentAdapterPhase = "core-smoke-knowledge-base" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -573,6 +791,21 @@ function requiredSha256(
   return value;
 }
 
+function requiredUuid(
+  params: Readonly<Record<string, unknown>>,
+  name: string,
+  variables: Readonly<Record<string, unknown>>,
+): string {
+  const value = requiredString(params, name, variables, 100);
+  if (!uuidPattern.test(value)) {
+    throw assertionFailure(
+      "SPARK_X_AGENT_PARAMETER_INVALID",
+      `星火 Agent 适配器参数 ${name} 必须是有效 UUID。`,
+    );
+  }
+  return value;
+}
+
 function requiredSafeToolName(
   params: Readonly<Record<string, unknown>>,
   variables: Readonly<Record<string, unknown>>,
@@ -616,7 +849,10 @@ function apiFailure(code: string, message: string, status?: number): ExecutorFai
   return new ExecutorFailure({
     code,
     message,
-    classification: status === 401 || status === 403 ? "environment_failed" : "product_failed",
+    classification:
+      status === 401 || status === 403 || status === 429 || (status !== undefined && status >= 502)
+        ? "environment_failed"
+        : "product_failed",
   });
 }
 
@@ -643,8 +879,260 @@ function accepted(response: HttpExecutionResult, code: string): void {
   }
 }
 
+function acceptedKnowledgeRuntime(response: HttpExecutionResult, code: string): void {
+  if (response.status >= 500) {
+    throw environmentFailure(code, `星火 Agent 知识库运行时返回 HTTP ${response.status}。`);
+  }
+  accepted(response, code);
+}
+
 function actionPath(suffix: string): string {
   return `/trade/api${suffix}`;
+}
+
+function domainActionPath(suffix: string): string {
+  return `/trade-domain-api${suffix}`;
+}
+
+interface KnowledgeFixture {
+  readonly bytes: Uint8Array;
+  readonly fileName: string;
+  readonly sha256: string;
+}
+
+function buildKnowledgeFixture(knowledgeBaseId: string): KnowledgeFixture {
+  if (!uuidPattern.test(knowledgeBaseId)) {
+    throw assertionFailure(
+      "SPARK_X_AGENT_PARAMETER_INVALID",
+      "知识库测试资源标识必须是有效 UUID。",
+    );
+  }
+  const lines = [
+    "SPARK_X_KB_FIXTURE",
+    `RUN_RESOURCE_ID: ${knowledgeBaseId}`,
+    "ORDER_ID: B2C-KB-001",
+    "CUSTOMER_CODE: SPARK-REGRESSION",
+    "AMOUNT_CNY: 4200",
+    "STATUS: PAID",
+  ];
+  const content = ["BT", "/F1 12 Tf", "72 720 Td"];
+  lines.forEach((line, index) => {
+    if (index > 0) content.push("0 -18 Td");
+    content.push(`(${line}) Tj`);
+  });
+  content.push("ET");
+  const stream = `${content.join("\n")}\n`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${new TextEncoder().encode(stream).byteLength} >>\nstream\n${stream}endstream`,
+  ];
+  let source = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(new TextEncoder().encode(source).byteLength);
+    source += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xrefOffset = new TextEncoder().encode(source).byteLength;
+  source += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  source += offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("");
+  source += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  const bytes = new TextEncoder().encode(source);
+  return {
+    bytes,
+    fileName: `spark-x-kb-${knowledgeBaseId}.pdf`,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+  };
+}
+
+async function boundedJsonResponse(
+  response: Response,
+  code: string,
+): Promise<Readonly<Record<string, unknown>>> {
+  if (response.body === null) {
+    if (response.status >= 500) {
+      throw environmentFailure(code, "星火 Agent 知识库运行时返回了空响应。");
+    }
+    throw apiFailure(code, "星火 Agent 返回了空的结构化响应。", response.status);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > 1_000_000) {
+        await reader.cancel();
+        if (response.status >= 500) {
+          throw environmentFailure(code, "星火 Agent 知识库运行时响应超过安全上限。");
+        }
+        throw apiFailure(code, "星火 Agent 结构化响应超过 1000000 字节安全上限。", 502);
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const object = objectValue(parsed);
+    if (object === null) throw new Error("response is not an object");
+    assertBoundedJson(object, () => apiFailure(code, "星火 Agent 结构化响应超过安全边界。"));
+    return object;
+  } catch (error) {
+    if (error instanceof ExecutorFailure) throw error;
+    if (response.status >= 500) {
+      throw new ExecutorFailure(
+        {
+          code,
+          message: "星火 Agent 知识库运行时返回了无法解析的响应。",
+          classification: "environment_failed",
+        },
+        error,
+      );
+    }
+    throw new ExecutorFailure(
+      {
+        code,
+        message: "星火 Agent 返回了无法解析的结构化响应。",
+        classification: "product_failed",
+      },
+      error,
+    );
+  }
+}
+
+async function uploadKnowledgeFixture(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  knowledgeBaseId: string,
+  fixture: KnowledgeFixture,
+  options: SparkXAgentExecutionOptions,
+): Promise<Readonly<{ status: number; body: Readonly<Record<string, unknown>> }>> {
+  let target = new URL(actionPath("/documents/upload"), environment.baseUrl);
+  assertHttpTargetAllowed(target, environment.allowlist);
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new Error("Spark X Agent fixture upload timed out")),
+    options.timeoutMs,
+  );
+  const abort = (): void => controller.abort(options.signal?.reason);
+  if (options.signal?.aborted === true) abort();
+  else options.signal?.addEventListener("abort", abort, { once: true });
+  try {
+    for (let redirect = 0; redirect <= 5; redirect += 1) {
+      const form = new FormData();
+      form.append(
+        "metadata",
+        JSON.stringify({
+          filename: fixture.fileName,
+          mime_type: "application/pdf",
+          size_bytes: fixture.bytes.byteLength,
+          sha256: fixture.sha256,
+          conversation_id: null,
+          folder_id: null,
+        }),
+      );
+      form.append(
+        "file",
+        new Blob(
+          [
+            fixture.bytes.buffer.slice(
+              fixture.bytes.byteOffset,
+              fixture.bytes.byteOffset + fixture.bytes.byteLength,
+            ) as ArrayBuffer,
+          ],
+          { type: "application/pdf" },
+        ),
+        fixture.fileName,
+      );
+      const response = await (options.fetcher ?? fetch)(target, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Idempotency-Key": knowledgeBaseId,
+        },
+        body: form,
+        redirect: "manual",
+        signal: controller.signal,
+      });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        if (location === null || ![307, 308].includes(response.status) || redirect === 5) {
+          throw new ExecutorFailure({
+            code: "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_REDIRECT_INVALID",
+            message: "知识库固定夹具上传返回了不安全的重定向。",
+            classification: "environment_failed",
+          });
+        }
+        target = new URL(location, target);
+        assertHttpTargetAllowed(target, environment.allowlist);
+        continue;
+      }
+      return {
+        status: response.status,
+        body: await boundedJsonResponse(
+          response,
+          "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_RESPONSE_INVALID",
+        ),
+      };
+    }
+    throw environmentFailure(
+      "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_REDIRECT_INVALID",
+      "知识库固定夹具上传重定向未收敛。",
+    );
+  } catch (error) {
+    if (error instanceof ExecutorFailure) throw error;
+    if (controller.signal.aborted) {
+      const externallyCancelled = options.signal?.aborted === true;
+      throw new ExecutorFailure(
+        {
+          code: externallyCancelled
+            ? "EXECUTION_CANCELLED"
+            : "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_TIMEOUT",
+          message: externallyCancelled ? "运行已取消。" : "知识库固定夹具上传超时。",
+          classification: "environment_failed",
+        },
+        error,
+      );
+    }
+    throw new ExecutorFailure(
+      {
+        code: "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_NETWORK_ERROR",
+        message: "知识库固定夹具上传目标无法访问。",
+        classification: "environment_failed",
+      },
+      error,
+    );
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abort);
+  }
+}
+
+async function boundedDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) {
+    throw environmentFailure("EXECUTION_CANCELLED", "运行已取消。");
+  }
+  await new Promise<void>((resolve, reject) => {
+    const finish = (): void => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timeout = setTimeout(finish, milliseconds);
+    const abort = (): void => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+      reject(environmentFailure("EXECUTION_CANCELLED", "运行已取消。"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 async function executeSparkXAgentRequest(
@@ -710,6 +1198,89 @@ async function authenticatedRequest(
     options.timeoutMs,
     options.signal,
     options.fetcher,
+  );
+}
+
+interface UploadedFixtureProjection {
+  readonly id: string;
+  readonly name: string;
+  readonly sizeBytes: number;
+  readonly contentSha256: string;
+}
+
+function uploadedFixtureProjection(
+  body: unknown,
+  expected?: KnowledgeFixture,
+): UploadedFixtureProjection {
+  const data = dataEnvelope(body, "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_RESPONSE_INVALID");
+  const name = typeof data.name === "string" ? data.name : data.title;
+  const sizeBytes = data.size_bytes;
+  const contentSha256 = data.content_sha256;
+  if (
+    typeof data.id !== "string" ||
+    !uuidPattern.test(data.id) ||
+    typeof name !== "string" ||
+    name.length === 0 ||
+    typeof sizeBytes !== "number" ||
+    !Number.isInteger(sizeBytes) ||
+    sizeBytes <= 0 ||
+    typeof contentSha256 !== "string" ||
+    !sha256Pattern.test(contentSha256)
+  ) {
+    throw apiFailure(
+      "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_RESPONSE_INVALID",
+      "知识库固定夹具上传响应缺少受限公开字段。",
+    );
+  }
+  if (
+    expected !== undefined &&
+    (name !== expected.fileName ||
+      sizeBytes !== expected.bytes.byteLength ||
+      contentSha256 !== expected.sha256)
+  ) {
+    throw apiFailure(
+      "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_INTEGRITY_FAILED",
+      "知识库固定夹具上传后的名称、大小或 SHA-256 与本地固定资产不一致。",
+    );
+  }
+  return { id: data.id, name, sizeBytes, contentSha256 };
+}
+
+async function recoverUploadedFixture(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  knowledgeBaseId: string,
+  expected: KnowledgeFixture | undefined,
+  allowMissing: boolean,
+  remainingOptions: () => SparkXAgentExecutionOptions,
+): Promise<UploadedFixtureProjection | null> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(`/documents/upload-status/${encodeURIComponent(knowledgeBaseId)}`),
+      },
+      remainingOptions(),
+    );
+    if (response.status === 200) return uploadedFixtureProjection(response.body, expected);
+    if (response.status === 404) {
+      if (allowMissing) return null;
+      if (attempt >= 3) {
+        throw environmentFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_OUTCOME_UNKNOWN",
+          "知识库固定夹具上传结果无法通过幂等键确认。",
+        );
+      }
+    } else if (response.status !== 202) {
+      acceptedKnowledgeRuntime(response, "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_STATUS_FAILED");
+    }
+    await boundedDelay(500, remainingOptions().signal);
+  }
+  throw environmentFailure(
+    "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_PENDING",
+    "知识库固定夹具上传状态未在有界时间内收敛。",
   );
 }
 
@@ -1086,6 +1657,534 @@ export async function executeSparkXAgentAction(
   const username = requiredString(params, "username", variables, 200);
   const password = requiredString(params, "password", variables, 4_096);
   const token = await login(environment, username, password, remainingOptions());
+
+  if (action === "adapter:spark-x-agent/knowledge-base.create") {
+    const name = requiredString(params, "name", variables, 256);
+    const description = requiredString(params, "description", variables, 4_000);
+    const runId = variables["run.id"];
+    if (typeof runId !== "string" || !uuidPattern.test(runId) || !name.includes(runId)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_TRACEABILITY_REQUIRED",
+        "知识库测试资源名称必须包含当前 run_id。",
+      );
+    }
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: domainActionPath("/knowledge-bases"),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          name,
+          description,
+          metadata: { fixture: "spark-x-test-platform", run_id: runId },
+        },
+      },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(response, "SPARK_X_AGENT_KNOWLEDGE_BASE_CREATE_FAILED");
+    const data = dataEnvelope(response.body, "SPARK_X_AGENT_KNOWLEDGE_BASE_RESPONSE_INVALID");
+    const createdId =
+      typeof data.id === "string" && uuidPattern.test(data.id) ? data.id : undefined;
+    if (
+      createdId === undefined ||
+      data.name !== name ||
+      data.status !== "active" ||
+      data.visibility !== "private"
+    ) {
+      const firstFailure = apiFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_BASE_RESPONSE_INVALID",
+        "星火 Agent 创建知识库响应缺少可追踪的私有活动资源。",
+      );
+      if (createdId !== undefined && data.name === name) {
+        try {
+          await authenticatedRequest(
+            environment,
+            token,
+            {
+              method: "DELETE",
+              path: domainActionPath(`/knowledge-bases/${encodeURIComponent(createdId)}`),
+            },
+            remainingOptions(),
+          );
+        } catch {
+          // Preserve the first product failure; the malformed response cannot be safely registered.
+        }
+      }
+      throw firstFailure;
+    }
+    return {
+      knowledgeBaseId: createdId,
+      created: true,
+      active: true,
+      nameSha256: sha256(name),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/knowledge-base.upload-fixture") {
+    const knowledgeBaseId = requiredUuid(params, "knowledgeBaseId", variables);
+    const fixture = buildKnowledgeFixture(knowledgeBaseId);
+    let upload: UploadedFixtureProjection;
+    try {
+      const response = await uploadKnowledgeFixture(
+        environment,
+        token,
+        knowledgeBaseId,
+        fixture,
+        remainingOptions(),
+      );
+      if (response.status === 200) {
+        upload = uploadedFixtureProjection(response.body, fixture);
+      } else if (response.status === 202) {
+        const recovered = await recoverUploadedFixture(
+          environment,
+          token,
+          knowledgeBaseId,
+          fixture,
+          false,
+          remainingOptions,
+        );
+        if (recovered === null) {
+          throw environmentFailure(
+            "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_OUTCOME_UNKNOWN",
+            "知识库固定夹具上传结果无法确认。",
+          );
+        }
+        upload = recovered;
+      } else {
+        if (response.status >= 500) {
+          throw environmentFailure(
+            "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_RUNTIME_FAILED",
+            `知识库固定夹具上传运行时返回 HTTP ${response.status}。`,
+          );
+        }
+        throw apiFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_FAILED",
+          `知识库固定夹具上传返回 HTTP ${response.status}。`,
+          response.status,
+        );
+      }
+    } catch (firstError) {
+      if (
+        !(firstError instanceof ExecutorFailure) ||
+        ![
+          "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_NETWORK_ERROR",
+          "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_TIMEOUT",
+          "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_OUTCOME_UNKNOWN",
+          "SPARK_X_AGENT_KNOWLEDGE_UPLOAD_RUNTIME_FAILED",
+        ].includes(firstError.failure.code)
+      ) {
+        throw firstError;
+      }
+      try {
+        const recovered = await recoverUploadedFixture(
+          environment,
+          token,
+          knowledgeBaseId,
+          fixture,
+          false,
+          remainingOptions,
+        );
+        if (recovered === null) throw firstError;
+        upload = recovered;
+      } catch {
+        throw firstError;
+      }
+    }
+    return {
+      knowledgeBaseId,
+      uploadedDocumentId: upload.id,
+      uploaded: true,
+      fixtureSizeBytes: fixture.bytes.byteLength,
+      fixtureSha256: fixture.sha256,
+      fileNameSha256: sha256(fixture.fileName),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/knowledge-base.attach-upload") {
+    const knowledgeBaseId = requiredUuid(params, "knowledgeBaseId", variables);
+    const uploadedDocumentId = requiredUuid(params, "uploadedDocumentId", variables);
+    const title = requiredString(params, "title", variables, 512);
+    const sourceResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(`/documents/${encodeURIComponent(uploadedDocumentId)}/parser-source`),
+      },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(sourceResponse, "SPARK_X_AGENT_KNOWLEDGE_SOURCE_FAILED");
+    const source = dataEnvelope(
+      sourceResponse.body,
+      "SPARK_X_AGENT_KNOWLEDGE_SOURCE_RESPONSE_INVALID",
+    );
+    if (source.document_id !== uploadedDocumentId || typeof source.url !== "string") {
+      throw apiFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_SOURCE_RESPONSE_INVALID",
+        "固定夹具解析源与已上传文档标识不一致。",
+      );
+    }
+    let sourceUrl: URL;
+    try {
+      sourceUrl = new URL(source.url);
+    } catch (error) {
+      throw new ExecutorFailure(
+        {
+          code: "SPARK_X_AGENT_KNOWLEDGE_SOURCE_RESPONSE_INVALID",
+          message: "固定夹具解析源地址格式无效。",
+          classification: "product_failed",
+        },
+        error,
+      );
+    }
+    if (
+      !["http:", "https:"].includes(sourceUrl.protocol) ||
+      sourceUrl.username !== "" ||
+      sourceUrl.password !== "" ||
+      source.url.length > 10_000
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_SOURCE_RESPONSE_INVALID",
+        "固定夹具解析源地址违反安全边界。",
+      );
+    }
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: domainActionPath(`/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents`),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          rust_document_id: uploadedDocumentId,
+          source_url: source.url,
+          title,
+          metadata: { fixture: "spark-x-test-platform" },
+        },
+      },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(response, "SPARK_X_AGENT_KNOWLEDGE_ATTACH_FAILED");
+    const data = dataEnvelope(response.body, "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_INVALID");
+    const status = data.status;
+    if (
+      typeof data.id !== "string" ||
+      !uuidPattern.test(data.id) ||
+      data.knowledge_base_id !== knowledgeBaseId ||
+      data.rust_document_id !== uploadedDocumentId ||
+      data.title !== title ||
+      typeof status !== "string" ||
+      !["pending", "processing", "completed", "failed"].includes(status)
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_INVALID",
+        "知识文档绑定响应与本次固定夹具不一致。",
+      );
+    }
+    if (status === "failed") {
+      throw environmentFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_PARSE_CREATE_FAILED",
+        "固定夹具解析任务创建失败。",
+      );
+    }
+    return {
+      knowledgeBaseId,
+      knowledgeDocumentId: data.id,
+      uploadedDocumentId,
+      attached: true,
+      parseJobPresent: typeof data.parse_job_id === "string",
+      documentStatus: status,
+      titleSha256: sha256(title),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/knowledge-base.wait-ready") {
+    const knowledgeBaseId = requiredUuid(params, "knowledgeBaseId", variables);
+    const knowledgeDocumentId = requiredUuid(params, "knowledgeDocumentId", variables);
+    const expectedFixtureSha256 = requiredSha256(params, "expectedFixtureSha256", variables);
+    const expectedTitle = requiredString(params, "expectedTitle", variables, 512);
+    let document: Readonly<Record<string, unknown>> | undefined;
+    let pollAttempts = 0;
+    for (let attempt = 1; attempt <= 120; attempt += 1) {
+      pollAttempts = attempt;
+      const response = await authenticatedRequest(
+        environment,
+        token,
+        {
+          method: "POST",
+          path: domainActionPath(
+            `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(knowledgeDocumentId)}/refresh`,
+          ),
+        },
+        remainingOptions(),
+      );
+      acceptedKnowledgeRuntime(response, "SPARK_X_AGENT_KNOWLEDGE_REFRESH_FAILED");
+      document = dataEnvelope(response.body, "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_INVALID");
+      if (document.id !== knowledgeDocumentId || document.knowledge_base_id !== knowledgeBaseId) {
+        throw apiFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_INVALID",
+          "知识文档刷新响应与本次测试资源不一致。",
+        );
+      }
+      if (document.status === "failed") {
+        throw environmentFailure("SPARK_X_AGENT_KNOWLEDGE_PARSE_FAILED", "固定夹具解析任务失败。");
+      }
+      if (document.status === "completed" && typeof document.current_version_id === "string") {
+        break;
+      }
+      if (!["pending", "processing"].includes(String(document.status))) {
+        throw apiFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_INVALID",
+          "知识文档返回了未知解析状态。",
+        );
+      }
+      document = undefined;
+      await boundedDelay(1_000, remainingOptions().signal);
+    }
+    if (document === undefined) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_PARSE_TIMEOUT",
+        "固定夹具解析未在有界时间内完成。",
+      );
+    }
+    const baseResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: domainActionPath(`/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`),
+      },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(baseResponse, "SPARK_X_AGENT_KNOWLEDGE_BASE_ASSERT_FAILED");
+    const base = dataEnvelope(baseResponse.body, "SPARK_X_AGENT_KNOWLEDGE_BASE_RESPONSE_INVALID");
+    const versionsResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: domainActionPath(
+          `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(knowledgeDocumentId)}/versions`,
+        ),
+      },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(versionsResponse, "SPARK_X_AGENT_KNOWLEDGE_VERSION_ASSERT_FAILED");
+    const versionsData = dataEnvelope(
+      versionsResponse.body,
+      "SPARK_X_AGENT_KNOWLEDGE_VERSION_RESPONSE_INVALID",
+    );
+    const versions = Array.isArray(versionsData.items)
+      ? versionsData.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    const version = versions[0];
+    if (
+      base.id !== knowledgeBaseId ||
+      base.status !== "active" ||
+      base.document_count !== 1 ||
+      base.ready_document_count !== 1 ||
+      document.title !== expectedTitle ||
+      document.status !== "completed" ||
+      document.current_version_number !== 1 ||
+      versions.length !== 1 ||
+      version?.knowledge_document_id !== knowledgeDocumentId ||
+      version.version_number !== 1 ||
+      version.status !== "completed" ||
+      version.content_hash !== expectedFixtureSha256 ||
+      typeof version.parser_version_id !== "string" ||
+      version.parser_version_id.length === 0
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_READY_ASSERTION_FAILED",
+        "知识库计数、当前版本、解析状态或固定夹具哈希不一致。",
+      );
+    }
+    return {
+      knowledgeBaseId,
+      knowledgeDocumentId,
+      ready: true,
+      documentStatus: "completed",
+      documentCount: 1,
+      readyDocumentCount: 1,
+      currentVersionNumber: 1,
+      versionCount: 1,
+      parserVersionPresent: true,
+      contentHashMatched: true,
+      titleMatched: true,
+      fixtureSha256: expectedFixtureSha256,
+      pollAttempts,
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/knowledge-base.cleanup") {
+    const knowledgeBaseId = requiredUuid(params, "knowledgeBaseId", variables);
+    let knowledgeDocumentDeleteCount = 0;
+    let knowledgeBaseArchived = false;
+    let alreadyMissing = false;
+    const documentsResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: domainActionPath(
+          `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents?include_archived=true`,
+        ),
+      },
+      remainingOptions(),
+    );
+    if (documentsResponse.status === 404) {
+      alreadyMissing = true;
+    } else {
+      acceptedKnowledgeRuntime(documentsResponse, "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_LIST_FAILED");
+      const documentsData = dataEnvelope(
+        documentsResponse.body,
+        "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_INVALID",
+      );
+      const documents = Array.isArray(documentsData.items)
+        ? documentsData.items
+            .map(objectValue)
+            .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+        : [];
+      if (documents.length > 10) {
+        throw assertionFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_SCOPE_INVALID",
+          "本次运行创建的知识库包含超出安全上限的文档，拒绝扩大清理范围。",
+        );
+      }
+      for (const item of documents) {
+        if (typeof item.id !== "string" || !uuidPattern.test(item.id)) {
+          throw apiFailure(
+            "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_INVALID",
+            "知识库清理列表包含无效文档标识。",
+          );
+        }
+        let status = item.status;
+        for (let attempt = 0; ["pending", "processing"].includes(String(status)); attempt += 1) {
+          if (attempt >= 120) {
+            throw environmentFailure(
+              "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_PENDING",
+              "知识文档未在清理时间窗内进入可删除状态。",
+            );
+          }
+          const refresh = await authenticatedRequest(
+            environment,
+            token,
+            {
+              method: "POST",
+              path: domainActionPath(
+                `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(item.id)}/refresh`,
+              ),
+            },
+            remainingOptions(),
+          );
+          acceptedKnowledgeRuntime(refresh, "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_REFRESH_FAILED");
+          status = dataEnvelope(refresh.body, "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_INVALID").status;
+          if (["pending", "processing"].includes(String(status))) {
+            await boundedDelay(1_000, remainingOptions().signal);
+          }
+        }
+        const deleted = await authenticatedRequest(
+          environment,
+          token,
+          {
+            method: "DELETE",
+            path: domainActionPath(
+              `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(item.id)}`,
+            ),
+          },
+          remainingOptions(),
+        );
+        if (deleted.status !== 404) {
+          acceptedKnowledgeRuntime(deleted, "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_DELETE_FAILED");
+        }
+        knowledgeDocumentDeleteCount += 1;
+      }
+    }
+    const upload = await recoverUploadedFixture(
+      environment,
+      token,
+      knowledgeBaseId,
+      undefined,
+      true,
+      remainingOptions,
+    );
+    let rawDocumentDeleted = upload === null;
+    if (upload !== null) {
+      const deleted = await authenticatedRequest(
+        environment,
+        token,
+        {
+          method: "DELETE",
+          path: actionPath(`/documents/${encodeURIComponent(upload.id)}`),
+        },
+        remainingOptions(),
+      );
+      if (deleted.status !== 404) {
+        acceptedKnowledgeRuntime(deleted, "SPARK_X_AGENT_KNOWLEDGE_RAW_DOCUMENT_DELETE_FAILED");
+      }
+      rawDocumentDeleted = true;
+    }
+    if (!alreadyMissing) {
+      const archived = await authenticatedRequest(
+        environment,
+        token,
+        {
+          method: "DELETE",
+          path: domainActionPath(`/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`),
+        },
+        remainingOptions(),
+      );
+      if (archived.status >= 200 && archived.status < 300) {
+        knowledgeBaseArchived = true;
+      } else if ([404, 409].includes(archived.status)) {
+        const verify = await authenticatedRequest(
+          environment,
+          token,
+          {
+            method: "GET",
+            path: domainActionPath(`/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`),
+          },
+          remainingOptions(),
+        );
+        if (verify.status === 404) {
+          knowledgeBaseArchived = true;
+          alreadyMissing = true;
+        } else if (verify.status >= 200 && verify.status < 300) {
+          const verified = dataEnvelope(
+            verify.body,
+            "SPARK_X_AGENT_KNOWLEDGE_BASE_RESPONSE_INVALID",
+          );
+          if (
+            verified.id === knowledgeBaseId &&
+            ["archived", "deleted"].includes(String(verified.status))
+          ) {
+            knowledgeBaseArchived = true;
+            alreadyMissing = true;
+          } else {
+            acceptedKnowledgeRuntime(archived, "SPARK_X_AGENT_KNOWLEDGE_BASE_ARCHIVE_FAILED");
+          }
+        } else {
+          acceptedKnowledgeRuntime(verify, "SPARK_X_AGENT_KNOWLEDGE_BASE_ARCHIVE_FAILED");
+        }
+      } else {
+        acceptedKnowledgeRuntime(archived, "SPARK_X_AGENT_KNOWLEDGE_BASE_ARCHIVE_FAILED");
+      }
+    } else {
+      knowledgeBaseArchived = true;
+    }
+    return {
+      knowledgeBaseId,
+      cleaned: true,
+      knowledgeDocumentDeleteCount,
+      rawDocumentDeleted,
+      knowledgeBaseArchived,
+      ...(alreadyMissing ? { alreadyMissing: true } : {}),
+    };
+  }
 
   if (action === "adapter:spark-x-agent/tool.assert-safe-catalog") {
     const visibleResponse = await authenticatedRequest(

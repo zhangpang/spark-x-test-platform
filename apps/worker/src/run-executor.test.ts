@@ -97,6 +97,278 @@ function hashCanonical(value: unknown): string {
   return createHash("sha256").update(canonical(value)).digest("hex");
 }
 
+function knowledgeBaseSnapshot(): RunExecutionSnapshot {
+  return {
+    ...snapshot({
+      execution: { stepTimeoutMs: 5_000, caseTimeoutMs: 30_000, diagnosticRetries: 0 },
+      inputs: [
+        { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
+        { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
+      ],
+      resourceLocks: ["spark-x-agent:admin:knowledge-base"],
+      steps: [
+        {
+          id: "create-knowledge-base",
+          action: "adapter:spark-x-agent/knowledge-base.create",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            name: "spark-x-kb-${run.id}",
+            description: "fixed fixture",
+          },
+          capture: { "knowledge-base-id": "$.knowledgeBaseId" },
+          resource: {
+            type: "spark-x-agent-knowledge-base",
+            id: "${step.knowledge-base-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/knowledge-base.cleanup",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                knowledgeBaseId: "${resource.id}",
+              },
+            },
+          },
+        },
+        {
+          id: "upload-fixture",
+          action: "adapter:spark-x-agent/knowledge-base.upload-fixture",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            knowledgeBaseId: "${step.knowledge-base-id}",
+          },
+          capture: {
+            "uploaded-document-id": "$.uploadedDocumentId",
+            "fixture-sha256": "$.fixtureSha256",
+          },
+        },
+        {
+          id: "attach-fixture",
+          action: "adapter:spark-x-agent/knowledge-base.attach-upload",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            knowledgeBaseId: "${step.knowledge-base-id}",
+            uploadedDocumentId: "${step.uploaded-document-id}",
+            title: "spark-x-kb-${run.id}.pdf",
+          },
+          capture: { "knowledge-document-id": "$.knowledgeDocumentId" },
+        },
+        {
+          id: "wait-ready",
+          action: "adapter:spark-x-agent/knowledge-base.wait-ready",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            knowledgeBaseId: "${step.knowledge-base-id}",
+            knowledgeDocumentId: "${step.knowledge-document-id}",
+            expectedFixtureSha256: "${step.fixture-sha256}",
+            expectedTitle: "spark-x-kb-${run.id}.pdf",
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "cleanup-knowledge-base",
+          action: "adapter:spark-x-agent/knowledge-base.cleanup",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            knowledgeBaseId: "${step.knowledge-base-id}",
+          },
+        },
+      ],
+    }),
+    suite: {
+      id: "00000000-0000-4000-8000-000000000103",
+      name: "Knowledge base P0",
+      diagnosticRetries: 0,
+    },
+    environment: {
+      id: "00000000-0000-4000-8000-000000000102",
+      baseUrl: "http://192.168.110.136/trade/",
+      actionLevel: "dangerous",
+      adapterKey: "spark-x-agent",
+      allowlist: [
+        {
+          protocol: "http",
+          host: "192.168.110.136",
+          ports: [80],
+          pathPrefixes: ["/trade/", "/trade-domain-api/"],
+        },
+      ],
+    },
+  };
+}
+
+function knowledgeBaseFetchMock(failFirstRefresh = false) {
+  const knowledgeBaseId = "00000000-0000-4000-8000-000000000130";
+  const uploadedDocumentId = "00000000-0000-4000-8000-000000000131";
+  const knowledgeDocumentId = "00000000-0000-4000-8000-000000000132";
+  let fixture: Readonly<{ sha256: string; text: string }> | undefined;
+  let refreshFailed = false;
+  const json = (body: unknown, status = 200): Response =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+    const url = new URL(requestUrl(input) as string);
+    const method = init?.method ?? "GET";
+    if (url.pathname === "/trade/api/auth/login" && method === "POST") {
+      return json({ success: true, data: { token: "kb-memory-only-token-value" } });
+    }
+    if (url.pathname === "/trade-domain-api/knowledge-bases" && method === "POST") {
+      return json({
+        success: true,
+        data: {
+          id: knowledgeBaseId,
+          name: `spark-x-kb-${job.runId}`,
+          status: "active",
+          visibility: "private",
+        },
+      });
+    }
+    if (url.pathname === "/trade/api/documents/upload" && method === "POST") {
+      if (!(init?.body instanceof FormData)) throw new Error("expected fixed multipart fixture");
+      const file = init.body.get("file");
+      if (!(file instanceof Blob)) throw new Error("expected fixed PDF blob");
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const name = (file as Blob & { readonly name?: string }).name;
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      fixture = { sha256, text: new TextDecoder().decode(bytes) };
+      return json({
+        success: true,
+        data: {
+          id: uploadedDocumentId,
+          name,
+          size_bytes: bytes.byteLength,
+          content_sha256: sha256,
+        },
+      });
+    }
+    if (
+      url.pathname === `/trade/api/documents/${uploadedDocumentId}/parser-source` &&
+      method === "GET"
+    ) {
+      return json({
+        success: true,
+        data: {
+          document_id: uploadedDocumentId,
+          url: "http://192.168.110.136:9000/source.pdf?X-Amz-Signature=kb-secret",
+        },
+      });
+    }
+    if (
+      url.pathname === `/trade-domain-api/knowledge-bases/${knowledgeBaseId}/documents` &&
+      method === "POST"
+    ) {
+      return json({
+        success: true,
+        data: {
+          id: knowledgeDocumentId,
+          knowledge_base_id: knowledgeBaseId,
+          rust_document_id: uploadedDocumentId,
+          title: `spark-x-kb-${job.runId}.pdf`,
+          status: "pending",
+          parse_job_id: "parse-job-worker-1",
+        },
+      });
+    }
+    if (
+      url.pathname ===
+        `/trade-domain-api/knowledge-bases/${knowledgeBaseId}/documents/${knowledgeDocumentId}/refresh` &&
+      method === "POST"
+    ) {
+      if (failFirstRefresh && !refreshFailed) {
+        refreshFailed = true;
+        return json({ success: false }, 500);
+      }
+      return json({
+        success: true,
+        data: {
+          id: knowledgeDocumentId,
+          knowledge_base_id: knowledgeBaseId,
+          title: `spark-x-kb-${job.runId}.pdf`,
+          status: "completed",
+          current_version_id: "parser-version-worker-1",
+          current_version_number: 1,
+        },
+      });
+    }
+    if (
+      url.pathname === `/trade-domain-api/knowledge-bases/${knowledgeBaseId}` &&
+      method === "GET"
+    ) {
+      return json({
+        success: true,
+        data: {
+          id: knowledgeBaseId,
+          status: "active",
+          document_count: 1,
+          ready_document_count: 1,
+        },
+      });
+    }
+    if (
+      url.pathname ===
+        `/trade-domain-api/knowledge-bases/${knowledgeBaseId}/documents/${knowledgeDocumentId}/versions` &&
+      method === "GET"
+    ) {
+      if (fixture === undefined) throw new Error("fixture hash was not captured");
+      return json({
+        success: true,
+        data: {
+          items: [
+            {
+              knowledge_document_id: knowledgeDocumentId,
+              version_number: 1,
+              status: "completed",
+              content_hash: fixture.sha256,
+              parser_version_id: "parser-version-worker-1",
+            },
+          ],
+        },
+      });
+    }
+    if (
+      url.pathname === `/trade-domain-api/knowledge-bases/${knowledgeBaseId}/documents` &&
+      method === "GET"
+    ) {
+      return json({
+        success: true,
+        data: {
+          items: [
+            {
+              id: knowledgeDocumentId,
+              status: failFirstRefresh ? "failed" : "completed",
+            },
+          ],
+        },
+      });
+    }
+    if (
+      url.pathname === `/trade/api/documents/upload-status/${knowledgeBaseId}` &&
+      method === "GET"
+    ) {
+      if (fixture === undefined) throw new Error("fixture hash was not captured");
+      return json({
+        success: true,
+        data: {
+          id: uploadedDocumentId,
+          name: `spark-x-kb-${knowledgeBaseId}.pdf`,
+          size_bytes: 1,
+          content_sha256: fixture.sha256,
+        },
+      });
+    }
+    if (method === "DELETE") return json({ success: true, data: {} });
+    throw new Error(`unexpected knowledge-base request ${method} ${url.toString()}`);
+  });
+  return { fetchMock, fixture: () => fixture };
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("run worker", () => {
@@ -1435,6 +1707,85 @@ describe("run worker", () => {
     ]);
   });
 
+  it("runs the fixed knowledge-base fixture through version evidence and full cleanup", async () => {
+    const store = fakeStore(knowledgeBaseSnapshot());
+    const password = "knowledge-worker-password";
+    vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      "case.admin-username": "admin",
+      "case.admin-password": password,
+    });
+    const fixtureBackend = knowledgeBaseFetchMock();
+    vi.stubGlobal("fetch", fixtureBackend.fetchMock);
+
+    await expect(executeRunJob(job, "worker-1", store)).resolves.toMatchObject({
+      summary: { passed: 1 },
+    });
+
+    expect(fixtureBackend.fixture()?.text).toContain("SPARK_X_KB_FIXTURE");
+    expect(vi.mocked(store.registerResource).mock.calls[0]?.[1]).toMatchObject({
+      resourceType: "spark-x-agent-knowledge-base",
+      systemResourceId: "00000000-0000-4000-8000-000000000130",
+      cleanupDefinition: {
+        action: "adapter:spark-x-agent/knowledge-base.cleanup",
+      },
+    });
+    expect(
+      vi
+        .mocked(store.recordStep)
+        .mock.calls.map(([, input]) => [input.action, input.phase, input.status]),
+    ).toEqual([
+      ["adapter:spark-x-agent/knowledge-base.create", "main", "passed"],
+      ["adapter:spark-x-agent/knowledge-base.upload-fixture", "main", "passed"],
+      ["adapter:spark-x-agent/knowledge-base.attach-upload", "main", "passed"],
+      ["adapter:spark-x-agent/knowledge-base.wait-ready", "main", "passed"],
+      ["adapter:spark-x-agent/knowledge-base.cleanup", "finally", "passed"],
+    ]);
+    const evidence = JSON.stringify(vi.mocked(store.recordStep).mock.calls);
+    expect(evidence).toContain(fixtureBackend.fixture()?.sha256);
+    expect(evidence).not.toContain("SPARK_X_KB_FIXTURE");
+    expect(evidence).not.toContain("B2C-KB-001");
+    expect(evidence).not.toContain("X-Amz-Signature");
+    expect(evidence).not.toContain("kb-secret");
+    expect(evidence).not.toContain(password);
+    expect(evidence).not.toContain("kb-memory-only-token-value");
+  });
+
+  it("preserves the first parser environment failure and still performs full knowledge cleanup", async () => {
+    const store = fakeStore(knowledgeBaseSnapshot());
+    vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      "case.admin-username": "admin",
+      "case.admin-password": "knowledge-failure-password",
+    });
+    const fixtureBackend = knowledgeBaseFetchMock(true);
+    vi.stubGlobal("fetch", fixtureBackend.fetchMock);
+
+    await expect(executeRunJob(job, "worker-1", store)).resolves.toMatchObject({
+      summary: { environmentFailed: 1, infrastructureFailed: 0 },
+    });
+
+    expect(store.finishCase).toHaveBeenCalledWith(
+      job.runId,
+      "00000000-0000-4000-8000-000000000104",
+      "environment_failed",
+      "passed",
+      expect.objectContaining({
+        code: "SPARK_X_AGENT_KNOWLEDGE_REFRESH_FAILED",
+        stepId: "wait-ready",
+      }),
+      expect.any(Number),
+      false,
+    );
+    expect(
+      vi.mocked(store.recordStep).mock.calls.map(([, input]) => [input.action, input.status]),
+    ).toEqual([
+      ["adapter:spark-x-agent/knowledge-base.create", "passed"],
+      ["adapter:spark-x-agent/knowledge-base.upload-fixture", "passed"],
+      ["adapter:spark-x-agent/knowledge-base.attach-upload", "passed"],
+      ["adapter:spark-x-agent/knowledge-base.wait-ready", "failed"],
+      ["adapter:spark-x-agent/knowledge-base.cleanup", "passed"],
+    ]);
+  });
+
   it("preserves a missing safe-tool fixture as an environment failure and still cleans the conversation", async () => {
     const conversationId = "00000000-0000-4000-8000-000000000122";
     const executionSnapshot: RunExecutionSnapshot = {
@@ -1812,6 +2163,132 @@ describe("run worker", () => {
     );
     expect(store.markResourceCleanup).toHaveBeenLastCalledWith(
       "00000000-0000-4000-8000-000000000111",
+      "passed",
+    );
+  });
+
+  it("runs unified knowledge-base cleanup from the persisted resource ledger", async () => {
+    const cleanupJob = {
+      protocolVersion: "1.0" as const,
+      cleanupJobId: "00000000-0000-4000-8000-000000000140",
+      runId: job.runId,
+      queuedAt: new Date(0).toISOString(),
+    };
+    const knowledgeBaseId = "00000000-0000-4000-8000-000000000141";
+    const knowledgeDocumentId = "00000000-0000-4000-8000-000000000142";
+    const uploadedDocumentId = "00000000-0000-4000-8000-000000000143";
+    const compensationSnapshot: RunExecutionSnapshot = {
+      ...snapshot({
+        inputs: [
+          { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
+          { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
+        ],
+        steps: [],
+      }),
+      environment: {
+        id: "00000000-0000-4000-8000-000000000102",
+        baseUrl: "http://192.168.110.136/trade/",
+        actionLevel: "dangerous",
+        adapterKey: "spark-x-agent",
+        allowlist: [
+          {
+            protocol: "http",
+            host: "192.168.110.136",
+            ports: [80],
+            pathPrefixes: ["/trade/", "/trade-domain-api/"],
+          },
+        ],
+      },
+    };
+    const store = {
+      claimCleanupJob: vi.fn(() =>
+        Promise.resolve({
+          id: cleanupJob.cleanupJobId,
+          runId: job.runId,
+          attempts: 1,
+          summary: {
+            total: 1,
+            queued: 0,
+            running: 0,
+            passed: 0,
+            productFailed: 0,
+            testFailed: 0,
+            environmentFailed: 0,
+            infrastructureFailed: 1,
+            flaky: 0,
+            cancelled: 0,
+            skipped: 0,
+          },
+          gateResult: "inconclusive",
+          firstFailure: null,
+          snapshot: compensationSnapshot,
+        }),
+      ),
+      resolveSecretVariables: vi.fn(() =>
+        Promise.resolve({
+          "case.admin-username": "admin",
+          "case.admin-password": "knowledge-compensation-password",
+        }),
+      ),
+      listResourcesForCleanup: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "00000000-0000-4000-8000-000000000144",
+            runCaseId: "00000000-0000-4000-8000-000000000104",
+            systemResourceId: knowledgeBaseId,
+            cleanupDefinition: {
+              action: "adapter:spark-x-agent/knowledge-base.cleanup",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                knowledgeBaseId: "${resource.id}",
+              },
+            },
+          },
+        ]),
+      ),
+      markResourceCleanup: vi.fn(() => Promise.resolve()),
+      renewResourceLocks: vi.fn(() => Promise.resolve()),
+      failCleanupJob: vi.fn(() => Promise.resolve()),
+      completeCompensation: vi.fn(() => Promise.resolve()),
+    } as unknown as CompensationExecutionStore;
+    const json = (body: unknown): Response =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    const responses = [
+      json({ success: true, data: { token: "knowledge-compensation-token" } }),
+      json({
+        success: true,
+        data: { items: [{ id: knowledgeDocumentId, status: "completed" }] },
+      }),
+      json({ success: true, data: {} }),
+      json({
+        success: true,
+        data: {
+          id: uploadedDocumentId,
+          name: "fixture.pdf",
+          size_bytes: 100,
+          content_sha256: "a".repeat(64),
+        },
+      }),
+      json({ success: true, data: {} }),
+      json({ success: true, data: {} }),
+    ];
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(responses.shift() as Response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(executeCompensationJob(cleanupJob, store)).resolves.toEqual({ cleaned: 1 });
+    expect(fetchMock.mock.calls.slice(1).map((call) => requestUrl(call[0]))).toEqual([
+      `http://192.168.110.136/trade-domain-api/knowledge-bases/${knowledgeBaseId}/documents?include_archived=true`,
+      `http://192.168.110.136/trade-domain-api/knowledge-bases/${knowledgeBaseId}/documents/${knowledgeDocumentId}`,
+      `http://192.168.110.136/trade/api/documents/upload-status/${knowledgeBaseId}`,
+      `http://192.168.110.136/trade/api/documents/${uploadedDocumentId}`,
+      `http://192.168.110.136/trade-domain-api/knowledge-bases/${knowledgeBaseId}`,
+    ]);
+    expect(store.markResourceCleanup).toHaveBeenLastCalledWith(
+      "00000000-0000-4000-8000-000000000144",
       "passed",
     );
   });
