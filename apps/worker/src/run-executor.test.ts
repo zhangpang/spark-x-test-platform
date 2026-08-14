@@ -1435,6 +1435,134 @@ describe("run worker", () => {
     ]);
   });
 
+  it("preserves a missing safe-tool fixture as an environment failure and still cleans the conversation", async () => {
+    const conversationId = "00000000-0000-4000-8000-000000000122";
+    const executionSnapshot: RunExecutionSnapshot = {
+      ...snapshot({
+        execution: { stepTimeoutMs: 5_000, caseTimeoutMs: 15_000, diagnosticRetries: 0 },
+        inputs: [
+          { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
+          { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
+        ],
+        resourceLocks: ["spark-x-agent:admin:tools"],
+        steps: [
+          {
+            id: "create-conversation",
+            action: "adapter:spark-x-agent/conversation.create",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              title: "spark-x-tool-${run.id}",
+            },
+            capture: { "conversation-id": "$.conversationId" },
+            resource: {
+              type: "spark-x-agent-conversation",
+              id: "${step.conversation-id}",
+              cleanup: {
+                action: "adapter:spark-x-agent/conversation.delete",
+                params: {
+                  username: "${case.admin-username}",
+                  password: "${case.admin-password}",
+                  conversationId: "${resource.id}",
+                },
+              },
+            },
+          },
+          {
+            id: "assert-safe-tool-precondition",
+            action: "adapter:spark-x-agent/tool.assert-safe-catalog",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+            },
+          },
+        ],
+        finally: [
+          {
+            id: "delete-conversation",
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${step.conversation-id}",
+            },
+          },
+        ],
+      }),
+      suite: {
+        id: "00000000-0000-4000-8000-000000000103",
+        name: "Core regression",
+        diagnosticRetries: 0,
+      },
+      environment: {
+        id: "00000000-0000-4000-8000-000000000102",
+        baseUrl: "http://192.168.110.136/trade/",
+        actionLevel: "dangerous",
+        adapterKey: "spark-x-agent",
+        allowlist: [
+          {
+            protocol: "http",
+            host: "192.168.110.136",
+            ports: [80],
+            pathPrefixes: ["/trade/"],
+          },
+        ],
+      },
+    };
+    const store = fakeStore(executionSnapshot);
+    vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      "case.admin-username": "admin",
+      "case.admin-password": "fixture-cleanup-password",
+    });
+    const json = (body: unknown): Response =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    const responses = [
+      json({ success: true, data: { token: "adapter-memory-only-token-value" } }),
+      json({
+        success: true,
+        data: { id: conversationId, title: `spark-x-tool-${job.runId}` },
+      }),
+      json({ success: true, data: { token: "adapter-memory-only-token-value" } }),
+      json({ success: true, data: { items: [] } }),
+      json({ success: true, data: { token: "adapter-memory-only-token-value" } }),
+      json({ success: true, message: "deleted" }),
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(responses.shift() as Response)),
+    );
+
+    await expect(executeRunJob(job, "worker-1", store)).resolves.toMatchObject({
+      summary: { environmentFailed: 1, infrastructureFailed: 0 },
+    });
+
+    expect(store.finishCase).toHaveBeenCalledWith(
+      job.runId,
+      "00000000-0000-4000-8000-000000000104",
+      "environment_failed",
+      "passed",
+      expect.objectContaining({
+        code: "SPARK_X_AGENT_SAFE_TOOL_CATALOG_UNAVAILABLE",
+        stepId: "assert-safe-tool-precondition",
+      }),
+      expect.any(Number),
+      false,
+    );
+    expect(vi.mocked(store.registerResource).mock.calls[0]?.[1]).toMatchObject({
+      systemResourceId: conversationId,
+    });
+    expect(
+      vi.mocked(store.recordStep).mock.calls.map(([, input]) => [input.action, input.status]),
+    ).toEqual([
+      ["adapter:spark-x-agent/conversation.create", "passed"],
+      ["adapter:spark-x-agent/tool.assert-safe-catalog", "failed"],
+      ["adapter:spark-x-agent/conversation.delete", "passed"],
+    ]);
+  });
+
   it("preserves an incomplete chat-stream failure while cleaning the pre-registered conversation", async () => {
     const conversationId = "00000000-0000-4000-8000-000000000120";
     const executionSnapshot: RunExecutionSnapshot = {

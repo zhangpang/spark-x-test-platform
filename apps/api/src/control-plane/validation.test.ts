@@ -944,16 +944,6 @@ describe("M2 asset validation", () => {
       resourceLocks: ["spark-x-agent:admin:tools"],
       steps: [
         {
-          id: "assert-safe-tool-precondition",
-          name: "assert safe tool precondition",
-          kind: "action",
-          action: "adapter:spark-x-agent/tool.assert-safe-catalog",
-          params: {
-            username: "${case.admin-username}",
-            password: "${case.admin-password}",
-          },
-        },
-        {
           id: "create-conversation",
           name: "create conversation",
           kind: "action",
@@ -975,6 +965,16 @@ describe("M2 asset validation", () => {
                 conversationId: "${resource.id}",
               },
             },
+          },
+        },
+        {
+          id: "assert-safe-tool-precondition",
+          name: "assert safe tool precondition",
+          kind: "action",
+          action: "adapter:spark-x-agent/tool.assert-safe-catalog",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
           },
         },
         {

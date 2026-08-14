@@ -536,20 +536,11 @@ function toolInvocationDefinition(): Readonly<Record<string, unknown>> {
     resourceLocks: ["spark-x-agent:admin:tools"],
     steps: [
       {
-        id: "assert-safe-tool-precondition",
-        name: "确认内置只读工具测试基线在线",
-        kind: "action",
-        action: "adapter:spark-x-agent/tool.assert-safe-catalog",
-        params: {
-          username: "${case.admin-username}",
-          password: "${case.admin-password}",
-        },
-      },
-      {
         id: "create-tool-conversation",
         name: "创建并登记工具测试会话",
         kind: "action",
         action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
         params: {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
@@ -570,10 +561,22 @@ function toolInvocationDefinition(): Readonly<Record<string, unknown>> {
         },
       },
       {
+        id: "assert-safe-tool-precondition",
+        name: "确认内置只读工具测试基线在线",
+        kind: "action",
+        action: "adapter:spark-x-agent/tool.assert-safe-catalog",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+        },
+      },
+      {
         id: "invoke-safe-tool",
         name: "调用一次内置只读计算器并校验结构化结果",
         kind: "action",
         action: "adapter:spark-x-agent/tool.invoke-safe",
+        timeoutMs: 120_000,
         params: {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
@@ -595,6 +598,7 @@ function toolInvocationDefinition(): Readonly<Record<string, unknown>> {
         name: "校验工具消息与公开轨迹完整持久化",
         kind: "action",
         action: "adapter:spark-x-agent/tool.assert-history",
+        timeoutMs: 20_000,
         params: {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
@@ -614,6 +618,7 @@ function toolInvocationDefinition(): Readonly<Record<string, unknown>> {
         name: "删除工具测试会话",
         kind: "action",
         action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
         params: {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
@@ -785,8 +790,8 @@ async function executeSmoke(
         "main:adapter:spark-x-agent/chat.assert-history",
         "finally:adapter:spark-x-agent/conversation.delete",
         "main:adapter:spark-x-agent/tool.assert-safe-catalog",
-        "main:adapter:spark-x-agent/tool.assert-safe-catalog",
         "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/tool.assert-safe-catalog",
         "main:adapter:spark-x-agent/tool.invoke-safe",
         "main:adapter:spark-x-agent/tool.assert-history",
         "finally:adapter:spark-x-agent/conversation.delete",
