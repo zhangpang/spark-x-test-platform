@@ -216,7 +216,8 @@ function ArtifactPreviewDialog(
               <span>REDACTED EVIDENCE</span>
               <h3 id="artifact-preview-title">截图证据预览</h3>
               <p>
-                尝试 {props.preview.artifact.attempt ?? "-"} · {artifactSize(props.preview.artifact.sizeBytes)} ·
+                尝试 {props.preview.artifact.attempt ?? "-"} ·{" "}
+                {artifactSize(props.preview.artifact.sizeBytes)} ·
                 {artifactRetentionLabel(props.preview.artifact)}
               </p>
             </div>
@@ -225,10 +226,7 @@ function ArtifactPreviewDialog(
             </button>
           </header>
           <div className="artifact-preview-canvas">
-            <img
-              alt="已脱敏的自动化测试步骤截图"
-              src={props.preview.objectUrl}
-            />
+            <img alt="已脱敏的自动化测试步骤截图" src={props.preview.objectUrl} />
           </div>
           <footer>
             <span>
@@ -818,9 +816,7 @@ export function App() {
         artifact.id === artifactId ? { ...artifact, availability } : artifact,
       ),
     );
-    setArtifactPreview((current) =>
-      current?.artifact.id === artifactId ? undefined : current,
-    );
+    setArtifactPreview((current) => (current?.artifact.id === artifactId ? undefined : current));
   }
 
   async function openArtifactEvidence(artifact: ArtifactRecord): Promise<void> {
@@ -847,9 +843,7 @@ export function App() {
     setArtifactBusyId(artifact.id);
     try {
       const updated = await controlPlaneApi.updateArtifactRetention(artifact.id, !artifact.locked);
-      setArtifacts((current) =>
-        current.map((item) => (item.id === updated.id ? updated : item)),
-      );
+      setArtifacts((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       setArtifactPreview((current) =>
         current?.artifact.id === updated.id
           ? updated.availability === "available"
@@ -1888,7 +1882,9 @@ export function App() {
                                                 aria-pressed={artifact.locked}
                                                 className={artifact.locked ? "locked" : ""}
                                                 disabled={artifactBusyId !== ""}
-                                                onClick={() => void toggleArtifactRetention(artifact)}
+                                                onClick={() =>
+                                                  void toggleArtifactRetention(artifact)
+                                                }
                                                 type="button"
                                               >
                                                 {artifact.locked ? "解除保留" : "长期保留"}

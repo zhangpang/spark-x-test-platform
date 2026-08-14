@@ -741,8 +741,7 @@ export class TestRunStore {
           JSON.stringify({
             artifactId: row.id,
             locked,
-            retainedUntil:
-              row.retained_until === null ? null : isoTimestamp(row.retained_until),
+            retainedUntil: row.retained_until === null ? null : isoTimestamp(row.retained_until),
           }),
         ],
       );

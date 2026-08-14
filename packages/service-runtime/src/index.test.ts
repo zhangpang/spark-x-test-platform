@@ -268,9 +268,7 @@ describe("artifact evidence persistence", () => {
       created_at: new Date(0),
     } as const;
     const query = vi.fn((sql: string) =>
-      sql.includes("select a.*")
-        ? Promise.resolve({ rows: [row] })
-        : Promise.resolve({ rows: [] }),
+      sql.includes("select a.*") ? Promise.resolve({ rows: [row] }) : Promise.resolve({ rows: [] }),
     );
     const client = { query, release: vi.fn() };
     const objects = {
