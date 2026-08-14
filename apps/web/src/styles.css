@@ -2034,6 +2034,7 @@ th {
 .artifact-retention-row button {
   align-self: stretch;
   min-width: 78px;
+  min-height: 44px;
   padding: 0 10px;
   color: var(--primary-dark);
   background: var(--primary-soft);

@@ -194,19 +194,34 @@ function ArtifactPreviewDialog(
   props: Readonly<{ preview: ArtifactPreview | undefined; onClose: () => void }>,
 ) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog === null) return;
-    if (props.preview !== undefined && !dialog.open) dialog.showModal();
+    if (props.preview !== undefined && !dialog.open) {
+      triggerRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      dialog.showModal();
+    }
     if (props.preview === undefined && dialog.open) dialog.close();
   }, [props.preview]);
+
+  function closeDialog(): void {
+    dialogRef.current?.close();
+  }
+
+  function handleDialogClosed(): void {
+    triggerRef.current?.focus();
+    triggerRef.current = null;
+    props.onClose();
+  }
 
   return (
     <dialog
       aria-labelledby="artifact-preview-title"
       className="artifact-preview-dialog"
-      onClose={props.onClose}
+      onClose={handleDialogClosed}
       ref={dialogRef}
     >
       {props.preview === undefined ? null : (
@@ -221,7 +236,7 @@ function ArtifactPreviewDialog(
                 {artifactRetentionLabel(props.preview.artifact)}
               </p>
             </div>
-            <button aria-label="关闭截图预览" onClick={props.onClose} type="button">
+            <button aria-label="关闭截图预览" onClick={closeDialog} type="button">
               ×
             </button>
           </header>
@@ -237,7 +252,7 @@ function ArtifactPreviewDialog(
               <a download={props.preview.artifact.fileName} href={props.preview.objectUrl}>
                 下载 PNG
               </a>
-              <button className="secondary" onClick={props.onClose} type="button">
+              <button className="secondary" onClick={closeDialog} type="button">
                 关闭
               </button>
             </div>
