@@ -32,7 +32,11 @@ const navigation = [
 type PageId = (typeof navigation)[number]["id"];
 type Readiness = HealthResponse | { status: "loading" | "unreachable"; message?: string };
 type Notice = Readonly<{ tone: "success" | "error" | "info"; text: string }>;
-type ArtifactPreview = Readonly<{ artifact: ArtifactRecord; objectUrl: string }>;
+type ArtifactPreview = Readonly<{
+  artifact: ArtifactRecord;
+  objectUrl: string;
+  triggerId: string;
+}>;
 
 const pageDetails: Record<
   PageId,
@@ -178,6 +182,10 @@ function artifactRetentionLabel(artifact: ArtifactRecord): string {
   return `保留至 ${new Date(artifact.retainedUntil).toLocaleString("zh-CN")}`;
 }
 
+function artifactPreviewTriggerId(artifactId: string): string {
+  return `artifact-preview-${artifactId}`;
+}
+
 function downloadBlob(blob: Blob, fileName: string): void {
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -194,14 +202,13 @@ function ArtifactPreviewDialog(
   props: Readonly<{ preview: ArtifactPreview | undefined; onClose: () => void }>,
 ) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const triggerRef = useRef<HTMLElement | null>(null);
+  const triggerIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog === null) return;
     if (props.preview !== undefined && !dialog.open) {
-      triggerRef.current =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      triggerIdRef.current = props.preview.triggerId;
       dialog.showModal();
     }
     if (props.preview === undefined && dialog.open) dialog.close();
@@ -212,10 +219,12 @@ function ArtifactPreviewDialog(
   }
 
   function handleDialogClosed(): void {
-    const trigger = triggerRef.current;
-    triggerRef.current = null;
+    const triggerId = triggerIdRef.current;
+    triggerIdRef.current = null;
     props.onClose();
-    if (trigger !== null) window.requestAnimationFrame(() => trigger.focus());
+    if (triggerId !== null) {
+      window.requestAnimationFrame(() => document.getElementById(triggerId)?.focus());
+    }
   }
 
   return (
@@ -841,7 +850,11 @@ export function App() {
     try {
       const content = await controlPlaneApi.getArtifactContent(artifact.id);
       if (artifact.kind === "screenshot") {
-        setArtifactPreview({ artifact, objectUrl: URL.createObjectURL(content) });
+        setArtifactPreview({
+          artifact,
+          objectUrl: URL.createObjectURL(content),
+          triggerId: artifactPreviewTriggerId(artifact.id),
+        });
       } else {
         downloadBlob(content, artifact.fileName);
         setNotice({ tone: "success", text: `${artifactKindLabels[artifact.kind]}已开始下载。` });
@@ -1867,6 +1880,11 @@ export function App() {
                                               aria-label={`${artifact.kind === "screenshot" ? "预览" : "下载"}${artifactKindLabels[artifact.kind]}，${artifactSize(artifact.sizeBytes)}，已脱敏`}
                                               className="artifact-open"
                                               disabled={artifactBusyId !== ""}
+                                              id={
+                                                artifact.kind === "screenshot"
+                                                  ? artifactPreviewTriggerId(artifact.id)
+                                                  : undefined
+                                              }
                                               onClick={() => void openArtifactEvidence(artifact)}
                                               type="button"
                                             >
