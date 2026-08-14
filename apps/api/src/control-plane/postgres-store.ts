@@ -815,36 +815,45 @@ export class PostgresControlPlaneRepository implements ControlPlaneRepository {
     input: SuiteInput,
     audit: AuditContext,
   ): Promise<TestSuiteRecord | null> {
-    const result = await this.#sql.query<{ readonly id: string }>(
-      `with updated_suite as (
-         update test_suites
+    return this.#sql.transaction(async (sql) => {
+      const updated = await sql.query<{ readonly id: string }>(
+        `update test_suites
          set system_id = $2, key = $3, name = $4, description = $5,
              default_concurrency = $6, default_diagnostic_retries = $7, updated_at = now()
          where id = $1
-         returning id
-       ), removed as (
-         delete from suite_cases where suite_id = $1 and exists (select 1 from updated_suite)
-       ), inserted as (
-         insert into suite_cases (suite_id, case_id, sort_order)
-         select updated_suite.id, members.case_id, members.ordinality - 1
-         from updated_suite,
-              unnest($8::uuid[]) with ordinality as members(case_id, ordinality)
-       )
-       select id from updated_suite`,
-      [
-        id,
-        input.systemId,
-        input.key,
-        input.name,
-        input.description ?? "",
-        input.defaultConcurrency ?? 1,
-        input.defaultDiagnosticRetries ?? 0,
-        input.caseIds,
-      ],
-    );
-    if (result.rows[0] === undefined) return null;
-    await this.#audit(audit, "test-suite", id, "update");
-    return this.getSuite(id);
+         returning id`,
+        [
+          id,
+          input.systemId,
+          input.key,
+          input.name,
+          input.description ?? "",
+          input.defaultConcurrency ?? 1,
+          input.defaultDiagnosticRetries ?? 0,
+        ],
+      );
+      if (updated.rows[0] === undefined) return null;
+
+      await sql.query("delete from suite_cases where suite_id = $1", [id]);
+      await sql.query(
+        `insert into suite_cases (suite_id, case_id, sort_order)
+         select $1, members.case_id, members.ordinality - 1
+         from unnest($2::uuid[]) with ordinality as members(case_id, ordinality)`,
+        [id, input.caseIds],
+      );
+      await this.#audit(audit, "test-suite", id, "update", undefined, undefined, sql);
+
+      const result = await sql.query<SuiteRow>(
+        `select s.*, coalesce(array_agg(sc.case_id order by sc.sort_order)
+           filter (where sc.case_id is not null), '{}') as case_ids
+         from test_suites s
+         left join suite_cases sc on sc.suite_id = s.id
+         where s.id = $1
+         group by s.id`,
+        [id],
+      );
+      return result.rows[0] === undefined ? null : mapSuite(result.rows[0]);
+    });
   }
 
   async listDefinitionResources(

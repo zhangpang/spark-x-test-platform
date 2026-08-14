@@ -76,7 +76,7 @@ async function readPassword(): Promise<string> {
       ? readFileSync(0, "utf8")
       : await readFile(passwordFile, "utf8");
   const password = raw.replace(/[\r\n]+$/u, "");
-  check(password.length >= 12, "Spark X Agent administrator password is missing or invalid");
+  check(password.length > 0, "Spark X Agent administrator password is missing");
   return password;
 }
 

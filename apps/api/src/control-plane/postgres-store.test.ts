@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { AuditContext, CreateCaseCommand, JsonObject } from "./model.js";
+import type { AuditContext, CreateCaseCommand, JsonObject, SuiteInput } from "./model.js";
 import {
   PostgresControlPlaneRepository,
   type SqlExecutor,
@@ -63,8 +63,28 @@ class RecordingSqlExecutor implements SqlExecutor {
           updated_at: createdAt,
         },
       ];
+    } else if (normalized.startsWith("update test_suites")) {
+      rows = [{ id: values[0] }];
+    } else if (normalized.startsWith("select s.*")) {
+      rows = [
+        {
+          id: values[0],
+          system_id: "00000000-0000-4000-8000-000000000102",
+          key: "smoke",
+          name: "Smoke",
+          description: "Core smoke",
+          default_concurrency: 1,
+          default_diagnostic_retries: 0,
+          case_ids: ["00000000-0000-4000-8000-000000000103"],
+          created_at: createdAt,
+          updated_at: createdAt,
+        },
+      ];
     }
-    return Promise.resolve({ rows: rows as readonly Row[], rowCount: rows.length });
+    return Promise.resolve({
+      rows: rows as readonly Row[],
+      rowCount: rows.length,
+    });
   }
 
   transaction<Result>(work: (sql: SqlExecutor) => Promise<Result>): Promise<Result> {
@@ -133,4 +153,31 @@ describe("Postgres control-plane creation transactions", () => {
       expect(result.currentVersionId).not.toBeNull();
     },
   );
+
+  it("replaces suite membership sequentially so an unchanged member cannot conflict with itself", async () => {
+    const sql = new RecordingSqlExecutor();
+    const repository = new PostgresControlPlaneRepository(sql);
+    const suiteId = "00000000-0000-4000-8000-000000000104";
+    const input: SuiteInput = {
+      systemId: "00000000-0000-4000-8000-000000000102",
+      key: "smoke",
+      name: "Smoke",
+      description: "Core smoke",
+      caseIds: ["00000000-0000-4000-8000-000000000103"],
+      defaultConcurrency: 1,
+      defaultDiagnosticRetries: 0,
+    };
+
+    const result = await repository.updateSuite(suiteId, input, audit);
+
+    expect(sql.transactionCount).toBe(1);
+    expect(sql.queries.map((query) => query.split(" ").slice(0, 3).join(" "))).toEqual([
+      "update test_suites set",
+      "delete from suite_cases",
+      "insert into suite_cases",
+      "insert into operation_audits",
+      "select s.*, coalesce(array_agg(sc.case_id",
+    ]);
+    expect(result?.caseIds).toEqual(input.caseIds);
+  });
 });
