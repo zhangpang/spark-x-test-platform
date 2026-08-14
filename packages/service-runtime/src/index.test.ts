@@ -213,7 +213,8 @@ describe("artifact evidence persistence", () => {
       retained_until: new Date(Date.now() + 60_000),
       created_at: new Date(0),
     } as const;
-    const query = vi.fn((sql: string, _values?: readonly unknown[]) => {
+    const query = vi.fn((sql: string, values?: readonly unknown[]) => {
+      void values;
       if (sql.includes("select a.*")) return Promise.resolve({ rows: [row] });
       if (sql.includes("update artifacts")) {
         return Promise.resolve({ rows: [{ ...row, locked: true }] });
