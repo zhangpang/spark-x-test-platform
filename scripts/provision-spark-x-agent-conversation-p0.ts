@@ -536,6 +536,16 @@ function toolInvocationDefinition(): Readonly<Record<string, unknown>> {
     resourceLocks: ["spark-x-agent:admin:tools"],
     steps: [
       {
+        id: "assert-safe-tool-precondition",
+        name: "确认内置只读工具测试基线在线",
+        kind: "action",
+        action: "adapter:spark-x-agent/tool.assert-safe-catalog",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+        },
+      },
+      {
         id: "create-tool-conversation",
         name: "创建并登记工具测试会话",
         kind: "action",
@@ -757,8 +767,8 @@ async function executeSmoke(
     "Spark X Agent core smoke finally cleanup did not pass",
   );
   check(
-    run.steps.length === 12,
-    "Spark X Agent core smoke did not record nine main steps and three finally steps",
+    run.steps.length === 13,
+    "Spark X Agent core smoke did not record ten main steps and three finally steps",
   );
   check(
     run.steps.every((step) => step.status === "passed"),
@@ -774,6 +784,7 @@ async function executeSmoke(
         "main:adapter:spark-x-agent/chat.ask",
         "main:adapter:spark-x-agent/chat.assert-history",
         "finally:adapter:spark-x-agent/conversation.delete",
+        "main:adapter:spark-x-agent/tool.assert-safe-catalog",
         "main:adapter:spark-x-agent/tool.assert-safe-catalog",
         "main:adapter:spark-x-agent/conversation.create",
         "main:adapter:spark-x-agent/tool.invoke-safe",

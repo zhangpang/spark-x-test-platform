@@ -574,6 +574,31 @@ describe("spark-x-agent adapter", () => {
     expect(serialized).not.toContain(variables["case.admin-password"]);
   });
 
+  it("classifies a stopped safe-tool fixture as an environment failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: { items: [] } }));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/tool.assert-safe-catalog",
+        environment,
+        credentials,
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_SAFE_TOOL_CATALOG_UNAVAILABLE",
+        classification: "environment_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("fails closed when the user catalog leaks an administrator field", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

@@ -624,6 +624,10 @@ function assertionFailure(code: string, message: string): ExecutorFailure {
   return new ExecutorFailure({ code, message, classification: "test_failed" });
 }
 
+function environmentFailure(code: string, message: string): ExecutorFailure {
+  return new ExecutorFailure({ code, message, classification: "environment_failed" });
+}
+
 function dataEnvelope(body: unknown, code: string): Readonly<Record<string, unknown>> {
   const envelope = objectValue(body);
   const data = envelope === null ? null : objectValue(envelope.data);
@@ -1109,7 +1113,7 @@ export async function executeSparkXAgentAction(
       visibleServer.status !== "running" ||
       visibleServer.tools_count !== safeToolCatalog.length
     ) {
-      throw assertionFailure(
+      throw environmentFailure(
         "SPARK_X_AGENT_SAFE_TOOL_CATALOG_UNAVAILABLE",
         "builtin-demo 安全工具目录未以运行中状态完整暴露给当前用户。",
       );

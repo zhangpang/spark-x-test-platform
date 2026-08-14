@@ -944,6 +944,16 @@ describe("M2 asset validation", () => {
       resourceLocks: ["spark-x-agent:admin:tools"],
       steps: [
         {
+          id: "assert-safe-tool-precondition",
+          name: "assert safe tool precondition",
+          kind: "action",
+          action: "adapter:spark-x-agent/tool.assert-safe-catalog",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+          },
+        },
+        {
           id: "create-conversation",
           name: "create conversation",
           kind: "action",
@@ -1034,9 +1044,9 @@ describe("M2 asset validation", () => {
       ...invocationDefinition,
       steps: [
         {
-          ...(invocationDefinition.steps as readonly JsonObject[])[1],
+          ...(invocationDefinition.steps as readonly JsonObject[])[2],
           params: {
-            ...((invocationDefinition.steps as readonly JsonObject[])[1]?.params as JsonObject),
+            ...((invocationDefinition.steps as readonly JsonObject[])[2]?.params as JsonObject),
             message: "只调用计算器计算 6×7。",
             script: "return process.env",
           },
