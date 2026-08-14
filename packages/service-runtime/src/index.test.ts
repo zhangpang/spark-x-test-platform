@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  type ArtifactObjectStore,
   createPlatformDependencies,
   loadPlatformConfig,
   runDependencyProbe,
@@ -51,6 +52,149 @@ describe("platform service configuration", () => {
     expect(health.status).toBe("error");
     expect(health.error).toContain("timed out after 10ms");
     expect(health.latencyMs).toBeLessThan(100);
+  });
+});
+
+describe("artifact evidence persistence", () => {
+  it("uploads bounded evidence and registers it with the step in one database transaction", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 1 });
+    const client = { query, release: vi.fn() };
+    const pool = { connect: vi.fn(() => Promise.resolve(client)) };
+    const objects = {
+      putObject: vi.fn(() => Promise.resolve()),
+      removeObject: vi.fn(() => Promise.resolve()),
+      statObject: vi.fn(() => Promise.resolve()),
+      getObject: vi.fn(),
+    } satisfies ArtifactObjectStore;
+    const store = new TestRunStore(pool as never, undefined, {
+      client: objects,
+      bucket: "test-artifacts",
+    });
+
+    await store.recordStep("00000000-0000-4000-8000-000000000001", {
+      id: "00000000-0000-4000-8000-000000000002",
+      runCaseId: "00000000-0000-4000-8000-000000000003",
+      attempt: 2,
+      path: "steps[0]",
+      stepId: "open-console",
+      action: "browser:navigate",
+      phase: "main",
+      status: "passed",
+      result: "passed",
+      inputSummary: { action: "browser:navigate" },
+      outputSummary: { status: 200 },
+      startedAt: new Date(0).toISOString(),
+      durationMs: 15,
+      artifacts: [
+        {
+          kind: "screenshot",
+          data: Buffer.from("png"),
+          contentType: "image/png",
+          extension: "png",
+        },
+      ],
+    });
+
+    expect(objects.putObject).toHaveBeenCalledWith(
+      "test-artifacts",
+      expect.stringContaining("/attempts/2/steps/00000000-0000-4000-8000-000000000002/"),
+      Buffer.from("png"),
+      3,
+      expect.objectContaining({ "X-Amz-Meta-Redacted": "true" }),
+    );
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("insert into artifacts"))).toBe(
+      true,
+    );
+    expect(query).toHaveBeenLastCalledWith("commit");
+  });
+
+  it("removes an uploaded object when artifact metadata registration rolls back", async () => {
+    const query = vi.fn((sql: string) => {
+      if (sql.includes("insert into artifacts")) return Promise.reject(new Error("db failed"));
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+    const client = { query, release: vi.fn() };
+    const pool = { connect: vi.fn(() => Promise.resolve(client)) };
+    const objects = {
+      putObject: vi.fn(() => Promise.resolve()),
+      removeObject: vi.fn(() => Promise.resolve()),
+      statObject: vi.fn(() => Promise.resolve()),
+      getObject: vi.fn(),
+    } satisfies ArtifactObjectStore;
+    const store = new TestRunStore(pool as never, undefined, {
+      client: objects,
+      bucket: "test-artifacts",
+    });
+
+    await expect(
+      store.recordStep("00000000-0000-4000-8000-000000000001", {
+        id: "00000000-0000-4000-8000-000000000002",
+        runCaseId: "00000000-0000-4000-8000-000000000003",
+        attempt: 1,
+        path: "steps[0]",
+        stepId: "open-console",
+        action: "browser:navigate",
+        phase: "main",
+        status: "passed",
+        result: "passed",
+        inputSummary: {},
+        startedAt: new Date(0).toISOString(),
+        durationMs: 15,
+        artifacts: [
+          {
+            kind: "trace",
+            data: Buffer.from("zip"),
+            contentType: "application/zip",
+            extension: "zip",
+          },
+        ],
+      }),
+    ).rejects.toThrow("db failed");
+
+    expect(objects.removeObject).toHaveBeenCalledOnce();
+    expect(query.mock.calls.some(([sql]) => sql === "rollback")).toBe(true);
+  });
+
+  it("reports a missing MinIO object through stable artifact availability metadata", async () => {
+    const pool = {
+      query: vi.fn(() =>
+        Promise.resolve({
+          rows: [
+            {
+              id: "00000000-0000-4000-8000-000000000004",
+              run_id: "00000000-0000-4000-8000-000000000001",
+              run_case_id: "00000000-0000-4000-8000-000000000003",
+              step_run_id: "00000000-0000-4000-8000-000000000002",
+              attempt: 1,
+              kind: "trace",
+              object_key: "missing.zip",
+              size_bytes: 3,
+              sha256: "a".repeat(64),
+              redacted: true,
+              locked: false,
+              retained_until: new Date(Date.now() + 60_000),
+              created_at: new Date(0),
+            },
+          ],
+        }),
+      ),
+    };
+    const objects = {
+      putObject: vi.fn(),
+      removeObject: vi.fn(),
+      statObject: vi.fn(() =>
+        Promise.reject(Object.assign(new Error("missing"), { code: "NoSuchKey" })),
+      ),
+      getObject: vi.fn(),
+    } satisfies ArtifactObjectStore;
+    const store = new TestRunStore(pool as never, undefined, {
+      client: objects,
+      bucket: "test-artifacts",
+    });
+
+    await expect(store.listArtifacts("00000000-0000-4000-8000-000000000001")).resolves.toEqual([
+      expect.objectContaining({ availability: "missing", attempt: 1 }),
+    ]);
   });
 });
 

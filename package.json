@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "npm run build:packages && npm run build:apps",
-    "build:packages": "npm run build -w @spark-x-test/contracts && npm run build -w @spark-x-test/case-schema && npm run build -w @spark-x-test/adapter-sdk && npm run build -w @spark-x-test/execution-engine && npm run build -w @spark-x-test/executors && npm run build -w @spark-x-test/reporting && npm run build -w @spark-x-test/service-runtime && npm run build -w @spark-x-test/adapter-spark-x-agent",
+    "build:packages": "npm run build -w @spark-x-test/contracts && npm run build -w @spark-x-test/case-schema && npm run build -w @spark-x-test/adapter-sdk && npm run build -w @spark-x-test/execution-engine && npm run build -w @spark-x-test/reporting && npm run build -w @spark-x-test/executors && npm run build -w @spark-x-test/service-runtime && npm run build -w @spark-x-test/adapter-spark-x-agent",
     "build:apps": "npm run build -w @spark-x-test/api && npm run build -w @spark-x-test/scheduler && npm run build -w @spark-x-test/worker && npm run build -w @spark-x-test/web",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run validate:contracts",
     "dev": "concurrently -n web,api,scheduler,worker -c cyan,green,yellow,magenta \"npm run dev -w @spark-x-test/web\" \"npm run dev -w @spark-x-test/api\" \"npm run dev -w @spark-x-test/scheduler\" \"npm run dev -w @spark-x-test/worker\"",

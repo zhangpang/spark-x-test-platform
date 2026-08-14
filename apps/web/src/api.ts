@@ -1,6 +1,6 @@
-import type { TestRunDetail, TestRunRecord } from "@spark-x-test/contracts";
+import type { ArtifactRecord, TestRunDetail, TestRunRecord } from "@spark-x-test/contracts";
 
-export type { TestRunDetail, TestRunRecord } from "@spark-x-test/contracts";
+export type { ArtifactRecord, TestRunDetail, TestRunRecord } from "@spark-x-test/contracts";
 
 export type ActionLevel = "read" | "write" | "dangerous";
 
@@ -256,6 +256,9 @@ export const controlPlaneApi = {
   getRun(runId: string): Promise<TestRunDetail> {
     return request(`/runs/${runId}`);
   },
+  async listRunArtifacts(runId: string): Promise<readonly ArtifactRecord[]> {
+    return (await request<Page<ArtifactRecord>>(`/runs/${runId}/artifacts`)).items;
+  },
   cancelRun(runId: string): Promise<TestRunRecord> {
     return request(`/runs/${runId}/cancel`, { method: "POST" });
   },
@@ -271,6 +274,7 @@ export const controlPlaneApi = {
       "case.started",
       "case.completed",
       "step.completed",
+      "artifact.created",
     ].forEach((name) => source.addEventListener(name, listener));
     return () => source.close();
   },

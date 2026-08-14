@@ -13,6 +13,8 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@spark-x-test/contracts": "0.1.0"
+    "@spark-x-test/contracts": "0.1.0",
+    "@spark-x-test/reporting": "0.1.0",
+    "playwright": "1.55.1"
   }
 }

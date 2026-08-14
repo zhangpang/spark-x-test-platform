@@ -24,7 +24,14 @@ const actionRank: Readonly<Record<ActionLevel, number>> = {
   write: 1,
   dangerous: 2,
 };
-const availableActions = new Set(["http:request"]);
+const availableActions = new Set([
+  "http:request",
+  "browser:navigate",
+  "browser:click",
+  "browser:fill",
+  "browser:assert-text",
+]);
+const availableCompensationActions = new Set(["http:request"]);
 const availableAssertions = new Set(["status:equals"]);
 
 function isObject(value: unknown): value is JsonObject {
@@ -211,6 +218,7 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
     if (step.kind !== "action" || typeof step.action !== "string" || !isObject(step.params)) {
       continue;
     }
+    const params = step.params;
     if (!availableActions.has(step.action)) {
       issues.push({
         severity: "error",
@@ -286,12 +294,78 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
         }
       }
     }
+    if (step.action.startsWith("browser:")) {
+      if (
+        ["url", "baseUrl", "host", "script", "javascript", "evaluate", "code"].some(
+          (name) => name in params,
+        )
+      ) {
+        issues.push({
+          severity: "error",
+          code: "ARBITRARY_BROWSER_INPUT_FORBIDDEN",
+          path: `$.steps.${id}.params`,
+          message: "浏览器步骤不得指定目标主机或任意脚本，只允许已注册的声明式参数。",
+        });
+      }
+      if (step.action === "browser:navigate") {
+        const path = step.params.path;
+        if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) {
+          issues.push({
+            severity: "error",
+            code: "BROWSER_PATH_INVALID",
+            path: `$.steps.${id}.params.path`,
+            message: "浏览器导航只能填写以 / 开头的相对路径，目标主机由环境提供。",
+          });
+        }
+      } else if (typeof step.params.selector !== "string" || step.params.selector.length === 0) {
+        issues.push({
+          severity: "error",
+          code: "BROWSER_SELECTOR_INVALID",
+          path: `$.steps.${id}.params.selector`,
+          message: "浏览器交互步骤必须提供非空 selector。",
+        });
+      }
+      if (
+        step.action === "browser:fill" &&
+        (typeof step.params.value !== "string" || step.params.value.length === 0)
+      ) {
+        issues.push({
+          severity: "error",
+          code: "BROWSER_VALUE_INVALID",
+          path: `$.steps.${id}.params.value`,
+          message: "浏览器填写步骤必须提供 value。",
+        });
+      }
+      if (
+        step.action === "browser:assert-text" &&
+        (typeof step.params.text !== "string" || step.params.text.length === 0)
+      ) {
+        issues.push({
+          severity: "error",
+          code: "BROWSER_TEXT_INVALID",
+          path: `$.steps.${id}.params.text`,
+          message: "浏览器文本断言必须提供 text。",
+        });
+      }
+      const metadata = isObject(definition.metadata) ? definition.metadata : undefined;
+      if (
+        ["browser:click", "browser:fill"].includes(step.action) &&
+        metadata?.actionLevel === "read"
+      ) {
+        issues.push({
+          severity: "error",
+          code: "ACTION_LEVEL_UNDERSPECIFIED",
+          path: "$.metadata.actionLevel",
+          message: `${step.action} 至少需要 write 动作等级。`,
+        });
+      }
+    }
 
     const resource = isObject(step.resource) ? step.resource : undefined;
     const cleanup =
       resource !== undefined && isObject(resource.cleanup) ? resource.cleanup : undefined;
     if (cleanup !== undefined) {
-      if (typeof cleanup.action !== "string" || !availableActions.has(cleanup.action)) {
+      if (typeof cleanup.action !== "string" || !availableCompensationActions.has(cleanup.action)) {
         const cleanupAction = typeof cleanup.action === "string" ? cleanup.action : "无效动作";
         issues.push({
           severity: "error",
@@ -441,14 +515,15 @@ function validateEnvironmentTarget(environment: EnvironmentRecord): ValidationIs
   return issues;
 }
 
-function validateHttpStepTargets(
+function validateStepTargets(
   definition: JsonObject,
   environment: EnvironmentRecord,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   for (const step of collectSteps(definition)) {
+    const action = typeof step.action === "string" ? step.action : "";
     if (
-      step.action !== "http:request" ||
+      !["http:request", "browser:navigate"].includes(action) ||
       !isObject(step.params) ||
       typeof step.params.path !== "string"
     ) {
@@ -477,9 +552,12 @@ function validateHttpStepTargets(
     if (!allowed) {
       issues.push({
         severity: "error",
-        code: "HTTP_TARGET_NOT_ALLOWLISTED",
+        code:
+          action === "browser:navigate"
+            ? "BROWSER_TARGET_NOT_ALLOWLISTED"
+            : "HTTP_TARGET_NOT_ALLOWLISTED",
         path: `$.steps.${typeof step.id === "string" ? step.id : "unknown"}.params.path`,
-        message: `HTTP 路径 ${step.params.path} 不在环境目标白名单内。`,
+        message: `${action === "browser:navigate" ? "浏览器" : "HTTP"} 路径 ${step.params.path} 不在环境目标白名单内。`,
       });
     }
     const resource = isObject(step.resource) ? step.resource : undefined;
@@ -628,7 +706,7 @@ export function validateDefinition(
 
   if (context.environment !== undefined) {
     issues.push(...validateEnvironmentTarget(context.environment));
-    issues.push(...validateHttpStepTargets(definition, context.environment));
+    issues.push(...validateStepTargets(definition, context.environment));
     if (
       metadata !== undefined &&
       typeof metadata.actionLevel === "string" &&

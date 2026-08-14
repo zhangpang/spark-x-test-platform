@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import { runStatuses, type RunStatus, type TestRunJob } from "@spark-x-test/contracts";
-import type { TestRunStore } from "@spark-x-test/service-runtime";
+import { ArtifactAccessError, type TestRunStore } from "@spark-x-test/service-runtime";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
-import { badRequest, conflict, notFound } from "./control-plane/errors.js";
+import { badRequest, conflict, ControlPlaneError, notFound } from "./control-plane/errors.js";
 
 export interface RunQueue {
   add(name: string, data: TestRunJob, options: Readonly<Record<string, unknown>>): Promise<unknown>;
@@ -12,7 +12,14 @@ export interface RunQueue {
 
 export type RunRouteStore = Pick<
   TestRunStore,
-  "listRuns" | "createRun" | "getRun" | "getRunDetail" | "requestCancellation" | "listEvents"
+  | "listRuns"
+  | "createRun"
+  | "getRun"
+  | "getRunDetail"
+  | "requestCancellation"
+  | "listEvents"
+  | "listArtifacts"
+  | "getArtifactContent"
 >;
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -57,6 +64,16 @@ function runStatus(value: unknown): RunStatus {
     throw badRequest(`status 仅允许 ${runStatuses.join("、")}。`);
   }
   return value as RunStatus;
+}
+
+function artifactAccessError(error: ArtifactAccessError): ControlPlaneError {
+  const messages: Readonly<Record<ArtifactAccessError["code"], string>> = {
+    ARTIFACT_NOT_FOUND: "附件记录不存在。",
+    ARTIFACT_EXPIRED: "附件已超过保留期限。",
+    ARTIFACT_OBJECT_MISSING: "附件元数据存在，但对象存储内容已缺失。",
+    ARTIFACT_STORAGE_UNAVAILABLE: "附件对象存储暂时不可用。",
+  };
+  return new ControlPlaneError(error.code, messages[error.code], error.statusCode);
 }
 
 function createRunInput(body: unknown, idempotencyHeader?: string) {
@@ -139,6 +156,34 @@ export function registerRunRoutes(
     const detail = await store.getRunDetail(uuid(routeParams(request).runId, "runId"));
     if (detail === null) throw notFound("测试运行");
     return detail;
+  });
+
+  app.get(`${prefix}/runs/:runId/artifacts`, async (request) => {
+    const runId = uuid(routeParams(request).runId, "runId");
+    if ((await store.getRun(runId)) === null) throw notFound("测试运行");
+    try {
+      return { items: await store.listArtifacts(runId) };
+    } catch (error) {
+      if (error instanceof ArtifactAccessError) throw artifactAccessError(error);
+      throw error;
+    }
+  });
+
+  app.get(`${prefix}/artifacts/:artifactId/content`, async (request, reply) => {
+    try {
+      const content = await store.getArtifactContent(
+        uuid(routeParams(request).artifactId, "artifactId"),
+      );
+      reply.header("cache-control", "private, no-store");
+      reply.header("content-disposition", `inline; filename="${content.artifact.fileName}"`);
+      reply.header("content-length", String(content.artifact.sizeBytes));
+      reply.header("x-content-type-options", "nosniff");
+      reply.type(content.artifact.contentType);
+      return reply.send(content.stream);
+    } catch (error) {
+      if (error instanceof ArtifactAccessError) throw artifactAccessError(error);
+      throw error;
+    }
   });
 
   app.post(`${prefix}/runs/:runId/cancel`, async (request, reply) => {

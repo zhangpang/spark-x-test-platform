@@ -135,7 +135,7 @@ describe("run worker", () => {
   it("classifies an unavailable executor as a test failure", async () => {
     const store = fakeStore(
       snapshot({
-        steps: [{ id: "browser", action: "browser:navigate", params: { path: "/" } }],
+        steps: [{ id: "missing", action: "adapter:missing/action", params: {} }],
       }),
     );
     await executeRunJob(job, "worker-1", store);
@@ -145,6 +145,103 @@ describe("run worker", () => {
       "blocked",
       expect.objectContaining({ code: "EXECUTOR_NOT_AVAILABLE" }),
     );
+  });
+
+  it("records Chromium screenshots and trace chunks against the browser step attempt", async () => {
+    const store = fakeStore(
+      snapshot({
+        steps: [
+          {
+            id: "open-console",
+            action: "browser:navigate",
+            params: { path: "/" },
+            capture: { title: "$.title" },
+          },
+        ],
+      }),
+    );
+    const close = vi.fn(() => Promise.resolve());
+    const browserSessionFactory = vi.fn(() =>
+      Promise.resolve({
+        execute: vi.fn(() =>
+          Promise.resolve({
+            output: { url: "http://api:4100/", title: "Platform", status: 200 },
+            artifacts: [
+              {
+                kind: "screenshot" as const,
+                data: Buffer.from("png"),
+                contentType: "image/png" as const,
+                extension: "png" as const,
+              },
+              {
+                kind: "trace" as const,
+                data: Buffer.from("zip"),
+                contentType: "application/zip" as const,
+                extension: "zip" as const,
+              },
+            ],
+          }),
+        ),
+        close,
+      }),
+    );
+
+    await executeRunJob(job, "worker-1", store, undefined, { browserSessionFactory });
+
+    expect(browserSessionFactory).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: "http://api:4100/" }),
+    );
+    expect(store.recordStep).toHaveBeenCalledWith(
+      job.runId,
+      expect.objectContaining({
+        attempt: 1,
+        action: "browser:navigate",
+        status: "passed",
+        artifacts: [
+          expect.objectContaining({ kind: "screenshot" }),
+          expect.objectContaining({ kind: "trace" }),
+        ],
+      }),
+    );
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("classifies attachment persistence failure without retrying away the root cause", async () => {
+    const store = fakeStore(
+      snapshot({
+        steps: [{ id: "open-console", action: "browser:navigate", params: { path: "/" } }],
+      }),
+    );
+    vi.mocked(store.recordStep).mockImplementation((_runId, input) =>
+      "artifacts" in input ? Promise.reject(new Error("minio unavailable")) : Promise.resolve(),
+    );
+    const browserSessionFactory = vi.fn(() =>
+      Promise.resolve({
+        execute: () =>
+          Promise.resolve({
+            output: { url: "http://api:4100/" },
+            artifacts: [
+              {
+                kind: "screenshot" as const,
+                data: Buffer.from("png"),
+                contentType: "image/png" as const,
+                extension: "png" as const,
+              },
+            ],
+          }),
+        close: () => Promise.resolve(),
+      }),
+    );
+
+    await executeRunJob(job, "worker-1", store, undefined, { browserSessionFactory });
+
+    expect(store.completeRun).toHaveBeenCalledWith(
+      job.runId,
+      expect.objectContaining({ infrastructureFailed: 1 }),
+      "inconclusive",
+      expect.objectContaining({ code: "ARTIFACT_PERSISTENCE_FAILED" }),
+    );
+    expect(store.startCase).toHaveBeenCalledTimes(2);
   });
 
   it("promotes a cleanup failure to an infrastructure failure", async () => {

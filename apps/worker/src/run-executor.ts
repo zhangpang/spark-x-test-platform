@@ -14,12 +14,20 @@ import {
   summarizeCaseResults,
 } from "@spark-x-test/execution-engine";
 import {
+  browserActions,
+  BrowserExecutorFailure,
+  createChromiumSession,
   executeHttpRequest,
   ExecutorFailure,
   interpolateString,
+  type BrowserAction,
+  type BrowserExecutionSession,
+  type BrowserSessionFactory,
+  type ExecutorArtifact,
   type HttpExecutionResult,
   type HttpStepParameters,
 } from "@spark-x-test/executors";
+import { redactEvidence } from "@spark-x-test/reporting";
 import type {
   RunExecutionSnapshot,
   SecretVariableReference,
@@ -87,6 +95,10 @@ interface AttemptResult {
 interface CleanupResult {
   readonly status: CleanupStatus;
   readonly failure: RunFailure | null;
+}
+
+export interface RunExecutionOptions {
+  readonly browserSessionFactory?: BrowserSessionFactory;
 }
 
 function objectValue(value: unknown): Readonly<Record<string, unknown>> | null {
@@ -205,33 +217,11 @@ function parseDefinition(definition: Readonly<Record<string, unknown>>): ParsedD
   };
 }
 
-function redactEvidence(
-  value: unknown,
-  variables: Readonly<Record<string, unknown>>,
-  depth = 0,
-): unknown {
-  if (depth > 20) return "[TRUNCATED]";
-  const secrets = Object.entries(variables)
+function secretValues(variables: Readonly<Record<string, unknown>>): readonly string[] {
+  return Object.entries(variables)
     .filter(([name, candidate]) => name.startsWith("case.") && typeof candidate === "string")
     .map(([, candidate]) => candidate as string)
     .filter((candidate) => candidate.length > 0);
-  if (typeof value === "string") {
-    return secrets.reduce((redacted, secret) => redacted.replaceAll(secret, "[REDACTED]"), value);
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactEvidence(item, variables, depth + 1));
-  }
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        key,
-        /authorization|password|token|secret|cookie/i.test(key)
-          ? "[REDACTED]"
-          : redactEvidence(item, variables, depth + 1),
-      ]),
-    );
-  }
-  return value;
 }
 
 function httpParameters(params: Readonly<Record<string, unknown>>): HttpStepParameters {
@@ -260,19 +250,14 @@ function httpParameters(params: Readonly<Record<string, unknown>>): HttpStepPara
 }
 
 function captureValues(
-  response: HttpExecutionResult,
+  output: Readonly<Record<string, unknown>>,
   capture: Readonly<Record<string, string>>,
   variables: Record<string, unknown>,
 ): void {
   for (const [name, path] of Object.entries(capture)) {
-    const root: Readonly<Record<string, unknown>> = {
-      status: response.status,
-      body: response.body,
-      headers: response.headers,
-    };
     const segments = /^\$\.([a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*)$/.exec(path)?.[1]?.split(".");
     if (segments === undefined) continue;
-    let value: unknown = root;
+    let value: unknown = output;
     for (const segment of segments) {
       const record = objectValue(value);
       if (record === null || !(segment in record)) {
@@ -331,13 +316,40 @@ async function executeStep(
   store: RunExecutionStore,
   timeoutMs: number,
   signal: AbortSignal,
+  getBrowserSession: () => Promise<BrowserExecutionSession>,
 ): Promise<AttemptResult> {
   const startedAt = new Date().toISOString();
   const started = performance.now();
   const stepRunId = randomUUID();
   let stepRecorded = false;
+  let artifacts: readonly ExecutorArtifact[] = [];
   try {
-    if (step.action !== "http:request") {
+    let output: Readonly<Record<string, unknown>>;
+    if (step.action === "http:request") {
+      const response: HttpExecutionResult = await executeHttpRequest(
+        snapshot.environment,
+        httpParameters(step.params),
+        variables,
+        { timeoutMs, signal },
+      );
+      output = {
+        status: response.status,
+        headers: response.headers,
+        body: response.body,
+        url: response.url,
+      };
+    } else if (browserActions.includes(step.action as BrowserAction)) {
+      const response = await (
+        await getBrowserSession()
+      ).execute(step.action as BrowserAction, step.params, variables, {
+        stepId: step.id,
+        timeoutMs,
+        signal,
+        secrets: secretValues(variables),
+      });
+      output = response.output;
+      artifacts = response.artifacts;
+    } else {
       throw new ExecutorFailure({
         code: "EXECUTOR_NOT_AVAILABLE",
         message: `执行器 ${step.action} 尚未在当前 Worker 镜像中注册。`,
@@ -345,34 +357,53 @@ async function executeStep(
         stepId: step.id,
       });
     }
-    const response = await executeHttpRequest(
-      snapshot.environment,
-      httpParameters(step.params),
-      variables,
-      { timeoutMs, signal },
-    );
-    captureValues(response, step.capture, variables);
+    captureValues(output, step.capture, variables);
     assertResponse(step.assertions, variables, step.id);
-    await store.recordStep(runId, {
-      id: stepRunId,
-      runCaseId,
-      attempt,
-      path,
-      stepId: step.id,
-      action: step.action,
-      phase,
-      status: "passed",
-      result: "passed",
-      inputSummary: sanitizedInput(step),
-      outputSummary: {
-        status: response.status,
-        headers: redactEvidence(response.headers, variables),
-        body: redactEvidence(response.body, variables),
-        url: redactEvidence(response.url, variables),
-      },
-      startedAt,
-      durationMs: Math.max(0, Math.round(performance.now() - started)),
-    });
+    try {
+      await store.recordStep(runId, {
+        id: stepRunId,
+        runCaseId,
+        attempt,
+        path,
+        stepId: step.id,
+        action: step.action,
+        phase,
+        status: "passed",
+        result: "passed",
+        inputSummary: sanitizedInput(step),
+        outputSummary: redactEvidence(output, secretValues(variables)) as Readonly<
+          Record<string, unknown>
+        >,
+        startedAt,
+        durationMs: Math.max(0, Math.round(performance.now() - started)),
+        ...(artifacts.length === 0 ? {} : { artifacts }),
+      });
+    } catch (error) {
+      if (artifacts.length === 0) throw error;
+      const failure: RunFailure = {
+        code: "ARTIFACT_PERSISTENCE_FAILED",
+        message: "浏览器步骤已执行，但结构化附件无法安全持久化。",
+        classification: "infrastructure_failed",
+        stepId: step.id,
+      };
+      await store.recordStep(runId, {
+        id: stepRunId,
+        runCaseId,
+        attempt,
+        path,
+        stepId: step.id,
+        action: step.action,
+        phase,
+        status: "failed",
+        result: failure.classification,
+        inputSummary: sanitizedInput(step),
+        error: failure,
+        startedAt,
+        durationMs: Math.max(0, Math.round(performance.now() - started)),
+      });
+      stepRecorded = true;
+      return { result: failure.classification, failure };
+    }
     stepRecorded = true;
     if (step.resource !== undefined) {
       const resourceId = interpolateString(step.resource.id, variables);
@@ -405,8 +436,9 @@ async function executeStep(
             stepId: step.id,
           };
     const cancelled = signal.aborted && failure.code === "EXECUTION_CANCELLED";
+    if (error instanceof BrowserExecutorFailure) artifacts = error.artifacts;
     if (!stepRecorded) {
-      await store.recordStep(runId, {
+      const failedStep = {
         id: stepRunId,
         runCaseId,
         attempt,
@@ -420,7 +452,16 @@ async function executeStep(
         ...(cancelled ? {} : { error: failure }),
         startedAt,
         durationMs: Math.max(0, Math.round(performance.now() - started)),
-      });
+      } as const;
+      try {
+        await store.recordStep(runId, {
+          ...failedStep,
+          ...(artifacts.length === 0 ? {} : { artifacts }),
+        });
+      } catch (persistenceError) {
+        if (artifacts.length === 0) throw persistenceError;
+        await store.recordStep(runId, failedStep);
+      }
     }
     return {
       result: cancelled ? "cancelled" : failure.classification,
@@ -438,30 +479,39 @@ async function executeAttempt(
   store: RunExecutionStore,
   variables: Record<string, unknown>,
   signal: AbortSignal,
+  browserSessionFactory: BrowserSessionFactory,
 ): Promise<AttemptResult> {
-  for (const [index, step] of definition.steps.entries()) {
-    if (signal.aborted) {
-      return {
-        result: "cancelled",
-        failure: null,
-      };
+  let browserSession: BrowserExecutionSession | undefined;
+  const getBrowserSession = async () =>
+    (browserSession ??= await browserSessionFactory(snapshot.environment));
+  try {
+    for (const [index, step] of definition.steps.entries()) {
+      if (signal.aborted) {
+        return {
+          result: "cancelled",
+          failure: null,
+        };
+      }
+      const result = await executeStep(
+        runId,
+        runCaseId,
+        attempt,
+        step,
+        `steps[${index}]`,
+        "main",
+        snapshot,
+        variables,
+        store,
+        definition.stepTimeoutMs,
+        signal,
+        getBrowserSession,
+      );
+      if (result.result !== "passed") return result;
     }
-    const result = await executeStep(
-      runId,
-      runCaseId,
-      attempt,
-      step,
-      `steps[${index}]`,
-      "main",
-      snapshot,
-      variables,
-      store,
-      definition.stepTimeoutMs,
-      signal,
-    );
-    if (result.result !== "passed") return result;
+    return { result: "passed", failure: null };
+  } finally {
+    await browserSession?.close().catch(() => undefined);
   }
-  return { result: "passed", failure: null };
 }
 
 async function executeCleanup(
@@ -472,39 +522,48 @@ async function executeCleanup(
   snapshot: RunExecutionSnapshot,
   store: RunExecutionStore,
   variables: Record<string, unknown>,
+  browserSessionFactory: BrowserSessionFactory,
 ): Promise<CleanupResult> {
   if (definition.finallySteps.length === 0) return { status: "not_required", failure: null };
   const cleanupSignal = new AbortController().signal;
-  for (const [index, step] of definition.finallySteps.entries()) {
-    const result = await executeStep(
-      runId,
-      runCaseId,
-      attempt,
-      step,
-      `finally[${index}]`,
-      "finally",
-      snapshot,
-      variables,
-      store,
-      definition.stepTimeoutMs,
-      cleanupSignal,
-    );
-    if (result.result !== "passed") {
-      return {
-        status: "failed",
-        failure: {
-          code: "CLEANUP_FAILED",
-          message:
-            result.failure === null
-              ? "用例清理步骤失败，需要检查测试数据或执行环境。"
-              : `用例清理步骤失败：${result.failure.message}`,
-          classification: "infrastructure_failed",
-          ...(result.failure?.stepId === undefined ? {} : { stepId: result.failure.stepId }),
-        },
-      };
+  let browserSession: BrowserExecutionSession | undefined;
+  const getBrowserSession = async () =>
+    (browserSession ??= await browserSessionFactory(snapshot.environment));
+  try {
+    for (const [index, step] of definition.finallySteps.entries()) {
+      const result = await executeStep(
+        runId,
+        runCaseId,
+        attempt,
+        step,
+        `finally[${index}]`,
+        "finally",
+        snapshot,
+        variables,
+        store,
+        definition.stepTimeoutMs,
+        cleanupSignal,
+        getBrowserSession,
+      );
+      if (result.result !== "passed") {
+        return {
+          status: "failed",
+          failure: {
+            code: "CLEANUP_FAILED",
+            message:
+              result.failure === null
+                ? "用例清理步骤失败，需要检查测试数据或执行环境。"
+                : `用例清理步骤失败：${result.failure.message}`,
+            classification: "infrastructure_failed",
+            ...(result.failure?.stepId === undefined ? {} : { stepId: result.failure.stepId }),
+          },
+        };
+      }
     }
+    return { status: "passed", failure: null };
+  } finally {
+    await browserSession?.close().catch(() => undefined);
   }
-  return { status: "passed", failure: null };
 }
 
 export async function executeRunJob(
@@ -512,6 +571,7 @@ export async function executeRunJob(
   workerId: string,
   store: RunExecutionStore,
   enqueueCleanup?: (job: RunCleanupJob) => Promise<void>,
+  options: RunExecutionOptions = {},
 ): Promise<Readonly<{ ignored?: true; summary?: RunSummary; compensationPending?: true }>> {
   if (job.protocolVersion !== "1.0") throw new Error("Unsupported run job protocol");
   const snapshot = await store.claimRun(job.runId, workerId);
@@ -539,6 +599,7 @@ export async function executeRunJob(
   const results: CaseResult[] = [];
   const failures: RunFailure[] = [];
   let compensationRequired = false;
+  const browserSessionFactory = options.browserSessionFactory ?? createChromiumSession;
   try {
     for (const item of snapshot.cases) {
       const caseStartedAt = Date.now();
@@ -671,6 +732,7 @@ export async function executeRunJob(
           store,
           attemptVariables,
           caseController.signal,
+          browserSessionFactory,
         );
         if (attemptResult.result === "passed") {
           flaky = firstFailure !== null;
@@ -690,6 +752,7 @@ export async function executeRunJob(
         snapshot,
         store,
         attemptVariables,
+        browserSessionFactory,
       );
       if (cleanup.status === "passed") {
         const registered = await store.markCaseResources(job.runId, item.runCaseId, "passed");

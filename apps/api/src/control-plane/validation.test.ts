@@ -121,6 +121,59 @@ describe("M2 asset validation", () => {
     );
   });
 
+  it("accepts declared browser navigation and rejects script-shaped browser input", () => {
+    const browserDefinition = definition({
+      metadata: {
+        name: "Browser health",
+        systemKey: "sample-system",
+        moduleKey: "order",
+        priority: "P0",
+        classification: "blackbox",
+        actionLevel: "read",
+        tags: ["browser"],
+      },
+      steps: [
+        {
+          id: "open",
+          name: "open health",
+          kind: "action",
+          action: "browser:navigate",
+          params: { path: "/healthz", expectedStatus: 200 },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(browserDefinition, {
+        systemKey: "sample-system",
+        moduleKey: "order",
+        environment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const unsafe = definition({
+      steps: [
+        {
+          id: "open",
+          name: "unsafe",
+          kind: "action",
+          action: "browser:navigate",
+          params: { path: "/healthz", evaluate: "document.cookie" },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(unsafe, {
+        systemKey: "sample-system",
+        moduleKey: "order",
+        environment,
+      }).issues,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "ARBITRARY_BROWSER_INPUT_FORBIDDEN" }),
+      ]),
+    );
+  });
+
   it("requires cleanup and sufficient environment privilege for write cases", () => {
     const writeDefinition = definition({
       metadata: {

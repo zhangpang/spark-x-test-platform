@@ -1,10 +1,13 @@
-import { createDecipheriv, randomUUID } from "node:crypto";
+import { createDecipheriv, createHash, randomUUID } from "node:crypto";
 
 import {
   gateResults,
   dependencyNames,
   platformVersion,
   runStatuses,
+  type ArtifactAvailability,
+  type ArtifactKind,
+  type ArtifactRecord,
   type CaseResult,
   type CleanupJobRecord,
   type CleanupStatus,
@@ -96,6 +99,22 @@ interface StepRow {
   readonly duration_ms: number | null;
 }
 
+interface ArtifactRow {
+  readonly id: string;
+  readonly run_id: string;
+  readonly run_case_id: string | null;
+  readonly step_run_id: string | null;
+  readonly attempt: number | null;
+  readonly kind: ArtifactKind;
+  readonly object_key: string;
+  readonly size_bytes: string | number;
+  readonly sha256: string;
+  readonly redacted: boolean;
+  readonly locked: boolean;
+  readonly retained_until: Date | string | null;
+  readonly created_at: Date | string;
+}
+
 interface RunEventRow {
   readonly id: string | number;
   readonly run_id: string;
@@ -185,6 +204,47 @@ export interface CleanupWorkItem {
   readonly snapshot: RunExecutionSnapshot;
 }
 
+export interface ArtifactUpload {
+  readonly kind: "screenshot" | "trace";
+  readonly data: Uint8Array;
+  readonly contentType: "image/png" | "application/zip";
+  readonly extension: "png" | "zip";
+}
+
+export interface ArtifactObjectStore {
+  putObject(
+    bucket: string,
+    objectKey: string,
+    data: Buffer,
+    size: number,
+    metadata?: Readonly<Record<string, string>>,
+  ): Promise<unknown>;
+  removeObject(bucket: string, objectKey: string): Promise<unknown>;
+  statObject(bucket: string, objectKey: string): Promise<unknown>;
+  getObject(bucket: string, objectKey: string): Promise<NodeJS.ReadableStream>;
+}
+
+export interface ArtifactContent {
+  readonly artifact: ArtifactRecord;
+  readonly stream: NodeJS.ReadableStream;
+}
+
+export class ArtifactAccessError extends Error {
+  readonly code:
+    | "ARTIFACT_NOT_FOUND"
+    | "ARTIFACT_EXPIRED"
+    | "ARTIFACT_OBJECT_MISSING"
+    | "ARTIFACT_STORAGE_UNAVAILABLE";
+  readonly statusCode: 404 | 410 | 503;
+
+  constructor(code: ArtifactAccessError["code"], statusCode: ArtifactAccessError["statusCode"]) {
+    super(code);
+    this.name = "ArtifactAccessError";
+    this.code = code;
+    this.statusCode = statusCode;
+  }
+}
+
 function isoTimestamp(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : value;
 }
@@ -266,6 +326,51 @@ function mapStep(row: StepRow): StepRunRecord {
   };
 }
 
+function artifactPresentation(kind: ArtifactKind): Readonly<{
+  contentType: string;
+  extension: string;
+}> {
+  if (kind === "screenshot") return { contentType: "image/png", extension: "png" };
+  if (kind === "trace") return { contentType: "application/zip", extension: "zip" };
+  return { contentType: "application/octet-stream", extension: "bin" };
+}
+
+function mapArtifact(row: ArtifactRow, availability: ArtifactAvailability): ArtifactRecord {
+  const presentation = artifactPresentation(row.kind);
+  return {
+    id: row.id,
+    runId: row.run_id,
+    runCaseId: row.run_case_id,
+    stepRunId: row.step_run_id,
+    attempt: row.attempt,
+    kind: row.kind,
+    fileName: `${row.kind}-${row.id}.${presentation.extension}`,
+    contentType: presentation.contentType,
+    sizeBytes: Number(row.size_bytes),
+    sha256: row.sha256,
+    redacted: row.redacted,
+    locked: row.locked,
+    retainedUntil: row.retained_until === null ? null : isoTimestamp(row.retained_until),
+    availability,
+    createdAt: isoTimestamp(row.created_at),
+  };
+}
+
+function artifactExpired(row: ArtifactRow): boolean {
+  return (
+    !row.locked &&
+    row.retained_until !== null &&
+    (row.retained_until instanceof Date
+      ? row.retained_until.getTime()
+      : new Date(row.retained_until).getTime()) <= Date.now()
+  );
+}
+
+function objectMissing(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return ["NoSuchKey", "NotFound", "NoSuchObject"].includes(String(error.code));
+}
+
 function mapResource(row: ResourceRow): ResourceLedgerRecord {
   return {
     id: row.id,
@@ -314,9 +419,15 @@ export function serializeRunIdempotencyLockKey(
 export class TestRunStore {
   readonly #pool: Pool;
   readonly #secretKey?: Buffer;
+  readonly #artifactStorage?: Readonly<{ client: ArtifactObjectStore; bucket: string }>;
 
-  constructor(pool: Pool, encodedSecretKey?: string) {
+  constructor(
+    pool: Pool,
+    encodedSecretKey?: string,
+    artifactStorage?: Readonly<{ client: ArtifactObjectStore; bucket: string }>,
+  ) {
     this.#pool = pool;
+    if (artifactStorage !== undefined) this.#artifactStorage = artifactStorage;
     if (encodedSecretKey === undefined || encodedSecretKey.trim() === "") return;
     const decoded = Buffer.from(encodedSecretKey, "base64");
     if (decoded.length !== 32 || decoded.toString("base64") !== encodedSecretKey.trim()) {
@@ -518,6 +629,59 @@ export class TestRunStore {
       resources: resources.rows.map(mapResource),
       cleanupJob: cleanupJobs.rows[0] === undefined ? null : mapCleanupJob(cleanupJobs.rows[0]),
     };
+  }
+
+  async listArtifacts(runId: string): Promise<readonly ArtifactRecord[]> {
+    const result = await this.#pool.query<ArtifactRow>(
+      `select a.*, sr.attempt
+       from artifacts a
+       left join step_runs sr on sr.id = a.step_run_id
+       where a.run_id = $1
+       order by a.created_at, a.id`,
+      [runId],
+    );
+    return Promise.all(
+      result.rows.map(async (row) => {
+        if (artifactExpired(row)) return mapArtifact(row, "expired");
+        const storage = this.#artifactStorage;
+        if (storage === undefined) return mapArtifact(row, "missing");
+        try {
+          await storage.client.statObject(storage.bucket, row.object_key);
+          return mapArtifact(row, "available");
+        } catch (error) {
+          if (objectMissing(error)) return mapArtifact(row, "missing");
+          throw new ArtifactAccessError("ARTIFACT_STORAGE_UNAVAILABLE", 503);
+        }
+      }),
+    );
+  }
+
+  async getArtifactContent(id: string): Promise<ArtifactContent> {
+    const result = await this.#pool.query<ArtifactRow>(
+      `select a.*, sr.attempt
+       from artifacts a
+       left join step_runs sr on sr.id = a.step_run_id
+       where a.id = $1`,
+      [id],
+    );
+    const row = result.rows[0];
+    if (row === undefined) throw new ArtifactAccessError("ARTIFACT_NOT_FOUND", 404);
+    if (artifactExpired(row)) throw new ArtifactAccessError("ARTIFACT_EXPIRED", 410);
+    const storage = this.#artifactStorage;
+    if (storage === undefined) {
+      throw new ArtifactAccessError("ARTIFACT_STORAGE_UNAVAILABLE", 503);
+    }
+    try {
+      await storage.client.statObject(storage.bucket, row.object_key);
+      return {
+        artifact: mapArtifact(row, "available"),
+        stream: await storage.client.getObject(storage.bucket, row.object_key),
+      };
+    } catch (error) {
+      if (objectMissing(error)) throw new ArtifactAccessError("ARTIFACT_OBJECT_MISSING", 410);
+      if (error instanceof ArtifactAccessError) throw error;
+      throw new ArtifactAccessError("ARTIFACT_STORAGE_UNAVAILABLE", 503);
+    }
   }
 
   async listEvents(runId: string, afterId = 0): Promise<readonly RunEvent[]> {
@@ -1009,8 +1173,128 @@ export class TestRunStore {
       error?: RunFailure;
       startedAt: string;
       durationMs: number;
+      artifacts?: readonly ArtifactUpload[];
     }>,
   ): Promise<void> {
+    const artifacts = input.artifacts ?? [];
+    if (artifacts.length > 0) {
+      const storage = this.#artifactStorage;
+      if (storage === undefined) throw new Error("ARTIFACT_STORAGE_NOT_CONFIGURED");
+      const prepared = artifacts.map((artifact) => {
+        const maximum = artifact.kind === "screenshot" ? 10 * 1024 * 1024 : 50 * 1024 * 1024;
+        if (artifact.data.byteLength === 0 || artifact.data.byteLength > maximum) {
+          throw new Error("ARTIFACT_SIZE_LIMIT_EXCEEDED");
+        }
+        const id = randomUUID();
+        return {
+          ...artifact,
+          id,
+          data: Buffer.from(artifact.data),
+          objectKey: `runs/${runId}/cases/${input.runCaseId}/attempts/${input.attempt}/steps/${input.id}/${id}.${artifact.extension}`,
+          sha256: createHash("sha256").update(artifact.data).digest("hex"),
+          retainedUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000).toISOString(),
+        };
+      });
+      const uploaded: string[] = [];
+      const client = await this.#pool.connect();
+      try {
+        await client.query("begin");
+        await client.query(
+          `insert into step_runs
+             (id, run_case_id, attempt, step_path, step_id, action, phase, status, result,
+              input_summary, output_summary, error, started_at, finished_at, duration_ms)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb,
+                   $12::jsonb, $13, now(), $14)`,
+          [
+            input.id,
+            input.runCaseId,
+            input.attempt,
+            input.path,
+            input.stepId,
+            input.action,
+            input.phase,
+            input.status,
+            input.result,
+            JSON.stringify(input.inputSummary),
+            input.outputSummary === undefined ? null : JSON.stringify(input.outputSummary),
+            input.error === undefined ? null : JSON.stringify(input.error),
+            input.startedAt,
+            input.durationMs,
+          ],
+        );
+        for (const artifact of prepared) {
+          await storage.client.putObject(
+            storage.bucket,
+            artifact.objectKey,
+            artifact.data,
+            artifact.data.length,
+            {
+              "Content-Type": artifact.contentType,
+              "X-Amz-Meta-Artifact-Kind": artifact.kind,
+              "X-Amz-Meta-Redacted": "true",
+            },
+          );
+          uploaded.push(artifact.objectKey);
+          await client.query(
+            `insert into artifacts
+               (id, run_id, run_case_id, step_run_id, kind, object_key, size_bytes,
+                sha256, redacted, retained_until)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, true, $9)`,
+            [
+              artifact.id,
+              runId,
+              input.runCaseId,
+              input.id,
+              artifact.kind,
+              artifact.objectKey,
+              artifact.data.length,
+              artifact.sha256,
+              artifact.retainedUntil,
+            ],
+          );
+          await client.query(
+            `insert into run_events (run_id, event_type, data)
+             values ($1, 'artifact.created', $2::jsonb)`,
+            [
+              runId,
+              JSON.stringify({
+                artifactId: artifact.id,
+                runCaseId: input.runCaseId,
+                stepRunId: input.id,
+                attempt: input.attempt,
+                kind: artifact.kind,
+                sizeBytes: artifact.data.length,
+                redacted: true,
+              }),
+            ],
+          );
+        }
+        await client.query(
+          `insert into run_events (run_id, event_type, data)
+           values ($1, 'step.completed', $2::jsonb)`,
+          [
+            runId,
+            JSON.stringify({
+              runCaseId: input.runCaseId,
+              stepId: input.stepId,
+              attempt: input.attempt,
+              phase: input.phase,
+              result: input.result,
+            }),
+          ],
+        );
+        await client.query("commit");
+        return;
+      } catch (error) {
+        await client.query("rollback").catch(() => undefined);
+        await Promise.allSettled(
+          uploaded.map((objectKey) => storage.client.removeObject(storage.bucket, objectKey)),
+        );
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
     await this.#pool.query(
       `insert into step_runs
          (id, run_case_id, attempt, step_path, step_id, action, phase, status, result,
@@ -1037,6 +1321,7 @@ export class TestRunStore {
     await this.appendEvent(runId, "step.completed", {
       runCaseId: input.runCaseId,
       stepId: input.stepId,
+      attempt: input.attempt,
       phase: input.phase,
       result: input.result,
     });

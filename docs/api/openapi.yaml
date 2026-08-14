@@ -927,13 +927,61 @@ paths:
       operationId: listRunArtifacts
       responses:
         "200":
-          description: Artifact metadata and short-lived download URLs.
+          description: Structured artifact metadata and availability.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Artifact"
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Artifact"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: Artifact object storage is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /artifacts/{artifactId}/content:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactId"
+    get:
+      tags: [Runs]
+      operationId: getArtifactContent
+      responses:
+        "200":
+          description: Redacted artifact content streamed through the API.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          description: Artifact expired or its object content is missing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Artifact object storage is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /artifacts/{artifactId}/retention:
     parameters:
       - $ref: "#/components/parameters/ArtifactId"
@@ -1941,7 +1989,22 @@ components:
           type: [string, "null"]
     Artifact:
       type: object
-      required: [id, runId, type, size, sha256, expiresAt]
+      required:
+        - id
+        - runId
+        - runCaseId
+        - stepRunId
+        - attempt
+        - kind
+        - fileName
+        - contentType
+        - sizeBytes
+        - sha256
+        - redacted
+        - locked
+        - retainedUntil
+        - availability
+        - createdAt
       properties:
         id:
           type: string
@@ -1949,21 +2012,38 @@ components:
         runId:
           type: string
           format: uuid
-        type:
-          enum: [log, screenshot, video, trace, http_exchange, tool_call, document_hit, judge_result, report]
-        size:
+        runCaseId:
+          type: [string, "null"]
+          format: uuid
+        stepRunId:
+          type: [string, "null"]
+          format: uuid
+        attempt:
+          type: [integer, "null"]
+          minimum: 1
+        kind:
+          enum: [log, screenshot, trace, http_exchange, tool_call, matched_document, judge, external_report]
+        fileName:
+          type: string
+        contentType:
+          type: string
+        sizeBytes:
           type: integer
           minimum: 0
         sha256:
           type: string
-        downloadUrl:
-          type: string
-          format: uri
-        expiresAt:
+        redacted:
+          type: boolean
+        retainedUntil:
           type: [string, "null"]
           format: date-time
         locked:
           type: boolean
+        availability:
+          enum: [available, expired, missing]
+        createdAt:
+          type: string
+          format: date-time
     SecretInput:
       type: object
       additionalProperties: false

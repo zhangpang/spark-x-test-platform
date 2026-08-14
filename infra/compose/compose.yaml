@@ -190,7 +190,12 @@ services:
 
   worker:
     <<: *service-base
+    image: spark-x-test-platform-worker:${PLATFORM_VERSION:-dev}
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile.worker
     command: ["node", "apps/worker/dist/main.js"]
+    shm_size: "1gb"
     environment:
       <<: *service-environment
       WORKER_HEALTH_PORT: 4102

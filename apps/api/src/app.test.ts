@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { Readable } from "node:stream";
 
 import type { ControlPlaneRepository, JsonObject } from "./control-plane/model.js";
 import { buildApiApplication } from "./app.js";
 import type { RunQueue, RunRouteStore } from "./run-routes.js";
+import { ArtifactAccessError } from "@spark-x-test/service-runtime";
 
 const environment = {
   NODE_ENV: "test",
@@ -197,5 +199,59 @@ describe("API service", () => {
     expect(queued).toEqual([
       expect.objectContaining({ protocolVersion: "1.0", runId: run.id, priority: 50 }),
     ]);
+  });
+
+  it("returns stable artifact expiry errors instead of a generic server failure", async () => {
+    const runStore = {
+      getArtifactContent: () => Promise.reject(new ArtifactAccessError("ARTIFACT_EXPIRED", 410)),
+    } as unknown as RunRouteStore;
+    const application = buildApiApplication(environment, { runStore });
+    applications.push(application);
+
+    const response = await application.app.inject({
+      method: "GET",
+      url: "/api/v1/artifacts/00000000-0000-4000-8000-000000000109/content",
+    });
+
+    expect(response.statusCode).toBe(410);
+    expect(response.json()).toMatchObject({ code: "ARTIFACT_EXPIRED" });
+  });
+
+  it("streams available artifact content with safe response headers", async () => {
+    const runStore = {
+      getArtifactContent: () =>
+        Promise.resolve({
+          artifact: {
+            id: "00000000-0000-4000-8000-000000000109",
+            runId: "00000000-0000-4000-8000-000000000101",
+            runCaseId: "00000000-0000-4000-8000-000000000104",
+            stepRunId: "00000000-0000-4000-8000-000000000110",
+            attempt: 1,
+            kind: "screenshot" as const,
+            fileName: "screenshot-00000000-0000-4000-8000-000000000109.png",
+            contentType: "image/png",
+            sizeBytes: 3,
+            sha256: "a".repeat(64),
+            redacted: true,
+            locked: false,
+            retainedUntil: null,
+            availability: "available" as const,
+            createdAt: new Date(0).toISOString(),
+          },
+          stream: Readable.from(Buffer.from("png")),
+        }),
+    } as unknown as RunRouteStore;
+    const application = buildApiApplication(environment, { runStore });
+    applications.push(application);
+
+    const response = await application.app.inject({
+      method: "GET",
+      url: "/api/v1/artifacts/00000000-0000-4000-8000-000000000109/content",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("image/png");
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(response.body).toBe("png");
   });
 });

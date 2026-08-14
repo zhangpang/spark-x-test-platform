@@ -26,6 +26,7 @@ const workerImageDigest =
 const runStore = new TestRunStore(
   application.dependencies.postgres,
   process.env.PLATFORM_SECRET_ENCRYPTION_KEY,
+  { client: application.dependencies.minio, bucket: application.config.minio.bucket },
 );
 const workerRegistration = {
   ...(application.config.workerIdentity === undefined
@@ -36,6 +37,12 @@ const workerRegistration = {
   concurrencySlots: concurrency,
   capabilities: [
     "http:request",
+    "browser:navigate",
+    "browser:click",
+    "browser:fill",
+    "browser:assert-text",
+    "screenshot",
+    "playwright-trace",
     "finally",
     "diagnostic-retry",
     "resource-lock",

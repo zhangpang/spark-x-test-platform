@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { caseResults, dependencyNames, runStatuses } from "./index.js";
+import { artifactKinds, caseResults, dependencyNames, runStatuses } from "./index.js";
 
 describe("platform contracts", () => {
   it("keeps dependency health names stable", () => {
@@ -11,5 +11,6 @@ describe("platform contracts", () => {
     expect(runStatuses).toContain("cleaning");
     expect(caseResults).toContain("environment_failed");
     expect(caseResults).toContain("infrastructure_failed");
+    expect(artifactKinds).toEqual(expect.arrayContaining(["screenshot", "trace", "http_exchange"]));
   });
 });

@@ -1849,13 +1849,13 @@ th {
   font-weight: 650;
 }
 
-.run-timeline li {
+.run-timeline > ol > li {
   position: relative;
   min-height: 56px;
   padding-left: 24px;
 }
 
-.run-timeline li:not(:last-child)::before {
+.run-timeline > ol > li:not(:last-child)::before {
   position: absolute;
   top: 13px;
   bottom: -12px;
@@ -1887,12 +1887,12 @@ th {
   border-color: var(--danger);
 }
 
-.run-timeline li > div {
+.run-timeline > ol > li > div {
   display: grid;
   gap: 5px;
 }
 
-.run-timeline li > div > span {
+.run-timeline > ol > li > div > span {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1913,6 +1913,92 @@ th {
   margin: 0;
   color: var(--danger);
   font-size: 9px;
+}
+
+.artifact-list {
+  margin: 3px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  list-style: none;
+}
+
+.artifact-list li {
+  min-width: 0;
+}
+
+.artifact-list a,
+.artifact-unavailable {
+  min-height: 48px;
+  padding: 8px 9px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: inherit;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-decoration: none;
+}
+
+.artifact-list a:hover {
+  background: var(--primary-soft);
+  border-color: color-mix(in srgb, var(--primary) 36%, var(--border));
+}
+
+.artifact-kind {
+  width: 32px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-dark);
+  background: var(--primary-soft);
+  border-radius: 6px;
+  font-size: 7px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+}
+
+.artifact-kind-trace {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.artifact-list a > span:nth-child(2),
+.artifact-unavailable > span:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.artifact-list strong,
+.artifact-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-list b {
+  color: var(--primary);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.artifact-unavailable {
+  color: var(--muted);
+  background: var(--surface-strong);
+}
+
+.artifact-unavailable b,
+.artifact-missing b {
+  color: var(--danger);
+}
+
+.artifact-expired b {
+  color: var(--warning);
 }
 
 @media (max-width: 1180px) {
@@ -2048,6 +2134,10 @@ th {
   .run-case-column {
     border-right: 0;
     border-bottom: 1px solid var(--border);
+  }
+
+  .artifact-list {
+    grid-template-columns: 1fr;
   }
 
   .resource-list li {

@@ -1,0 +1,17 @@
+FROM node:22.18.0-bookworm-slim AS build
+
+WORKDIR /app
+COPY . .
+RUN npm ci && npm run build
+
+FROM node:22.18.0-bookworm-slim AS runtime
+
+ENV NODE_ENV=production
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_TRACE_TMPDIR=/dev/shm/spark-x-test-traces
+WORKDIR /app
+COPY --chown=node:node --from=build /app /app
+RUN npx playwright install --with-deps chromium \
+  && chown -R node:node /ms-playwright
+USER node
+CMD ["node", "apps/worker/dist/main.js"]

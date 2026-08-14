@@ -6,6 +6,7 @@ import {
   ApiError,
   controlPlaneApi,
   type ActionLevel,
+  type ArtifactRecord,
   type EnvironmentRecord,
   type ModuleRecord,
   type SecretMetadata,
@@ -147,6 +148,29 @@ const cleanupJobLabels = {
   failed: "补偿待重试",
 } as const;
 
+const artifactKindLabels: Readonly<Record<ArtifactRecord["kind"], string>> = {
+  log: "日志",
+  screenshot: "截图",
+  trace: "Playwright Trace",
+  http_exchange: "HTTP 交换",
+  tool_call: "工具调用",
+  matched_document: "匹配文档",
+  judge: "判定",
+  external_report: "外部报告",
+};
+
+const artifactAvailabilityLabels: Readonly<Record<ArtifactRecord["availability"], string>> = {
+  available: "可查看",
+  expired: "已过期",
+  missing: "对象缺失",
+};
+
+function artifactSize(sizeBytes: number): string {
+  if (sizeBytes < 1_024) return `${sizeBytes} B`;
+  if (sizeBytes < 1_024 * 1_024) return `${(sizeBytes / 1_024).toFixed(1)} KB`;
+  return `${(sizeBytes / (1_024 * 1_024)).toFixed(1)} MB`;
+}
+
 function runProgress(run: TestRunRecord): number {
   if (run.summary.total === 0) return 0;
   const finished =
@@ -254,6 +278,7 @@ export function App() {
   const [runs, setRuns] = useState<readonly TestRunRecord[]>([]);
   const [selectedRunId, setSelectedRunId] = useState("");
   const [selectedRun, setSelectedRun] = useState<TestRunDetail>();
+  const [artifacts, setArtifacts] = useState<readonly ArtifactRecord[]>([]);
   const [validation, setValidation] = useState<ValidationResult>();
   const [comparison, setComparison] = useState<
     readonly Readonly<{ path: string; before?: unknown; after?: unknown }>[]
@@ -389,12 +414,27 @@ export function App() {
   useEffect(() => {
     if (selectedRunId === "") {
       setSelectedRun(undefined);
+      setArtifacts([]);
       return;
     }
     let active = true;
     const refresh = async () => {
-      const detail = await controlPlaneApi.getRun(selectedRunId);
-      if (active) setSelectedRun(detail);
+      const [detail, artifactResult] = await Promise.all([
+        controlPlaneApi.getRun(selectedRunId),
+        controlPlaneApi
+          .listRunArtifacts(selectedRunId)
+          .then((items) => ({ items }))
+          .catch((error: unknown) => ({ error })),
+      ]);
+      if (active) {
+        setSelectedRun(detail);
+        if ("items" in artifactResult) {
+          setArtifacts(artifactResult.items);
+        } else {
+          setArtifacts([]);
+          setNotice({ tone: "error", text: errorMessage(artifactResult.error) });
+        }
+      }
       await refreshRuns(selectedRunId);
     };
     void refresh().catch((error: unknown) =>
@@ -1630,22 +1670,86 @@ export function App() {
                     <section className="run-timeline">
                       <h4>步骤证据</h4>
                       <ol>
-                        {selectedRun.steps.map((step) => (
-                          <li key={step.id}>
-                            <span className={`timeline-dot timeline-${step.status}`} />
-                            <div>
-                              <span>
-                                <strong>{step.stepId}</strong>
-                                <small>
-                                  {step.phase === "finally" ? "清理" : `尝试 ${step.attempt}`} ·
-                                  {step.durationMs ?? 0}ms
-                                </small>
-                              </span>
-                              <code>{step.action}</code>
-                              {step.error === null ? null : <p>{step.error.message}</p>}
-                            </div>
-                          </li>
-                        ))}
+                        {selectedRun.steps.map((step) => {
+                          const stepArtifacts = artifacts.filter(
+                            (artifact) => artifact.stepRunId === step.id,
+                          );
+                          return (
+                            <li key={step.id}>
+                              <span className={`timeline-dot timeline-${step.status}`} />
+                              <div>
+                                <span>
+                                  <strong>{step.stepId}</strong>
+                                  <small>
+                                    {step.phase === "finally" ? "清理" : `尝试 ${step.attempt}`} ·
+                                    {step.durationMs ?? 0}ms
+                                  </small>
+                                </span>
+                                <code>{step.action}</code>
+                                {step.error === null ? null : <p>{step.error.message}</p>}
+                                {stepArtifacts.length === 0 ? null : (
+                                  <ul
+                                    aria-label={`${step.stepId} 的结构化附件`}
+                                    className="artifact-list"
+                                  >
+                                    {stepArtifacts.map((artifact) => (
+                                      <li key={artifact.id}>
+                                        {artifact.availability === "available" ? (
+                                          <a
+                                            aria-label={`查看${artifactKindLabels[artifact.kind]}，${artifactSize(artifact.sizeBytes)}，已脱敏`}
+                                            href={`/api/v1/artifacts/${artifact.id}/content`}
+                                            rel="noreferrer"
+                                            target={
+                                              artifact.kind === "screenshot" ? "_blank" : undefined
+                                            }
+                                          >
+                                            <span
+                                              aria-hidden="true"
+                                              className={`artifact-kind artifact-kind-${artifact.kind}`}
+                                            >
+                                              {artifact.kind === "screenshot" ? "PNG" : "ZIP"}
+                                            </span>
+                                            <span>
+                                              <strong>{artifactKindLabels[artifact.kind]}</strong>
+                                              <small>
+                                                {artifactSize(artifact.sizeBytes)} · 尝试
+                                                {artifact.attempt ?? step.attempt} · 已脱敏
+                                              </small>
+                                            </span>
+                                            <b>
+                                              {artifactAvailabilityLabels[artifact.availability]}
+                                            </b>
+                                          </a>
+                                        ) : (
+                                          <span
+                                            aria-disabled="true"
+                                            className={`artifact-unavailable artifact-${artifact.availability}`}
+                                          >
+                                            <span
+                                              aria-hidden="true"
+                                              className={`artifact-kind artifact-kind-${artifact.kind}`}
+                                            >
+                                              {artifact.kind === "screenshot" ? "PNG" : "ZIP"}
+                                            </span>
+                                            <span>
+                                              <strong>{artifactKindLabels[artifact.kind]}</strong>
+                                              <small>
+                                                {artifactSize(artifact.sizeBytes)} · 已脱敏
+                                              </small>
+                                            </span>
+                                            <b>
+                                              {artifactAvailabilityLabels[artifact.availability]}
+                                            </b>
+                                          </span>
+                                        )}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
                         {selectedRun.steps.length === 0 ? (
                           <li className="timeline-waiting">
                             <span className="timeline-dot" />

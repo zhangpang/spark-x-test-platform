@@ -158,6 +158,37 @@ export interface StepRunRecord {
   readonly durationMs: number | null;
 }
 
+export const artifactKinds = [
+  "log",
+  "screenshot",
+  "trace",
+  "http_exchange",
+  "tool_call",
+  "matched_document",
+  "judge",
+  "external_report",
+] as const;
+export type ArtifactKind = (typeof artifactKinds)[number];
+export type ArtifactAvailability = "available" | "expired" | "missing";
+
+export interface ArtifactRecord {
+  readonly id: string;
+  readonly runId: string;
+  readonly runCaseId: string | null;
+  readonly stepRunId: string | null;
+  readonly attempt: number | null;
+  readonly kind: ArtifactKind;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly redacted: boolean;
+  readonly locked: boolean;
+  readonly retainedUntil: string | null;
+  readonly availability: ArtifactAvailability;
+  readonly createdAt: string;
+}
+
 export interface ResourceLedgerRecord {
   readonly id: string;
   readonly runId: string;

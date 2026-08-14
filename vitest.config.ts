@@ -8,6 +8,18 @@ export default defineConfig({
       "@spark-x-test/contracts": fileURLToPath(
         new URL("./packages/contracts/src/index.ts", import.meta.url),
       ),
+      "@spark-x-test/case-schema": fileURLToPath(
+        new URL("./packages/case-schema/src/index.ts", import.meta.url),
+      ),
+      "@spark-x-test/execution-engine": fileURLToPath(
+        new URL("./packages/execution-engine/src/index.ts", import.meta.url),
+      ),
+      "@spark-x-test/executors": fileURLToPath(
+        new URL("./packages/executors/src/index.ts", import.meta.url),
+      ),
+      "@spark-x-test/reporting": fileURLToPath(
+        new URL("./packages/reporting/src/index.ts", import.meta.url),
+      ),
       "@spark-x-test/service-runtime": fileURLToPath(
         new URL("./packages/service-runtime/src/index.ts", import.meta.url),
       ),

@@ -42,6 +42,15 @@ platform < system < environment < suite < run < case < dataset < step
 
 每个动作由注册表提供参数 Schema、输出 Schema、动作等级、允许环境和默认超时。用例中的 `params` 不能绕过动作注册表校验。
 
+M3 Chromium 纵向切片注册以下声明式动作：
+
+- `browser:navigate`：只接受相对 `path`、可选 `waitUntil` 和 `expectedStatus`；
+- `browser:click`：只接受受限 `selector`；
+- `browser:fill`：只接受 `selector` 与结构化 `value`，密钥只能来自变量引用；
+- `browser:assert-text`：对 `selector` 执行包含或精确文本断言。
+
+浏览器动作不提供 JavaScript、表达式、函数、Shell、文件上传或下载入口。初始导航、重定向和所有子资源请求都重新校验环境 allowlist；当前切片阻断 WebSocket、弹窗、下载和 service worker。
+
 ### 3.2 `if`
 
 执行受限布尔条件，根据结果进入 `then` 或 `else`。条件不得访问网络、文件或执行函数。
@@ -72,6 +81,8 @@ platform < system < environment < suite < run < case < dataset < step
 - `finally` 失败单独分类，并创建补偿清理任务；
 - 诊断重试从用例开头运行，不从失败步骤继续；
 - 首次失败输入摘要、输出摘要和附件不得被覆盖。
+
+每个 Chromium 步骤生成一份视口截图和一个 Playwright Trace chunk。截图、Trace 与附件元数据必须关联 `run_id`、`run_case_id`、`step_run_id` 和 `attempt`；已知密钥只在内存中注入，含密钥步骤的截图使用整页遮罩，Trace 原始包只允许位于内存文件系统并在脱敏后删除。对象存储只接收通过敏感字段、密钥值和资源体清理的附件。
 
 ## 6. 数据驱动和真实模型重复
 

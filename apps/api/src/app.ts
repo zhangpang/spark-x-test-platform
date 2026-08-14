@@ -73,7 +73,12 @@ export function buildApiApplication(
     repository,
     new SecretVault(environment.PLATFORM_SECRET_ENCRYPTION_KEY),
   );
-  const runStore = options.runStore ?? new TestRunStore(application.dependencies.postgres);
+  const runStore =
+    options.runStore ??
+    new TestRunStore(application.dependencies.postgres, undefined, {
+      client: application.dependencies.minio,
+      bucket: application.config.minio.bucket,
+    });
   const queue =
     options.runQueue ??
     (environment.NODE_ENV === "test"
