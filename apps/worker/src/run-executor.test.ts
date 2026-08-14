@@ -414,18 +414,15 @@ describe("run worker", () => {
       summary: { passed: 1 },
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(store.recordStep).toHaveBeenCalledWith(
-      job.runId,
-      expect.objectContaining({
-        action: "wait:http",
-        status: "passed",
-        outputSummary: expect.objectContaining({
-          attempts: 2,
-          matched: true,
-          lastResponse: expect.objectContaining({ body: { state: "ready" } }),
-        }),
-      }),
-    );
+    const recordedWaitStep = vi
+      .mocked(store.recordStep)
+      .mock.calls.find(([, input]) => input.action === "wait:http")?.[1];
+    expect(recordedWaitStep).toMatchObject({ action: "wait:http", status: "passed" });
+    expect(recordedWaitStep?.outputSummary).toMatchObject({
+      attempts: 2,
+      matched: true,
+      lastResponse: { body: { state: "ready" } },
+    });
   });
 
   it("registers a nested response resource and queues compensation after cleanup fails", async () => {
