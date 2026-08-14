@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -705,8 +705,8 @@
             "publicationHashMatched": { "const": true },
             "promptSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
             "promptSizeBytes": { "type": "integer", "minimum": 1, "maximum": 65536 },
-            "assetRootPresent": { "const": true },
-            "mainAssetPresent": { "const": true },
+            "assetRootPresent": { "type": "boolean" },
+            "mainAssetPresent": { "type": "boolean" },
             "mainFileSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
           }
         }

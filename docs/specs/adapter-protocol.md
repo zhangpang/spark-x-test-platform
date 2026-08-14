@@ -187,7 +187,7 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.6.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
+当前 `0.6.1` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
 `chat.assert-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.cleanup` 和
@@ -219,8 +219,10 @@ SHA-256。创建动作只登记一个 `spark-x-agent-knowledge-base` 顶层资�
 
 SKILL 动作当前只读校验部署系统已经发布的固定 `trade-port-daily-brief`，不接受 Skill 名称、Prompt、文件、
 URL 或脚本参数。动作分别读取当前用户清单、用户详情和管理员清单，要求 UUID、名称、展示名、分类、启用状态、
-非内置标记、`durable_agent_task_v17` 有效能力、上传来源、主资产和资产摘要一致；原始 Prompt 只在 Worker 内存
-中计算 SHA-256，输出仅包含身份、状态、计数、布尔判定和哈希。受信任发布缺失归为 `environment_failed`，投影
+非内置标记、`durable_agent_task_v17` 有效能力、上传来源、规范化正文和三方资产摘要一致；原始 Prompt 只在
+Worker 内存中按被测系统 frontmatter 解析后的 `trim()` 语义计算 SHA-256，输出仅包含身份、状态、计数、布尔
+判定和哈希。本地资产摘要是 legacy 容器文件兼容层，V12 不可变发布重启后允许为空，但三个 API 投影必须一致，
+并如实输出 `assetRootPresent` 与 `mainAssetPresent`，不得把缺失伪装为存在。受信任发布缺失归为 `environment_failed`，投影
 不一致归为 `product_failed`，精确发布哈希不匹配保留为 `test_failed`。当前被测系统的删除接口尚不能完整撤销
 不可变发布目录、授权和对象存储内容，因此适配器不会创建临时 Skill；实际注入用例将在依赖工具上线且被测系统
 具备完整回收语义后单独实现，避免产生无法补偿的残留资源。

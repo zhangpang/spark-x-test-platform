@@ -97,7 +97,8 @@
 以及消息历史和公开执行轨迹与流式证据的 SHA-256 关联。KB 仅上传适配器生成的固定 PDF，校验知识文档解析
 终态、单一当前版本、Parser 版本和文件 SHA-256，并通过一个顶层知识库资源完成知识文档、Parser、原始上传和
 知识库的统一清理。SKILL 只读核对部署预置 `trade-port-daily-brief` 的用户/管理员投影、有效 Task 能力、主资产和
-精确 Prompt SHA-256，原始 Prompt 不进入结构化证据；由于被测系统当前删除接口不能完整撤销不可变发布目录、
+按被测系统 frontmatter 解析后的规范化 Prompt SHA-256，原始 Prompt 不进入结构化证据；本地资产摘要属于 legacy
+容器文件兼容层，允许 V12 发布重启后为空，但三个 API 投影必须一致并如实登记是否存在。由于被测系统当前删除接口不能完整撤销不可变发布目录、
 授权和对象存储内容，本阶段不创建临时 Skill，避免无法补偿的残留。会话型案例和知识库案例都登记资源台账，普通 `finally` 与 Worker
 中断后的独立补偿共用同一删除动作。测试环境资产由
 `scripts/provision-spark-x-agent-conversation-p0.ts` 幂等创建；脚本同时维护 CONV、TOOL、KB、SKILL 诊断套件和当前含六条

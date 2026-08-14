@@ -1759,7 +1759,7 @@ describe("run worker", () => {
       name: "trade-port-daily-brief",
       display_name: "贸易与港口每日简报",
       description: "trusted fixture",
-      category: "行业研究",
+      category: "utility",
       is_builtin: false,
       is_enabled: true,
       config: {
@@ -1767,6 +1767,7 @@ describe("run worker", () => {
         source: "upload",
         main_file: "trade-port-daily-brief.md",
         durable_agent_task_v17: true,
+        type: "行业研究",
       },
       assets: {
         root_exists: true,

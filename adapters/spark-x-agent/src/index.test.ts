@@ -35,13 +35,16 @@ const skillId = "00000000-0000-4000-8000-000000000213";
 const skillPrompt = "Produce the trusted daily trade and port brief without exposing credentials.";
 const skillPromptSha256 = createHash("sha256").update(skillPrompt).digest("hex");
 
-function trustedSkillProjection(prompt = skillPrompt): Readonly<Record<string, unknown>> {
+function trustedSkillProjection(
+  prompt = skillPrompt,
+  localAssetPresent = true,
+): Readonly<Record<string, unknown>> {
   return {
     id: skillId,
     name: "trade-port-daily-brief",
     display_name: "贸易与港口每日简报",
     description: "trusted fixture",
-    category: "行业研究",
+    category: "utility",
     is_builtin: false,
     is_enabled: true,
     config: {
@@ -49,12 +52,13 @@ function trustedSkillProjection(prompt = skillPrompt): Readonly<Record<string, u
       source: "upload",
       main_file: "trade-port-daily-brief.md",
       durable_agent_task_v17: true,
+      type: "行业研究",
     },
     assets: {
-      root_exists: true,
-      has_skill_md: true,
-      main_file: "trade-port-daily-brief.md",
-      asset_count: 1,
+      root_exists: localAssetPresent,
+      has_skill_md: localAssetPresent,
+      main_file: localAssetPresent ? "trade-port-daily-brief.md" : null,
+      asset_count: localAssetPresent ? 1 : 0,
     },
   };
 }
@@ -97,7 +101,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.6.0",
+      version: "0.6.1",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -1332,12 +1336,21 @@ describe("spark-x-agent adapter", () => {
       .mockResolvedValueOnce(
         jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
       )
-      .mockResolvedValueOnce(jsonResponse({ success: true, data: [trustedSkillProjection()] }))
-      .mockResolvedValueOnce(jsonResponse({ success: true, data: trustedSkillProjection() }))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: [trustedSkillProjection(skillPrompt, false)] }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: trustedSkillProjection(skillPrompt, false) }),
+      )
       .mockResolvedValueOnce(
         jsonResponse({
           success: true,
-          data: { items: [trustedSkillProjection()], total: 1, page: 1, per_page: 100 },
+          data: {
+            items: [trustedSkillProjection(skillPrompt, false)],
+            total: 1,
+            page: 1,
+            per_page: 100,
+          },
         }),
       );
 
@@ -1360,8 +1373,8 @@ describe("spark-x-agent adapter", () => {
       publicationHashMatched: true,
       promptSha256: skillPromptSha256,
       promptSizeBytes: new TextEncoder().encode(skillPrompt).byteLength,
-      assetRootPresent: true,
-      mainAssetPresent: true,
+      assetRootPresent: false,
+      mainAssetPresent: false,
       mainFileSha256: skillPromptSha256,
     });
     expect(fetcher.mock.calls.slice(1).map((call) => urlOf(call[0] as URL | RequestInfo))).toEqual([

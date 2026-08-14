@@ -1311,7 +1311,7 @@ describe("M2 asset validation", () => {
             username: "${case.admin-username}",
             password: "${case.admin-password}",
             expectedPublicationSha256:
-              "651c8515017725709c9eee3d424c3f65a86c3043a2270feee469acc3d536a2fd",
+              "a5de94a8db8803916c772c214ac22e6d2c8cdca3e1555d97f013fdf4585803cc",
           },
         },
       ],

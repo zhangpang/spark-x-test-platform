@@ -69,7 +69,7 @@ const testedVersion = process.env.SPARK_X_AGENT_TESTED_VERSION?.trim() || "test-
 const adminUsername = process.env.SPARK_X_AGENT_ADMIN_USERNAME?.trim() || "admin";
 const passwordFile = process.env.SPARK_X_AGENT_ADMIN_PASSWORD_FILE?.trim();
 const trustedSkillPublicationSha256 =
-  "651c8515017725709c9eee3d424c3f65a86c3043a2270feee469acc3d536a2fd";
+  "a5de94a8db8803916c772c214ac22e6d2c8cdca3e1555d97f013fdf4585803cc";
 
 function check(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -1117,8 +1117,8 @@ function assertSkillEvidence(run: RunDetail): void {
       typeof summary.promptSizeBytes === "number" &&
       summary.promptSizeBytes > 0 &&
       summary.promptSizeBytes <= 65_536 &&
-      summary.assetRootPresent === true &&
-      summary.mainAssetPresent === true,
+      typeof summary.assetRootPresent === "boolean" &&
+      typeof summary.mainAssetPresent === "boolean",
     "SKILL-001 trusted publication evidence is incomplete or not linked to the exact hash",
   );
   check(

@@ -673,8 +673,8 @@ const conversationActionCapabilities = [
         publicationHashMatched: { const: true },
         promptSha256: { type: "string", minLength: 64, maxLength: 64 },
         promptSizeBytes: { type: "integer", minimum: 1, maximum: 65_536 },
-        assetRootPresent: { const: true },
-        mainAssetPresent: { const: true },
+        assetRootPresent: { type: "boolean" },
+        mainAssetPresent: { type: "boolean" },
         mainFileSha256: { type: "string", minLength: 64, maxLength: 64 },
       },
     },
@@ -713,7 +713,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.6.0",
+  version: "0.6.1",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -742,7 +742,8 @@ const safeQualifiedToolNames = new Set(
 );
 const trustedSkillName = "trade-port-daily-brief";
 const trustedSkillDisplayName = "贸易与港口每日简报";
-const trustedSkillCategory = "行业研究";
+const trustedSkillCategory = "utility";
+const trustedSkillBusinessType = "行业研究";
 const trustedSkillMainFile = "trade-port-daily-brief.md";
 const privateCatalogFields = [
   "command",
@@ -1887,16 +1888,22 @@ export async function executeSparkXAgentAction(
         (config) =>
           config.prompt_template !== prompt ||
           config.source !== "upload" ||
-          config.main_file !== trustedSkillMainFile,
+          config.main_file !== trustedSkillMainFile ||
+          config.type !== trustedSkillBusinessType,
       ) ||
       assets.some(
         (summary) =>
-          summary.root_exists !== true ||
-          summary.has_skill_md !== true ||
-          summary.main_file !== trustedSkillMainFile ||
+          typeof summary.root_exists !== "boolean" ||
+          typeof summary.has_skill_md !== "boolean" ||
           !Number.isInteger(summary.asset_count) ||
-          Number(summary.asset_count) < 1,
-      )
+          Number(summary.asset_count) < 0 ||
+          (summary.has_skill_md === true && summary.main_file !== trustedSkillMainFile) ||
+          (summary.has_skill_md === false && summary.main_file !== null) ||
+          (summary.root_exists === false &&
+            (summary.has_skill_md !== false || Number(summary.asset_count) !== 0)),
+      ) ||
+      canonicalJson(availableAssets) !== canonicalJson(detailAssets) ||
+      canonicalJson(availableAssets) !== canonicalJson(adminAssets)
     ) {
       throw apiFailure(
         "SPARK_X_AGENT_SKILL_PROJECTION_MISMATCH",
@@ -1921,8 +1928,8 @@ export async function executeSparkXAgentAction(
       publicationHashMatched: true,
       promptSha256,
       promptSizeBytes,
-      assetRootPresent: true,
-      mainAssetPresent: true,
+      assetRootPresent: availableAssets.root_exists,
+      mainAssetPresent: availableAssets.has_skill_md,
       mainFileSha256: promptSha256,
     };
   }
