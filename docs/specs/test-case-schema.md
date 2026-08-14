@@ -75,8 +75,10 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 
 - `adapter:spark-x-agent/conversation.create`：以内存密钥登录，创建标题含 `${run.id}` 的会话并返回非敏感会话 ID；必须同步登记资源和删除补偿；
 - `adapter:spark-x-agent/conversation.assert-recent`：重新登录并验证新会话位于最近会话列表的首个非置顶位置，输出列表位置与消息数摘要；
+- `adapter:spark-x-agent/chat.ask`：向此前已创建并登记的测试会话发送消息含 `${run.id}` 的受控真实模型请求，逐次校验重定向目标，限制 SSE 为 1 MB，只输出终态、事件计数、长度和最终回答 SHA-256；流中会话 ID 必须与登记 ID 一致；
+- `adapter:spark-x-agent/chat.assert-history`：重新登录并校验唯一用户消息、唯一助手回复、`stop` 终止原因，以及落库回答 SHA-256 与流式最终回答一致；
 - `adapter:spark-x-agent/conversation.delete`：重新登录并按资源 ID 幂等删除，用于普通 `finally` 和独立补偿任务；
-- 三个动作只接受清单声明的字符串参数，不接受 URL、host、脚本、表达式或任意扩展字段；内部 HTTP 请求及重定向仍执行环境 allowlist 校验；
+- 五个动作只接受清单声明的字符串参数，不接受 URL、host、脚本、表达式或任意扩展字段；内部 HTTP 请求及重定向仍执行环境 allowlist 校验；
 - 用户名、密码与登录 Token 不写入动作输出。补偿定义只能引用 `resource.id` 和用例声明的密钥输入，避免把临时 Token 持久化。
 
 ### 3.2 `if`
@@ -130,11 +132,12 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 8. 写入和危险用例具备可验证清理路径；
 9. 所有密钥均使用引用；
 10. 用例总超时不低于步骤理论最大耗时；
-11. 星火 Agent 会话创建包含 `run.id`、资源登记和可独立重新登录的删除补偿。
+11. 星火 Agent 会话创建或新对话消息包含 `run.id`、资源登记和可独立重新登录的删除补偿。
 
 ## 8. B2C 订单案例示意
 
-以下片段只展示结构，实际动作和参数以星火 Agent 适配器清单为准：
+以下片段只展示未来知识库扩展结构，实际动作和参数以星火 Agent 适配器清单为准。当前 `chat.ask` 只接受
+清单登记的登录凭据、消息和预期文本，不接受本草案中的知识库参数：
 
 ```yaml
 schemaVersion: "1.0"

@@ -82,7 +82,11 @@ async function readPassword(): Promise<string> {
 
 async function api<T>(
   path: string,
-  options: Readonly<{ method?: string; body?: unknown; idempotencyKey?: string }> = {},
+  options: Readonly<{
+    method?: string;
+    body?: unknown;
+    idempotencyKey?: string;
+  }> = {},
 ): Promise<Readonly<{ status: number; body: T }>> {
   const response = await fetch(`${apiBase}${path}`, {
     method: options.method ?? "GET",
@@ -326,15 +330,126 @@ function conversationDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function chatDefinition(): Readonly<Record<string, unknown>> {
+  const message = "自动化回归标识 spark-x-chat-${run.id}。请只回复这个标识，不要调用任何工具。";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "CHAT-001 流式对话、历史持久化与清理",
+      description:
+        "登录星火 Agent，发送带 run_id 的真实模型消息，校验完整 SSE 和历史落库，并在 finally 清理。",
+      systemKey: "spark-x-agent",
+      moduleKey: "chat",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "chat", "p0", "core-smoke", "real-model"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 120_000,
+      caseTimeoutMs: 300_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:chat"],
+    steps: [
+      {
+        id: "create-chat-conversation",
+        name: "创建并登记对话测试会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: "spark-x-chat-${run.id}",
+        },
+        capture: { "conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "ask-chat",
+        name: "发送带运行标识的真实模型消息并校验流式终态",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.ask",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.conversation-id}",
+          message,
+          expectedText: "spark-x-chat-${run.id}",
+        },
+        capture: { "assistant-sha256": "$.finalContentSha256" },
+      },
+      {
+        id: "assert-chat-history",
+        name: "校验用户消息与助手回复完整持久化",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.assert-history",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.conversation-id}",
+          expectedUserText: message,
+          expectedAssistantText: "spark-x-chat-${run.id}",
+          expectedAssistantSha256: "${step.assistant-sha256}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "delete-chat-conversation",
+        name: "删除对话测试会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
 async function ensureCase(
   systemId: string,
   moduleId: string,
   environmentId: string,
+  caseName: string,
+  definition: Readonly<Record<string, unknown>>,
+  changeNote: string,
 ): Promise<Readonly<{ testCase: CaseRecord; version: CaseVersionRecord }>> {
-  const definition = conversationDefinition();
   const cases = (await api<{ readonly items: CaseRecord[] }>(`/test-cases?systemId=${systemId}`))
     .body.items;
-  let testCase = cases.find((candidate) => candidate.name === "CONV-001 最近会话创建、排序与清理");
+  let testCase = cases.find((candidate) => candidate.name === caseName);
   let version: CaseVersionRecord;
   if (testCase === undefined) {
     testCase = (
@@ -343,7 +458,7 @@ async function ensureCase(
         body: {
           moduleId,
           definition,
-          changeNote: "首条星火 Agent 真实 P0 会话回归闭环",
+          changeNote,
         },
       })
     ).body;
@@ -353,13 +468,13 @@ async function ensureCase(
     const createdVersion = createdVersions.find(
       (candidate) => candidate.id === testCase?.currentDraftVersionId,
     );
-    check(createdVersion !== undefined, "new CONV-001 draft version was not found");
+    check(createdVersion !== undefined, `new ${caseName} draft version was not found`);
     version = createdVersion;
   } else {
-    check(testCase.moduleId === moduleId, "CONV-001 is attached to an unexpected module");
+    check(testCase.moduleId === moduleId, `${caseName} is attached to an unexpected module`);
     const versions = (await api<CaseVersionRecord[]>(`/test-cases/${testCase.id}/versions`)).body;
     const latest = versions[0];
-    check(latest !== undefined, "existing CONV-001 does not have a version");
+    check(latest !== undefined, `existing ${caseName} does not have a version`);
     if (canonical(latest.definition) === canonical(definition)) {
       version = latest;
     } else {
@@ -369,17 +484,20 @@ async function ensureCase(
           body: {
             definition,
             expectedBaseVersion: latest.version,
-            changeNote: "同步星火 Agent 会话 P0 适配器定义",
+            changeNote,
           },
         })
       ).body;
     }
   }
-  const validation = await api<{ readonly valid: boolean; readonly issues: readonly unknown[] }>(
-    `/test-case-versions/${version.id}/validations`,
-    { method: "POST", body: { environmentId } },
-  );
-  check(validation.body.valid, `CONV-001 validation failed: ${JSON.stringify(validation.body)}`);
+  const validation = await api<{
+    readonly valid: boolean;
+    readonly issues: readonly unknown[];
+  }>(`/test-case-versions/${version.id}/validations`, {
+    method: "POST",
+    body: { environmentId },
+  });
+  check(validation.body.valid, `${caseName} validation failed: ${JSON.stringify(validation.body)}`);
   if (testCase.currentPublishedVersionId !== version.id || testCase.status !== "published") {
     testCase = (
       await api<CaseRecord>(`/test-cases/${testCase.id}/publish`, {
@@ -391,13 +509,19 @@ async function ensureCase(
   return { testCase, version };
 }
 
-async function ensureSuite(systemId: string, caseId: string): Promise<SuiteRecord> {
+async function ensureSuite(
+  systemId: string,
+  key: string,
+  name: string,
+  description: string,
+  caseIds: readonly string[],
+): Promise<SuiteRecord> {
   const input = {
     systemId,
-    key: "spark-x-agent-conversation-p0",
-    name: "星火 Agent 会话 P0 纵向切片",
-    description: "CONV-001 真实会话创建、最近排序、资源登记与清理闭环。",
-    caseIds: [caseId],
+    key,
+    name,
+    description,
+    caseIds,
     defaultConcurrency: 1,
     defaultDiagnosticRetries: 0,
   };
@@ -414,7 +538,7 @@ async function ensureSuite(systemId: string, caseId: string): Promise<SuiteRecor
 }
 
 async function waitForRun(runId: string): Promise<RunDetail> {
-  const deadline = Date.now() + 120_000;
+  const deadline = Date.now() + 360_000;
   let last: RunDetail | undefined;
   while (Date.now() < deadline) {
     last = (await api<RunDetail>(`/runs/${runId}`)).body;
@@ -432,29 +556,38 @@ async function executeSmoke(
 ): Promise<RunDetail> {
   const accepted = await api<RunDetail>("/runs", {
     method: "POST",
-    idempotencyKey: `spark-x-agent-conv-001-${randomUUID()}`,
+    idempotencyKey: `spark-x-agent-core-smoke-${randomUUID()}`,
     body: {
       systemId,
       environmentId,
       suiteId,
       triggerType: "api",
-      triggerSource: "spark-x-agent-conversation-p0-verification",
+      triggerSource: "spark-x-agent-core-smoke-verification",
       priority: 95,
       testedVersion,
     },
   });
-  check(accepted.status === 202, "Spark X Agent P0 run was not newly accepted");
+  check(accepted.status === 202, "Spark X Agent core smoke run was not newly accepted");
   const run = await waitForRun(accepted.body.id);
-  check(run.gateResult === "passed", `Spark X Agent P0 gate is ${String(run.gateResult)}`);
-  check(run.summary.passed === 1, "Spark X Agent P0 case did not pass");
-  check(run.firstFailure === null, "Spark X Agent P0 retained an unexpected first failure");
-  check(run.cases.length === 1, "Spark X Agent P0 run case linkage is incomplete");
-  check(run.cases[0]?.result === "passed", "Spark X Agent P0 run case did not pass");
-  check(run.cases[0]?.cleanupStatus === "passed", "Spark X Agent P0 finally cleanup did not pass");
-  check(run.steps.length === 3, "Spark X Agent P0 did not record two main steps and finally");
+  check(run.gateResult === "passed", `Spark X Agent core smoke gate is ${String(run.gateResult)}`);
+  check(run.summary.passed === 2, "Spark X Agent core smoke cases did not both pass");
+  check(run.firstFailure === null, "Spark X Agent core smoke retained an unexpected first failure");
+  check(run.cases.length === 2, "Spark X Agent core smoke run case linkage is incomplete");
+  check(
+    run.cases.every((item) => item.result === "passed"),
+    "Spark X Agent core smoke case failed",
+  );
+  check(
+    run.cases.every((item) => item.cleanupStatus === "passed"),
+    "Spark X Agent core smoke finally cleanup did not pass",
+  );
+  check(
+    run.steps.length === 7,
+    "Spark X Agent core smoke did not record five main steps and two finally steps",
+  );
   check(
     run.steps.every((step) => step.status === "passed"),
-    "Spark X Agent P0 step failed",
+    "Spark X Agent core smoke step failed",
   );
   check(
     run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
@@ -462,16 +595,44 @@ async function executeSmoke(
         "main:adapter:spark-x-agent/conversation.create",
         "main:adapter:spark-x-agent/conversation.assert-recent",
         "finally:adapter:spark-x-agent/conversation.delete",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/chat.ask",
+        "main:adapter:spark-x-agent/chat.assert-history",
+        "finally:adapter:spark-x-agent/conversation.delete",
       ].join(","),
-    "Spark X Agent P0 structured step sequence is incorrect",
+    "Spark X Agent core smoke structured step sequence is incorrect",
   );
-  check(run.resources.length === 1, "Spark X Agent P0 resource ledger linkage is missing");
+  check(run.resources.length === 2, "Spark X Agent core smoke resource ledger linkage is missing");
   check(
-    run.resources[0]?.resourceType === "spark-x-agent-conversation",
-    "Spark X Agent P0 resource type is incorrect",
+    run.resources.every((resource) => resource.resourceType === "spark-x-agent-conversation"),
+    "Spark X Agent core smoke resource type is incorrect",
   );
-  check(run.resources[0]?.cleanupStatus === "passed", "Spark X Agent P0 resource is not cleaned");
-  check(run.cleanupJob === null, "normal Spark X Agent P0 run unexpectedly required compensation");
+  check(
+    run.resources.every((resource) => resource.cleanupStatus === "passed"),
+    "Spark X Agent core smoke resource is not cleaned",
+  );
+  check(
+    run.cleanupJob === null,
+    "normal Spark X Agent core smoke unexpectedly required compensation",
+  );
+  const chatAsk = run.steps.find((step) => step.action === "adapter:spark-x-agent/chat.ask");
+  const chatHistory = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/chat.assert-history",
+  );
+  check(chatAsk?.outputSummary?.done === true, "CHAT-001 did not record a terminal done event");
+  check(
+    chatAsk.outputSummary.expectedTextMatched === true &&
+      chatAsk.outputSummary.truncated === false &&
+      typeof chatAsk.outputSummary.finalContentSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(chatAsk.outputSummary.finalContentSha256),
+    "CHAT-001 stream evidence is incomplete",
+  );
+  check(
+    chatHistory?.outputSummary?.expectedUserTextMatched === true &&
+      chatHistory.outputSummary.expectedAssistantTextMatched === true &&
+      chatHistory.outputSummary.assistantContentSha256 === chatAsk.outputSummary.finalContentSha256,
+    "CHAT-001 persisted history is not linked to the streamed answer",
+  );
   const evidence = JSON.stringify(run);
   check(!evidence.includes(password), "Spark X Agent administrator password leaked into evidence");
   return run;
@@ -482,10 +643,40 @@ const system = await ensureSystem();
 const modules = await ensureModules(system.id);
 const recentConversations = modules.get("recent-conversations");
 check(recentConversations !== undefined, "recent-conversations module was not provisioned");
+const chat = modules.get("chat");
+check(chat !== undefined, "chat module was not provisioned");
 const environment = await ensureEnvironment(system.id);
 await upsertSecrets(system.id, environment.id, password);
-const { testCase, version } = await ensureCase(system.id, recentConversations.id, environment.id);
-const suite = await ensureSuite(system.id, testCase.id);
+const conversation = await ensureCase(
+  system.id,
+  recentConversations.id,
+  environment.id,
+  "CONV-001 最近会话创建、排序与清理",
+  conversationDefinition(),
+  "同步星火 Agent 会话 P0 适配器定义",
+);
+const chatCase = await ensureCase(
+  system.id,
+  chat.id,
+  environment.id,
+  "CHAT-001 流式对话、历史持久化与清理",
+  chatDefinition(),
+  "新增星火 Agent 真实流式对话与历史证据闭环",
+);
+const conversationSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-conversation-p0",
+  "星火 Agent 会话 P0 纵向切片",
+  "CONV-001 真实会话创建、最近排序、资源登记与清理闭环。",
+  [conversation.testCase.id],
+);
+const suite = await ensureSuite(
+  system.id,
+  "spark-x-agent-core-smoke",
+  "星火 Agent 核心冒烟",
+  "发布后核心冒烟套件；当前包含 CONV-001 与 CHAT-001，后续按模块扩充到 10～12 条 P0。",
+  [conversation.testCase.id, chatCase.testCase.id],
+);
 const run = runSmoke
   ? await executeSmoke(system.id, environment.id, suite.id, password)
   : undefined;
@@ -493,12 +684,17 @@ const run = runSmoke
 console.info(
   JSON.stringify({
     status: run === undefined ? "provisioned" : "passed",
-    scenario: "spark-x-agent-conversation-p0",
-    assertions: run === undefined ? 0 : 17,
+    scenario: "spark-x-agent-core-smoke",
+    assertions: run === undefined ? 0 : 23,
+    caseCount: 2,
+    targetCaseCount: "10-12",
     systemId: system.id,
     environmentId: environment.id,
-    caseId: testCase.id,
-    caseVersionId: version.id,
+    conversationCaseId: conversation.testCase.id,
+    conversationCaseVersionId: conversation.version.id,
+    chatCaseId: chatCase.testCase.id,
+    chatCaseVersionId: chatCase.version.id,
+    conversationSuiteId: conversationSuite.id,
     suiteId: suite.id,
     ...(run === undefined ? {} : { runId: run.id, gateResult: run.gateResult }),
   }),

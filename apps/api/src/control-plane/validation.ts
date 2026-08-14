@@ -38,6 +38,8 @@ const availableActions = new Set([
   "adapter:spark-x-agent/conversation.create",
   "adapter:spark-x-agent/conversation.assert-recent",
   "adapter:spark-x-agent/conversation.delete",
+  "adapter:spark-x-agent/chat.ask",
+  "adapter:spark-x-agent/chat.assert-history",
 ]);
 const availableCompensationActions = new Set([
   "http:request",
@@ -48,6 +50,8 @@ const sparkXAgentActionLevels = new Map<string, ActionLevel>([
   ["adapter:spark-x-agent/conversation.create", "write"],
   ["adapter:spark-x-agent/conversation.assert-recent", "write"],
   ["adapter:spark-x-agent/conversation.delete", "dangerous"],
+  ["adapter:spark-x-agent/chat.ask", "write"],
+  ["adapter:spark-x-agent/chat.assert-history", "write"],
 ]);
 const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
   ["adapter:spark-x-agent/conversation.create", new Set(["username", "password", "title"])],
@@ -58,6 +62,21 @@ const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
   [
     "adapter:spark-x-agent/conversation.delete",
     new Set(["username", "password", "conversationId"]),
+  ],
+  [
+    "adapter:spark-x-agent/chat.ask",
+    new Set(["username", "password", "conversationId", "message", "expectedText"]),
+  ],
+  [
+    "adapter:spark-x-agent/chat.assert-history",
+    new Set([
+      "username",
+      "password",
+      "conversationId",
+      "expectedUserText",
+      "expectedAssistantText",
+      "expectedAssistantSha256",
+    ]),
   ],
 ]);
 const waitJsonPathPattern = /^\$(?:\.[a-zA-Z0-9_-]+){0,20}$/;
@@ -338,6 +357,18 @@ function validateSparkXAgentAction(
       code: "RUN_TRACEABILITY_REQUIRED",
       path: `${path}.params.title`,
       message: "测试会话标题必须包含 ${run.id}，以便追踪和残留数据审计。",
+    });
+  }
+  if (
+    action === "adapter:spark-x-agent/chat.ask" &&
+    typeof params.message === "string" &&
+    !params.message.includes("${run.id}")
+  ) {
+    issues.push({
+      severity: "error",
+      code: "RUN_TRACEABILITY_REQUIRED",
+      path: `${path}.params.message`,
+      message: "测试对话消息必须包含 ${run.id}，以便追踪和残留数据审计。",
     });
   }
   return issues;

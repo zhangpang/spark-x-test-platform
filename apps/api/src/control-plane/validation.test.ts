@@ -22,7 +22,11 @@ function definition(overrides: Readonly<Record<string, unknown>> = {}): JsonObje
       tags: ["http"],
     },
     inputs: [],
-    execution: { stepTimeoutMs: 1000, caseTimeoutMs: 5000, diagnosticRetries: 0 },
+    execution: {
+      stepTimeoutMs: 1000,
+      caseTimeoutMs: 5000,
+      diagnosticRetries: 0,
+    },
     resourceLocks: [],
     steps: [
       {
@@ -47,7 +51,14 @@ const environment: EnvironmentRecord = {
   kind: "test",
   baseUrl: "https://example.test/",
   actionLevel: "read",
-  allowlist: [{ protocol: "https", host: "example.test", ports: [443], pathPrefixes: ["/"] }],
+  allowlist: [
+    {
+      protocol: "https",
+      host: "example.test",
+      ports: [443],
+      pathPrefixes: ["/"],
+    },
+  ],
   timezone: "Asia/Shanghai",
   concurrencyLimit: 5,
   adapterConfig: {},
@@ -64,15 +75,26 @@ describe("M2 asset validation", () => {
   });
 
   it("rejects plaintext secrets while allowing secret references", () => {
-    expect(findPlaintextSecrets({ headers: { authorization: "Bearer real-token-value" } })).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: "PLAINTEXT_SECRET" })]),
-    );
     expect(
-      findPlaintextSecrets({ headers: { authorization: "Bearer ${case.authToken}" } }),
+      findPlaintextSecrets({
+        headers: { authorization: "Bearer real-token-value" },
+      }),
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ code: "PLAINTEXT_SECRET" })]));
+    expect(
+      findPlaintextSecrets({
+        headers: { authorization: "Bearer ${case.authToken}" },
+      }),
     ).toEqual([]);
 
     const unsafeDefault = definition({
-      inputs: [{ name: "api-token", type: "string", required: true, default: "plain-value" }],
+      inputs: [
+        {
+          name: "api-token",
+          type: "string",
+          required: true,
+          default: "plain-value",
+        },
+      ],
     });
     expect(
       validateDefinition(unsafeDefault, {
@@ -110,7 +132,11 @@ describe("M2 asset validation", () => {
           name: "first",
           kind: "action",
           action: "http:request",
-          params: { method: "GET", path: "/healthz", url: "https://bypass.test" },
+          params: {
+            method: "GET",
+            path: "/healthz",
+            url: "https://bypass.test",
+          },
         },
         {
           id: "request",
@@ -197,7 +223,11 @@ describe("M2 asset validation", () => {
           params: {
             path: "/tasks/${run.id}",
             intervalMs: 250,
-            condition: { path: "$.body.state", operator: "equals", expected: "ready" },
+            condition: {
+              path: "$.body.state",
+              operator: "equals",
+              expected: "ready",
+            },
           },
         },
       ],
@@ -332,7 +362,11 @@ describe("M2 asset validation", () => {
           name: "missing expected",
           kind: "action",
           action: "json:assert",
-          params: { source: "${step.body}", path: "$.state", operator: "equals" },
+          params: {
+            source: "${step.body}",
+            path: "$.state",
+            operator: "equals",
+          },
         },
         {
           id: "unexpected-expected",
@@ -478,7 +512,10 @@ describe("M2 asset validation", () => {
             id: "${run.id}",
             cleanup: {
               action: "http:request",
-              params: { method: "GET", path: "/healthz?resource=${resource.id}" },
+              params: {
+                method: "GET",
+                path: "/healthz?resource=${resource.id}",
+              },
             },
           },
         },
@@ -515,7 +552,10 @@ describe("M2 asset validation", () => {
             id: "${run.id}",
             cleanup: {
               action: "http:request",
-              params: { method: "GET", path: "/healthz?resource=${step.untrusted}" },
+              params: {
+                method: "GET",
+                path: "/healthz?resource=${step.untrusted}",
+              },
             },
           },
         },
@@ -674,6 +714,157 @@ describe("M2 asset validation", () => {
         "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
         "RUN_TRACEABILITY_REQUIRED",
       ]),
+    );
+  });
+
+  it("accepts a traceable Spark X Agent chat lifecycle and rejects unregistered chat inputs", () => {
+    const sparkEnvironment: EnvironmentRecord = {
+      ...environment,
+      systemId: "00000000-0000-4000-8000-000000000010",
+      baseUrl: "http://192.168.110.136/trade/",
+      actionLevel: "dangerous",
+      allowlist: [
+        {
+          protocol: "http",
+          host: "192.168.110.136",
+          ports: [80],
+          pathPrefixes: ["/trade/"],
+        },
+      ],
+      adapterKey: "spark-x-agent",
+    };
+    const inputs = [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ];
+    const chatDefinition = definition({
+      metadata: {
+        name: "CHAT-001 stream and history",
+        systemKey: "spark-x-agent",
+        moduleKey: "chat",
+        priority: "P0",
+        classification: "blackbox",
+        actionLevel: "dangerous",
+        tags: ["adapter", "core-smoke"],
+      },
+      inputs,
+      resourceLocks: ["spark-x-agent:admin:chat"],
+      steps: [
+        {
+          id: "create-conversation",
+          name: "create conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.create",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            title: "spark-x-chat-${run.id}",
+          },
+          capture: { "conversation-id": "$.conversationId" },
+          resource: {
+            type: "spark-x-agent-conversation",
+            id: "${step.conversation-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/conversation.delete",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                conversationId: "${resource.id}",
+              },
+            },
+          },
+        },
+        {
+          id: "ask",
+          name: "ask",
+          kind: "action",
+          action: "adapter:spark-x-agent/chat.ask",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            message: "自动化回归标识 spark-x-chat-${run.id}。请只回复这个标识。",
+            expectedText: "spark-x-chat-${run.id}",
+          },
+          capture: { "assistant-sha256": "$.finalContentSha256" },
+        },
+        {
+          id: "assert-history",
+          name: "assert history",
+          kind: "action",
+          action: "adapter:spark-x-agent/chat.assert-history",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            expectedUserText: "自动化回归标识 spark-x-chat-${run.id}。请只回复这个标识。",
+            expectedAssistantText: "spark-x-chat-${run.id}",
+            expectedAssistantSha256: "${step.assistant-sha256}",
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "delete-conversation",
+          name: "delete conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.delete",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+          },
+        },
+      ],
+    });
+
+    expect(
+      validateDefinition(chatDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "chat",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const unsafe = definition({
+      metadata: chatDefinition.metadata,
+      inputs,
+      steps: [
+        {
+          id: "ask",
+          name: "unsafe ask",
+          kind: "action",
+          action: "adapter:spark-x-agent/chat.ask",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "00000000-0000-4000-8000-000000000014",
+            message: "untraceable",
+            expectedText: "answer",
+            script: "return process.env",
+          },
+        },
+      ],
+      finally: [],
+    });
+    expect(
+      validateDefinition(unsafe, {
+        systemKey: "spark-x-agent",
+        moduleKey: "chat",
+        environment: sparkEnvironment,
+      }).issues.map((issue) => issue.code),
+    ).toEqual(
+      expect.arrayContaining(["ARBITRARY_ADAPTER_INPUT_FORBIDDEN", "RUN_TRACEABILITY_REQUIRED"]),
     );
   });
 });

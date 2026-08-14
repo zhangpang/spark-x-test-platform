@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -73,6 +73,147 @@
             "listed": { "const": true },
             "recentPosition": { "type": "integer", "minimum": 0 },
             "messageCount": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      {
+        "key": "chat.ask",
+        "name": "发送对话并校验回复",
+        "description": "向已登记测试会话发送带运行标识的受控消息，并校验完整 SSE 回复。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 120000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "conversationId", "message", "expectedText"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "message": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "expectedText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "done",
+            "expectedTextMatched",
+            "contentEventCount",
+            "statusEventCount",
+            "assistantPreviewEventCount",
+            "toolEventCount",
+            "skillEventCount",
+            "reviewEventCount",
+            "streamBytes",
+            "streamedContentLength",
+            "finalContentLength",
+            "finalContentSha256",
+            "truncated"
+          ],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "done": { "const": true },
+            "expectedTextMatched": { "const": true },
+            "contentEventCount": { "type": "integer", "minimum": 1 },
+            "statusEventCount": { "type": "integer", "minimum": 0 },
+            "assistantPreviewEventCount": { "type": "integer", "minimum": 0 },
+            "toolEventCount": { "type": "integer", "minimum": 0 },
+            "skillEventCount": { "type": "integer", "minimum": 0 },
+            "reviewEventCount": { "type": "integer", "minimum": 0 },
+            "streamBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "streamedContentLength": { "type": "integer", "minimum": 1 },
+            "finalContentLength": { "type": "integer", "minimum": 1 },
+            "finalContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "truncated": { "const": false },
+            "stopReason": { "type": "string" },
+            "durationMs": { "type": "number", "minimum": 0 }
+          }
+        }
+      },
+      {
+        "key": "chat.assert-history",
+        "name": "校验对话历史",
+        "description": "重新登录并校验用户消息、助手回复和终止原因已完整持久化。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 20000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "conversationId",
+            "expectedUserText",
+            "expectedAssistantText",
+            "expectedAssistantSha256"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "expectedUserText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
+            "expectedAssistantText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "expectedAssistantSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "messageCount",
+            "userMessageCount",
+            "assistantMessageCount",
+            "expectedUserTextMatched",
+            "expectedAssistantTextMatched",
+            "assistantContentLength",
+            "assistantContentSha256",
+            "assistantFinishReason"
+          ],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "messageCount": { "type": "integer", "minimum": 2 },
+            "userMessageCount": { "const": 1 },
+            "assistantMessageCount": { "const": 1 },
+            "expectedUserTextMatched": { "const": true },
+            "expectedAssistantTextMatched": { "const": true },
+            "assistantContentLength": { "type": "integer", "minimum": 1 },
+            "assistantContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "assistantFinishReason": { "const": "stop" },
+            "assistantTurnStatus": { "type": "string" }
           }
         }
       },

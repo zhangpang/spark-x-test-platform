@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -31,6 +31,8 @@
     "actions": [
       { "key": "conversation.create" },
       { "key": "conversation.assert-recent" },
+      { "key": "chat.ask" },
+      { "key": "chat.assert-history" },
       { "key": "conversation.delete" }
     ],
     "assertions": [],
@@ -185,8 +187,11 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.2.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent` 和
-`conversation.delete`。三个动作只调用适配器内固定的 `/trade/api` 路径，所有请求与重定向复用平台
-allowlist 校验；登录 Token 只保留在动作内存中，不进入输出、日志、资源台账或证据。创建动作必须登记
-`spark-x-agent-conversation` 资源，删除动作会重新登录，因此同一定义既可用于普通 `finally`，也可由独立
-补偿 Worker 在原 Worker 中断后执行。HTTP 404 作为已经清理成功处理，不触发掩盖根因的重试。
+当前 `0.3.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
+`chat.assert-history` 和 `conversation.delete`。动作只调用适配器内固定的 `/trade/api` 路径，所有请求与
+重定向执行环境 allowlist 校验；登录 Token、用户密码和模型回答正文都不进入输出、日志、资源台账或
+结构化证据。`chat.ask` 只向此前已创建并登记的测试会话发送消息，将 SSE 限制在 1 MB 内，要求流中会话
+ID 与登记 ID 一致、存在内容事件和唯一终态 `done`，并只输出事件计数、长度与最终回答 SHA-256；
+`chat.assert-history` 使用该哈希确认落库回答与流式终态一致。CHAT 用例必须先用 `conversation.create` 登记
+`spark-x-agent-conversation` 资源再执行 `chat.ask`，因此聊天取消、超时或失败时，普通 `finally` 和独立
+补偿 Worker 都已持有清理 ID。删除动作重新登录；HTTP 404 作为已经清理成功处理，不触发掩盖根因的重试。

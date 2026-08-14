@@ -26,7 +26,10 @@ const workerImageDigest =
 const runStore = new TestRunStore(
   application.dependencies.postgres,
   process.env.PLATFORM_SECRET_ENCRYPTION_KEY,
-  { client: application.dependencies.minio, bucket: application.config.minio.bucket },
+  {
+    client: application.dependencies.minio,
+    bucket: application.config.minio.bucket,
+  },
 );
 const workerRegistration = {
   ...(application.config.workerIdentity === undefined
@@ -39,6 +42,8 @@ const workerRegistration = {
     "adapter:spark-x-agent/conversation.create",
     "adapter:spark-x-agent/conversation.assert-recent",
     "adapter:spark-x-agent/conversation.delete",
+    "adapter:spark-x-agent/chat.ask",
+    "adapter:spark-x-agent/chat.assert-history",
     "http:request",
     "wait:http",
     "json:extract",
