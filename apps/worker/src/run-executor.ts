@@ -18,6 +18,8 @@ import {
   BrowserExecutorFailure,
   createChromiumSession,
   executeHttpRequest,
+  executeJsonAssert,
+  executeJsonExtract,
   executeWaitHttp,
   ExecutorFailure,
   interpolateString,
@@ -27,6 +29,8 @@ import {
   type ExecutorArtifact,
   type HttpExecutionResult,
   type HttpStepParameters,
+  type JsonAssertParameters,
+  type JsonExtractParameters,
   type WaitHttpParameters,
 } from "@spark-x-test/executors";
 import { redactEvidence } from "@spark-x-test/reporting";
@@ -85,6 +89,7 @@ interface ParsedDefinition {
   readonly caseTimeoutMs: number;
   readonly steps: readonly DefinitionStep[];
   readonly finallySteps: readonly DefinitionStep[];
+  readonly defaultInputs: Readonly<Record<string, unknown>>;
   readonly secretInputs: readonly SecretVariableReference[];
   readonly resourceLocks: readonly string[];
 }
@@ -205,6 +210,18 @@ function parseDefinition(definition: Readonly<Record<string, unknown>>): ParsedD
     caseTimeoutMs: integerValue(execution.caseTimeoutMs, 120_000, 1_800_000),
     steps,
     finallySteps: parseSteps(definition.finally, "finally"),
+    defaultInputs: Array.isArray(definition.inputs)
+      ? Object.fromEntries(
+          definition.inputs.flatMap((candidate) => {
+            const input = objectValue(candidate);
+            return input !== null &&
+              typeof input.name === "string" &&
+              Object.hasOwn(input, "default")
+              ? [[`case.${input.name}`, input.default]]
+              : [];
+          }),
+        )
+      : {},
     secretInputs: Array.isArray(definition.inputs)
       ? definition.inputs.flatMap((candidate) => {
           const input = objectValue(candidate);
@@ -217,13 +234,6 @@ function parseDefinition(definition: Readonly<Record<string, unknown>>): ParsedD
       : [],
     resourceLocks,
   };
-}
-
-function secretValues(variables: Readonly<Record<string, unknown>>): readonly string[] {
-  return Object.entries(variables)
-    .filter(([name, candidate]) => name.startsWith("case.") && typeof candidate === "string")
-    .map(([, candidate]) => candidate as string)
-    .filter((candidate) => candidate.length > 0);
 }
 
 function httpParameters(params: Readonly<Record<string, unknown>>): HttpStepParameters {
@@ -262,17 +272,30 @@ function captureValues(
 ): void {
   for (const [name, path] of Object.entries(capture)) {
     const segments = /^\$\.([a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*)$/.exec(path)?.[1]?.split(".");
-    if (segments === undefined) continue;
+    if (path.length > 500 || segments === undefined || segments.length > 20) {
+      throw new ExecutorFailure({
+        code: "CAPTURE_PATH_INVALID",
+        message: `捕获变量 ${name} 使用了无效的受限路径。`,
+        classification: "test_failed",
+      });
+    }
     let value: unknown = output;
     for (const segment of segments) {
       const record = objectValue(value);
-      if (record === null || !(segment in record)) {
-        value = undefined;
-        break;
+      if (
+        record === null ||
+        ["__proto__", "prototype", "constructor"].includes(segment) ||
+        !Object.hasOwn(record, segment)
+      ) {
+        throw new ExecutorFailure({
+          code: "CAPTURE_PATH_NOT_FOUND",
+          message: `捕获变量 ${name} 的路径 ${path} 不存在。`,
+          classification: "product_failed",
+        });
       }
       value = record[segment];
     }
-    if (value !== undefined) variables[`step.${name}`] = value;
+    variables[`step.${name}`] = value;
   }
 }
 
@@ -307,6 +330,14 @@ function sanitizedInput(step: DefinitionStep): Readonly<Record<string, unknown>>
     action: step.action,
     method: typeof step.params.method === "string" ? step.params.method : undefined,
     path: typeof step.params.path === "string" ? step.params.path : undefined,
+    source:
+      step.action.startsWith("json:") && typeof step.params.source === "string"
+        ? step.params.source
+        : undefined,
+    operator:
+      step.action === "json:assert" && typeof step.params.operator === "string"
+        ? step.params.operator
+        : undefined,
   };
 }
 
@@ -319,6 +350,7 @@ async function executeStep(
   phase: "main" | "finally",
   snapshot: RunExecutionSnapshot,
   variables: Record<string, unknown>,
+  secrets: readonly string[],
   store: RunExecutionStore,
   timeoutMs: number,
   signal: AbortSignal,
@@ -357,6 +389,10 @@ async function executeStep(
         matched: response.matched,
         lastResponse: response.lastResponse,
       };
+    } else if (step.action === "json:extract") {
+      output = executeJsonExtract(step.params as unknown as JsonExtractParameters, variables);
+    } else if (step.action === "json:assert") {
+      output = executeJsonAssert(step.params as unknown as JsonAssertParameters, variables);
     } else if (browserActions.includes(step.action as BrowserAction)) {
       const response = await (
         await getBrowserSession()
@@ -364,7 +400,7 @@ async function executeStep(
         stepId: step.id,
         timeoutMs,
         signal,
-        secrets: secretValues(variables),
+        secrets,
       });
       output = response.output;
       artifacts = response.artifacts;
@@ -390,9 +426,7 @@ async function executeStep(
         status: "passed",
         result: "passed",
         inputSummary: sanitizedInput(step),
-        outputSummary: redactEvidence(output, secretValues(variables)) as Readonly<
-          Record<string, unknown>
-        >,
+        outputSummary: redactEvidence(output, secrets) as Readonly<Record<string, unknown>>,
         startedAt,
         durationMs: Math.max(0, Math.round(performance.now() - started)),
         ...(artifacts.length === 0 ? {} : { artifacts }),
@@ -447,7 +481,10 @@ async function executeStep(
   } catch (error) {
     const failure =
       error instanceof ExecutorFailure
-        ? error.failure
+        ? {
+            ...error.failure,
+            ...(error.failure.stepId === undefined ? { stepId: step.id } : {}),
+          }
         : {
             code: "EXECUTOR_INTERNAL_ERROR",
             message: "执行器发生未预期错误。",
@@ -497,6 +534,7 @@ async function executeAttempt(
   snapshot: RunExecutionSnapshot,
   store: RunExecutionStore,
   variables: Record<string, unknown>,
+  secrets: readonly string[],
   signal: AbortSignal,
   browserSessionFactory: BrowserSessionFactory,
 ): Promise<AttemptResult> {
@@ -520,6 +558,7 @@ async function executeAttempt(
         "main",
         snapshot,
         variables,
+        secrets,
         store,
         definition.stepTimeoutMs,
         signal,
@@ -541,6 +580,7 @@ async function executeCleanup(
   snapshot: RunExecutionSnapshot,
   store: RunExecutionStore,
   variables: Record<string, unknown>,
+  secrets: readonly string[],
   browserSessionFactory: BrowserSessionFactory,
 ): Promise<CleanupResult> {
   if (definition.finallySteps.length === 0) return { status: "not_required", failure: null };
@@ -559,6 +599,7 @@ async function executeCleanup(
         "finally",
         snapshot,
         variables,
+        secrets,
         store,
         definition.stepTimeoutMs,
         cleanupSignal,
@@ -736,11 +777,17 @@ export async function executeRunJob(
       let lastAttempt = 1;
       let attemptVariables: Record<string, unknown> = {
         "run.id": job.runId,
+        ...definition.defaultInputs,
         ...secretVariables,
       };
+      const secrets = Object.values(secretVariables).filter((value) => value.length > 0);
       for (; attempt <= snapshot.suite.diagnosticRetries + 1; attempt += 1) {
         lastAttempt = attempt;
-        attemptVariables = { "run.id": job.runId, ...secretVariables };
+        attemptVariables = {
+          "run.id": job.runId,
+          ...definition.defaultInputs,
+          ...secretVariables,
+        };
         await store.startCase(job.runId, item.runCaseId, attempt);
         attemptResult = await executeAttempt(
           job.runId,
@@ -750,6 +797,7 @@ export async function executeRunJob(
           snapshot,
           store,
           attemptVariables,
+          secrets,
           caseController.signal,
           browserSessionFactory,
         );
@@ -771,6 +819,7 @@ export async function executeRunJob(
         snapshot,
         store,
         attemptVariables,
+        secrets,
         browserSessionFactory,
       );
       if (cleanup.status === "passed") {

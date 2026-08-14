@@ -15,6 +15,8 @@ import type {
 const referencePattern = /\$\{[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*\}/i;
 const suspiciousKeyPattern =
   /^(?:authorization|cookie|password|passwd|passphrase|private[-_]?key|client[-_]?secret|api[-_]?key|access[-_]?key|secret|token)$/i;
+const sensitiveInputNamePattern =
+  /(?:^|[-_.])(?:authorization|cookie|password|passwd|passphrase|private[-_]?key|client[-_]?secret|api[-_]?key|access[-_]?key|secret|token)(?:$|[-_.])/i;
 const privateKeyPattern = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/;
 const bearerPattern = /\bbearer\s+[a-z0-9._~+/=-]{12,}/i;
 const jwtPattern = /\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\b/;
@@ -27,6 +29,8 @@ const actionRank: Readonly<Record<ActionLevel, number>> = {
 const availableActions = new Set([
   "http:request",
   "wait:http",
+  "json:extract",
+  "json:assert",
   "browser:navigate",
   "browser:click",
   "browser:fill",
@@ -36,6 +40,20 @@ const availableCompensationActions = new Set(["http:request"]);
 const availableAssertions = new Set(["status:equals"]);
 const waitJsonPathPattern = /^\$(?:\.[a-zA-Z0-9_-]+){0,20}$/;
 const waitOperators = new Set(["equals", "not-equals", "contains", "exists"]);
+const jsonPathPattern = /^\$(?:(?:\.[a-zA-Z0-9_-]+)|(?:\[(?:0|[1-9][0-9]{0,5})\])){0,20}$/;
+const jsonSourcePattern = /^\$\{(step\.[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*)\}$/i;
+const forbiddenJsonPathSegmentPattern = /(?:^|\.)(?:__proto__|prototype|constructor)(?:\.|\[|$)/;
+const jsonOperators = new Set(["equals", "not-equals", "contains", "exists"]);
+const capturePathPattern = /^\$(?:\.[a-zA-Z0-9_-]+){1,20}$/;
+
+function isRestrictedJsonPath(path: string): boolean {
+  return (
+    path.length <= 500 &&
+    jsonPathPattern.test(path) &&
+    !forbiddenJsonPathSegmentPattern.test(path) &&
+    [...path.matchAll(/\[([0-9]+)\]/g)].every((match) => Number(match[1]) <= 100_000)
+  );
+}
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -201,9 +219,53 @@ function collectTemplateReferences(value: JsonValue): readonly string[] {
   return [...references];
 }
 
+function validateInputDefaults(definition: JsonObject): ValidationIssue[] {
+  if (!isJsonArray(definition.inputs)) return [];
+  return definition.inputs.flatMap((input, index) => {
+    if (
+      !isObject(input) ||
+      typeof input.name !== "string" ||
+      !sensitiveInputNamePattern.test(input.name) ||
+      !Object.hasOwn(input, "default")
+    ) {
+      return [];
+    }
+    return [
+      {
+        severity: "error" as const,
+        code: "PLAINTEXT_SECRET",
+        path: `$.inputs[${index}].default`,
+        message: `敏感输入 ${input.name} 不得声明 default；请改用 secretRef。`,
+      },
+    ];
+  });
+}
+
 function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const stepIds = new Set<string>();
+  const knownVariables = new Set<string>(["run.id"]);
+  if (isJsonArray(definition.inputs)) {
+    for (const input of definition.inputs) {
+      if (isObject(input) && typeof input.name === "string") {
+        knownVariables.add(`case.${input.name}`);
+      }
+    }
+  }
+  const datasetDeclared = isObject(definition.dataset);
+  const validateReferences = (value: JsonValue, path: string): void => {
+    for (const reference of collectTemplateReferences(value)) {
+      if (knownVariables.has(reference) || (datasetDeclared && reference.startsWith("dataset."))) {
+        continue;
+      }
+      issues.push({
+        severity: "error",
+        code: "VARIABLE_REFERENCE_UNKNOWN",
+        path,
+        message: `变量 ${reference} 尚未声明或捕获。`,
+      });
+    }
+  };
   for (const step of collectSteps(definition)) {
     const id = typeof step.id === "string" ? step.id : "";
     if (id !== "") {
@@ -222,6 +284,7 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
       continue;
     }
     const params = step.params;
+    validateReferences(params, `$.steps.${id}.params`);
     if (!availableActions.has(step.action)) {
       issues.push({
         severity: "error",
@@ -367,6 +430,69 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
         });
       }
     }
+    if (step.action === "json:extract" || step.action === "json:assert") {
+      const allowedKeys =
+        step.action === "json:extract"
+          ? new Set(["source", "path"])
+          : new Set(["source", "path", "operator", "expected"]);
+      if (Object.keys(params).some((key) => !allowedKeys.has(key))) {
+        issues.push({
+          severity: "error",
+          code: "ARBITRARY_JSON_INPUT_FORBIDDEN",
+          path: `$.steps.${id}.params`,
+          message: "JSON 动作只接受已注册的声明式参数，不得包含脚本、表达式或扩展字段。",
+        });
+      }
+      const source =
+        typeof params.source === "string" ? jsonSourcePattern.exec(params.source) : null;
+      if (source?.[1] === undefined) {
+        issues.push({
+          severity: "error",
+          code: "JSON_SOURCE_REFERENCE_INVALID",
+          path: `$.steps.${id}.params.source`,
+          message: "JSON source 必须是先前步骤捕获值的精确变量引用。",
+        });
+      } else if (!knownVariables.has(source[1])) {
+        issues.push({
+          severity: "error",
+          code: "JSON_SOURCE_REFERENCE_UNKNOWN",
+          path: `$.steps.${id}.params.source`,
+          message: `JSON source 引用了尚未声明或捕获的变量 ${source[1]}。`,
+        });
+      }
+      if (typeof params.path !== "string" || !isRestrictedJsonPath(params.path)) {
+        issues.push({
+          severity: "error",
+          code: "JSON_PATH_INVALID",
+          path: `$.steps.${id}.params.path`,
+          message: "JSONPath 只能使用最多 20 层点属性和数组整数下标。",
+        });
+      }
+      if (step.action === "json:assert") {
+        if (typeof params.operator !== "string" || !jsonOperators.has(params.operator)) {
+          issues.push({
+            severity: "error",
+            code: "JSON_OPERATOR_INVALID",
+            path: `$.steps.${id}.params.operator`,
+            message: "JSON 断言必须使用已注册比较符。",
+          });
+        } else if (params.operator !== "exists" && !("expected" in params)) {
+          issues.push({
+            severity: "error",
+            code: "JSON_EXPECTED_VALUE_REQUIRED",
+            path: `$.steps.${id}.params.expected`,
+            message: `JSON 断言 ${params.operator} 必须声明 expected。`,
+          });
+        } else if (params.operator === "exists" && "expected" in params) {
+          issues.push({
+            severity: "error",
+            code: "JSON_EXPECTED_VALUE_FORBIDDEN",
+            path: `$.steps.${id}.params.expected`,
+            message: "JSON exists 断言不得声明 expected。",
+          });
+        }
+      }
+    }
     if (step.action.startsWith("browser:")) {
       if (
         ["url", "baseUrl", "host", "script", "javascript", "evaluate", "code"].some(
@@ -432,6 +558,33 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
           message: `${step.action} 至少需要 write 动作等级。`,
         });
       }
+    }
+
+    if (isObject(step.capture)) {
+      for (const [name, path] of Object.entries(step.capture)) {
+        if (
+          typeof path !== "string" ||
+          path.length > 500 ||
+          !capturePathPattern.test(path) ||
+          forbiddenJsonPathSegmentPattern.test(path)
+        ) {
+          issues.push({
+            severity: "error",
+            code: "CAPTURE_PATH_INVALID",
+            path: `$.steps.${id}.capture.${name}`,
+            message: "捕获路径只能使用最多 20 层点属性。",
+          });
+        } else {
+          knownVariables.add(`step.${name}`);
+        }
+      }
+    }
+
+    if (isJsonArray(step.assertions)) {
+      validateReferences(step.assertions, `$.steps.${id}.assertions`);
+    }
+    if (isObject(step.resource) && typeof step.resource.id === "string") {
+      validateReferences(step.resource.id, `$.steps.${id}.resource.id`);
     }
 
     const resource = isObject(step.resource) ? step.resource : undefined;
@@ -745,6 +898,7 @@ export function validateDefinition(
     });
   }
   issues.push(...findPlaintextSecrets(definition));
+  issues.push(...validateInputDefaults(definition));
   issues.push(...validateStepSemantics(definition));
   issues.push(...validateTimeoutBudget(definition));
 

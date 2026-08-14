@@ -12,6 +12,16 @@ export {
 
 export { executeHttpRequest, type HttpExecutionResult, type HttpStepParameters } from "./http.js";
 
+export {
+  executeJsonAssert,
+  executeJsonExtract,
+  type JsonAssertionOperator,
+  type JsonAssertParameters,
+  type JsonAssertResult,
+  type JsonExtractParameters,
+  type JsonExtractResult,
+} from "./json.js";
+
 export interface ExecutorDescriptor {
   readonly key: string;
   readonly actionLevel: ExecutorActionLevel;

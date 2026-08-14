@@ -70,6 +70,17 @@ describe("M2 asset validation", () => {
     expect(
       findPlaintextSecrets({ headers: { authorization: "Bearer ${case.authToken}" } }),
     ).toEqual([]);
+
+    const unsafeDefault = definition({
+      inputs: [{ name: "api-token", type: "string", required: true, default: "plain-value" }],
+    });
+    expect(
+      validateDefinition(unsafeDefault, {
+        systemKey: "sample-system",
+        moduleKey: "order",
+        environment,
+      }).issues,
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ code: "PLAINTEXT_SECRET" })]));
   });
 
   it("redacts secret-shaped fields and values from structured output", () => {
@@ -227,6 +238,197 @@ describe("M2 asset validation", () => {
         "ARBITRARY_WAIT_INPUT_FORBIDDEN",
         "WAIT_CONDITION_INVALID",
       ]),
+    );
+  });
+
+  it("accepts an ordered HTTP to JSON variable chain", () => {
+    const jsonDefinition = definition({
+      steps: [
+        {
+          id: "read-health",
+          name: "read health",
+          kind: "action",
+          action: "http:request",
+          params: { method: "GET", path: "/healthz" },
+          capture: { "health-body": "$.body" },
+        },
+        {
+          id: "extract-status",
+          name: "extract status",
+          kind: "action",
+          action: "json:extract",
+          params: { source: "${step.health-body}", path: "$.items[0].status" },
+          capture: { "health-status": "$.value" },
+        },
+        {
+          id: "assert-status",
+          name: "assert status",
+          kind: "action",
+          action: "json:assert",
+          params: {
+            source: "${step.health-body}",
+            path: "$.items[0].status",
+            operator: "equals",
+            expected: "${step.health-status}",
+          },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(jsonDefinition, {
+        systemKey: "sample-system",
+        moduleKey: "order",
+        environment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+  });
+
+  it("rejects unsafe JSON paths, unknown sources and arbitrary JSON inputs", () => {
+    const unsafe = definition({
+      steps: [
+        {
+          id: "unsafe-json",
+          name: "unsafe json",
+          kind: "action",
+          action: "json:assert",
+          params: {
+            source: "${step.future-body}",
+            path: "$.items[?(@.ready)].status",
+            operator: "eval",
+            script: "return value",
+          },
+        },
+      ],
+    });
+    const result = validateDefinition(unsafe, {
+      systemKey: "sample-system",
+      moduleKey: "order",
+      environment,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining([
+        "ARBITRARY_JSON_INPUT_FORBIDDEN",
+        "JSON_SOURCE_REFERENCE_UNKNOWN",
+        "JSON_PATH_INVALID",
+        "JSON_OPERATOR_INVALID",
+      ]),
+    );
+  });
+
+  it("requires comparison values and rejects values on exists JSON assertions", () => {
+    const invalid = definition({
+      steps: [
+        {
+          id: "read-health",
+          name: "read health",
+          kind: "action",
+          action: "http:request",
+          params: { method: "GET", path: "/healthz" },
+          capture: { body: "$.body" },
+        },
+        {
+          id: "missing-expected",
+          name: "missing expected",
+          kind: "action",
+          action: "json:assert",
+          params: { source: "${step.body}", path: "$.state", operator: "equals" },
+        },
+        {
+          id: "unexpected-expected",
+          name: "unexpected expected",
+          kind: "action",
+          action: "json:assert",
+          params: {
+            source: "${step.body}",
+            path: "$.state",
+            operator: "exists",
+            expected: true,
+          },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(invalid, {
+        systemKey: "sample-system",
+        moduleKey: "order",
+        environment,
+      }).issues.map((issue) => issue.code),
+    ).toEqual(
+      expect.arrayContaining(["JSON_EXPECTED_VALUE_REQUIRED", "JSON_EXPECTED_VALUE_FORBIDDEN"]),
+    );
+  });
+
+  it("rejects capture paths that the runtime cannot resolve", () => {
+    const invalid = definition({
+      steps: [
+        {
+          id: "read-health",
+          name: "read health",
+          kind: "action",
+          action: "http:request",
+          params: { method: "GET", path: "/healthz" },
+          capture: { body: "$.items[0]" },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(invalid, {
+        systemKey: "sample-system",
+        moduleKey: "order",
+        environment,
+      }).issues,
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ code: "CAPTURE_PATH_INVALID" })]));
+  });
+
+  it("validates ordered step references while allowing declared case defaults", () => {
+    const valid = definition({
+      inputs: [{ name: "region", type: "string", required: true, default: "cn" }],
+      steps: [
+        {
+          id: "read-health",
+          name: "read health",
+          kind: "action",
+          action: "http:request",
+          params: { method: "GET", path: "/${case.region}/healthz" },
+          capture: { status: "$.status" },
+        },
+        {
+          id: "use-status",
+          name: "use status",
+          kind: "action",
+          action: "http:request",
+          params: { method: "GET", path: "/status/${step.status}" },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(valid, {
+        systemKey: "sample-system",
+        moduleKey: "order",
+        environment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const invalid = definition({
+      steps: [
+        {
+          id: "use-future",
+          name: "use future",
+          kind: "action",
+          action: "http:request",
+          params: { method: "GET", path: "/status/${step.future}" },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(invalid, {
+        systemKey: "sample-system",
+        moduleKey: "order",
+        environment,
+      }).issues,
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "VARIABLE_REFERENCE_UNKNOWN" })]),
     );
   });
 

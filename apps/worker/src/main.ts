@@ -38,6 +38,8 @@ const workerRegistration = {
   capabilities: [
     "http:request",
     "wait:http",
+    "json:extract",
+    "json:assert",
     "browser:navigate",
     "browser:click",
     "browser:fill",

@@ -407,7 +407,10 @@ describe("run worker", () => {
         headers: { "content-type": "application/json" },
       }),
     ];
-    const fetchMock = vi.fn(() => Promise.resolve(responses.shift() as Response));
+    const fetchMock = vi.fn((input: URL | RequestInfo) => {
+      void input;
+      return Promise.resolve(responses.shift() as Response);
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(executeRunJob(job, "worker-1", store)).resolves.toMatchObject({
@@ -423,6 +426,216 @@ describe("run worker", () => {
       matched: true,
       lastResponse: { body: { state: "ready" } },
     });
+  });
+
+  it("chains an HTTP capture through JSON extraction and a downstream variable", async () => {
+    const store = fakeStore(
+      snapshot({
+        execution: { stepTimeoutMs: 1_000, caseTimeoutMs: 5_000 },
+        steps: [
+          {
+            id: "read-health",
+            action: "http:request",
+            params: { method: "GET", path: "/healthz" },
+            capture: { "health-body": "$.body" },
+          },
+          {
+            id: "extract-status",
+            action: "json:extract",
+            params: { source: "${step.health-body}", path: "$.status" },
+            capture: { "health-status": "$.value" },
+          },
+          {
+            id: "assert-status",
+            action: "json:assert",
+            params: {
+              source: "${step.health-body}",
+              path: "$.status",
+              operator: "equals",
+              expected: "${step.health-status}",
+            },
+          },
+          {
+            id: "use-status",
+            action: "http:request",
+            params: { method: "GET", path: "/echo/${step.health-status}" },
+          },
+        ],
+      }),
+    );
+    const responses = [
+      new Response(JSON.stringify({ status: "ok", private: "not-selected" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response(null, { status: 204 }),
+    ];
+    const fetchMock = vi.fn((input: URL | RequestInfo) => {
+      void input;
+      return Promise.resolve(responses.shift() as Response);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(executeRunJob(job, "worker-1", store)).resolves.toMatchObject({
+      summary: { passed: 1 },
+    });
+    expect(requestUrl(fetchMock.mock.calls[1]?.[0])).toBe("http://api:4100/echo/ok");
+    const jsonSteps = vi
+      .mocked(store.recordStep)
+      .mock.calls.map(([, input]) => input)
+      .filter((input) => input.action.startsWith("json:"));
+    expect(jsonSteps).toEqual([
+      expect.objectContaining({
+        action: "json:extract",
+        outputSummary: { path: "$.status", found: true, value: "ok" },
+      }),
+      expect.objectContaining({
+        action: "json:assert",
+        outputSummary: { path: "$.status", operator: "equals", matched: true, actual: "ok" },
+      }),
+    ]);
+    expect(JSON.stringify(jsonSteps)).not.toContain("not-selected");
+  });
+
+  it("preserves the first JSON assertion failure and still executes finally", async () => {
+    const store = fakeStore(
+      snapshot({
+        execution: { stepTimeoutMs: 1_000, caseTimeoutMs: 5_000 },
+        steps: [
+          {
+            id: "read-health",
+            action: "http:request",
+            params: { method: "GET", path: "/healthz" },
+            capture: { "health-body": "$.body" },
+          },
+          {
+            id: "assert-status",
+            action: "json:assert",
+            params: {
+              source: "${step.health-body}",
+              path: "$.status",
+              operator: "equals",
+              expected: "ready",
+            },
+          },
+        ],
+        finally: [
+          {
+            id: "cleanup",
+            action: "http:request",
+            params: { method: "POST", path: "/cleanup" },
+          },
+        ],
+      }),
+    );
+    const responses = [
+      new Response(JSON.stringify({ status: "failed" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response(JSON.stringify({ status: "failed-again" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response(null, { status: 204 }),
+    ];
+    const fetchMock = vi.fn((input: URL | RequestInfo) => {
+      void input;
+      return Promise.resolve(responses.shift() as Response);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(executeRunJob(job, "worker-1", store)).resolves.toMatchObject({
+      summary: { productFailed: 1 },
+    });
+    expect(store.startCase).toHaveBeenCalledTimes(2);
+    expect(requestUrl(fetchMock.mock.calls[2]?.[0])).toBe("http://api:4100/cleanup");
+    expect(store.finishCase).toHaveBeenCalledWith(
+      job.runId,
+      "00000000-0000-4000-8000-000000000104",
+      "product_failed",
+      "passed",
+      expect.objectContaining({ code: "JSON_ASSERTION_FAILED", stepId: "assert-status" }),
+      expect.any(Number),
+      false,
+    );
+    expect(store.completeRun).toHaveBeenCalledWith(
+      job.runId,
+      expect.objectContaining({ productFailed: 1 }),
+      "blocked",
+      expect.objectContaining({ code: "JSON_ASSERTION_FAILED", stepId: "assert-status" }),
+    );
+  });
+
+  it("reports a missing capture path before a downstream variable can hide the root cause", async () => {
+    const store = fakeStore(
+      snapshot({
+        steps: [
+          {
+            id: "read-health",
+            action: "http:request",
+            params: { method: "GET", path: "/healthz" },
+            capture: { state: "$.body.state" },
+          },
+          {
+            id: "use-state",
+            action: "http:request",
+            params: { method: "GET", path: "/state/${step.state}" },
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ status: "ok" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      ),
+    );
+
+    await executeRunJob(job, "worker-1", store);
+
+    expect(store.completeRun).toHaveBeenCalledWith(
+      job.runId,
+      expect.objectContaining({ productFailed: 1 }),
+      "blocked",
+      expect.objectContaining({ code: "CAPTURE_PATH_NOT_FOUND", stepId: "read-health" }),
+    );
+  });
+
+  it("injects declared default inputs into downstream interpolation without treating them as secrets", async () => {
+    const store = fakeStore(
+      snapshot({
+        inputs: [{ name: "region", type: "string", required: true, default: "cn" }],
+        steps: [
+          {
+            id: "read-region",
+            action: "http:request",
+            params: { method: "GET", path: "/regions/${case.region}" },
+          },
+        ],
+      }),
+    );
+    const fetchMock = vi.fn((input: URL | RequestInfo) => {
+      void input;
+      return Promise.resolve(
+        new Response(JSON.stringify({ region: "cn" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await executeRunJob(job, "worker-1", store);
+
+    expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toBe("http://api:4100/regions/cn");
+    const recorded = vi.mocked(store.recordStep).mock.calls[0]?.[1];
+    expect(recorded?.outputSummary).toMatchObject({ body: { region: "cn" } });
   });
 
   it("registers a nested response resource and queues compensation after cleanup fails", async () => {
