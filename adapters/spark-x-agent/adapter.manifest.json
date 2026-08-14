@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -214,6 +214,227 @@
             },
             "assistantFinishReason": { "const": "stop" },
             "assistantTurnStatus": { "type": "string" }
+          }
+        }
+      },
+      {
+        "key": "tool.assert-safe-catalog",
+        "name": "校验安全工具目录",
+        "description": "校验当前用户可见的 builtin-demo 只读工具目录与管理员登记目录一致，且不暴露连接凭据。",
+        "actionLevel": "read",
+        "defaultTimeoutMs": 20000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "serverName",
+            "visible",
+            "running",
+            "credentialFieldsAbsent",
+            "advertisedToolCount",
+            "enabledDiscoveredToolCount",
+            "expectedToolsMatched",
+            "catalogSha256"
+          ],
+          "properties": {
+            "serverName": { "const": "builtin-demo" },
+            "visible": { "const": true },
+            "running": { "const": true },
+            "credentialFieldsAbsent": { "const": true },
+            "advertisedToolCount": { "const": 3 },
+            "enabledDiscoveredToolCount": { "const": 3 },
+            "expectedToolsMatched": { "const": true },
+            "catalogSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+          }
+        }
+      },
+      {
+        "key": "tool.invoke-safe",
+        "name": "调用并校验安全工具",
+        "description": "通过受控对话只调用已允许的 builtin-demo 只读工具，并校验名称、参数、结果和最终回复。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 120000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "conversationId",
+            "message",
+            "expectedText",
+            "expectedToolName",
+            "expectedArgumentsJson",
+            "expectedResultJson"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "message": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "expectedText": { "type": "string", "minLength": 1, "maxLength": 5000 },
+            "expectedToolName": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "expectedArgumentsJson": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 20000
+            },
+            "expectedResultJson": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 20000
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "done",
+            "expectedTextMatched",
+            "expectedToolNameMatched",
+            "argumentsMatched",
+            "resultMatched",
+            "toolCallCount",
+            "toolResultCount",
+            "reviewEventCount",
+            "toolCallIdSha256",
+            "argumentsSha256",
+            "resultSha256",
+            "finalContentLength",
+            "finalContentSha256",
+            "streamBytes",
+            "truncated"
+          ],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "done": { "const": true },
+            "expectedTextMatched": { "const": true },
+            "expectedToolNameMatched": { "const": true },
+            "argumentsMatched": { "const": true },
+            "resultMatched": { "const": true },
+            "toolCallCount": { "const": 1 },
+            "toolResultCount": { "const": 1 },
+            "reviewEventCount": { "const": 0 },
+            "toolCallIdSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "argumentsSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "resultSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "finalContentLength": { "type": "integer", "minimum": 1 },
+            "finalContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "streamBytes": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+            "truncated": { "const": false }
+          }
+        }
+      },
+      {
+        "key": "tool.assert-history",
+        "name": "校验工具调用历史",
+        "description": "重新登录并校验工具调用、工具结果、公开执行轨迹和最终助手回复已一致持久化。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 20000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "conversationId",
+            "expectedUserText",
+            "expectedAssistantText",
+            "expectedAssistantSha256",
+            "expectedToolName",
+            "expectedArgumentsSha256",
+            "expectedResultSha256"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "expectedUserText": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "expectedAssistantText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "expectedAssistantSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "expectedToolName": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "expectedArgumentsSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "expectedResultSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "messageCount",
+            "userMessageCount",
+            "assistantMessageCount",
+            "toolMessageCount",
+            "toolCallCount",
+            "toolResultCount",
+            "traceToolCallCount",
+            "traceToolResultCount",
+            "expectedUserTextMatched",
+            "expectedAssistantTextMatched",
+            "expectedToolNameMatched",
+            "argumentsSha256",
+            "resultSha256",
+            "assistantContentLength",
+            "assistantContentSha256",
+            "assistantFinishReason"
+          ],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "messageCount": { "type": "integer", "minimum": 4 },
+            "userMessageCount": { "const": 1 },
+            "assistantMessageCount": { "const": 2 },
+            "toolMessageCount": { "const": 1 },
+            "toolCallCount": { "const": 1 },
+            "toolResultCount": { "const": 1 },
+            "traceToolCallCount": { "const": 1 },
+            "traceToolResultCount": { "const": 1 },
+            "expectedUserTextMatched": { "const": true },
+            "expectedAssistantTextMatched": { "const": true },
+            "expectedToolNameMatched": { "const": true },
+            "argumentsSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "resultSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "assistantContentLength": { "type": "integer", "minimum": 1 },
+            "assistantContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "assistantFinishReason": { "const": "stop" }
           }
         }
       },

@@ -40,6 +40,9 @@ const availableActions = new Set([
   "adapter:spark-x-agent/conversation.delete",
   "adapter:spark-x-agent/chat.ask",
   "adapter:spark-x-agent/chat.assert-history",
+  "adapter:spark-x-agent/tool.assert-safe-catalog",
+  "adapter:spark-x-agent/tool.invoke-safe",
+  "adapter:spark-x-agent/tool.assert-history",
 ]);
 const availableCompensationActions = new Set([
   "http:request",
@@ -52,6 +55,9 @@ const sparkXAgentActionLevels = new Map<string, ActionLevel>([
   ["adapter:spark-x-agent/conversation.delete", "dangerous"],
   ["adapter:spark-x-agent/chat.ask", "write"],
   ["adapter:spark-x-agent/chat.assert-history", "write"],
+  ["adapter:spark-x-agent/tool.assert-safe-catalog", "read"],
+  ["adapter:spark-x-agent/tool.invoke-safe", "write"],
+  ["adapter:spark-x-agent/tool.assert-history", "write"],
 ]);
 const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
   ["adapter:spark-x-agent/conversation.create", new Set(["username", "password", "title"])],
@@ -76,6 +82,34 @@ const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
       "expectedUserText",
       "expectedAssistantText",
       "expectedAssistantSha256",
+    ]),
+  ],
+  ["adapter:spark-x-agent/tool.assert-safe-catalog", new Set(["username", "password"])],
+  [
+    "adapter:spark-x-agent/tool.invoke-safe",
+    new Set([
+      "username",
+      "password",
+      "conversationId",
+      "message",
+      "expectedText",
+      "expectedToolName",
+      "expectedArgumentsJson",
+      "expectedResultJson",
+    ]),
+  ],
+  [
+    "adapter:spark-x-agent/tool.assert-history",
+    new Set([
+      "username",
+      "password",
+      "conversationId",
+      "expectedUserText",
+      "expectedAssistantText",
+      "expectedAssistantSha256",
+      "expectedToolName",
+      "expectedArgumentsSha256",
+      "expectedResultSha256",
     ]),
   ],
 ]);
@@ -360,7 +394,8 @@ function validateSparkXAgentAction(
     });
   }
   if (
-    action === "adapter:spark-x-agent/chat.ask" &&
+    (action === "adapter:spark-x-agent/chat.ask" ||
+      action === "adapter:spark-x-agent/tool.invoke-safe") &&
     typeof params.message === "string" &&
     !params.message.includes("${run.id}")
   ) {

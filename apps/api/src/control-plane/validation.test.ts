@@ -867,4 +867,191 @@ describe("M2 asset validation", () => {
       expect.arrayContaining(["ARBITRARY_ADAPTER_INPUT_FORBIDDEN", "RUN_TRACEABILITY_REQUIRED"]),
     );
   });
+
+  it("accepts the bounded Spark X Agent safe-tool cases and rejects arbitrary or untraceable inputs", () => {
+    const sparkEnvironment: EnvironmentRecord = {
+      ...environment,
+      systemId: "00000000-0000-4000-8000-000000000010",
+      baseUrl: "http://192.168.110.136/trade/",
+      actionLevel: "dangerous",
+      allowlist: [
+        {
+          protocol: "http",
+          host: "192.168.110.136",
+          ports: [80],
+          pathPrefixes: ["/trade/"],
+        },
+      ],
+      adapterKey: "spark-x-agent",
+    };
+    const inputs = [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ];
+    const catalogDefinition = definition({
+      metadata: {
+        name: "TOOL-001 safe tool catalog",
+        systemKey: "spark-x-agent",
+        moduleKey: "tools",
+        priority: "P0",
+        classification: "blackbox",
+        actionLevel: "read",
+        tags: ["adapter", "core-smoke", "tool"],
+      },
+      inputs,
+      steps: [
+        {
+          id: "assert-safe-catalog",
+          name: "assert safe catalog",
+          kind: "action",
+          action: "adapter:spark-x-agent/tool.assert-safe-catalog",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+          },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(catalogDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "tools",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const invocationDefinition = definition({
+      metadata: {
+        name: "TOOL-002 safe tool invocation",
+        systemKey: "spark-x-agent",
+        moduleKey: "tools",
+        priority: "P0",
+        classification: "blackbox",
+        actionLevel: "dangerous",
+        tags: ["adapter", "core-smoke", "tool"],
+      },
+      inputs,
+      resourceLocks: ["spark-x-agent:admin:tools"],
+      steps: [
+        {
+          id: "create-conversation",
+          name: "create conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.create",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            title: "spark-x-tool-${run.id}",
+          },
+          capture: { "conversation-id": "$.conversationId" },
+          resource: {
+            type: "spark-x-agent-conversation",
+            id: "${step.conversation-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/conversation.delete",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                conversationId: "${resource.id}",
+              },
+            },
+          },
+        },
+        {
+          id: "invoke-safe-tool",
+          name: "invoke safe tool",
+          kind: "action",
+          action: "adapter:spark-x-agent/tool.invoke-safe",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            message:
+              "自动化回归 ${run.id}：只调用一次 builtin-demo__calculator 计算 6×7，并回复 spark-x-tool-${run.id}:42。",
+            expectedText: "spark-x-tool-${run.id}:42",
+            expectedToolName: "builtin-demo__calculator",
+            expectedArgumentsJson: '{"operation":"multiply","a":6,"b":7}',
+            expectedResultJson: '{"success":true,"operation":"multiply","a":6,"b":7,"result":42}',
+          },
+          capture: {
+            "assistant-sha256": "$.finalContentSha256",
+            "arguments-sha256": "$.argumentsSha256",
+            "result-sha256": "$.resultSha256",
+          },
+        },
+        {
+          id: "assert-tool-history",
+          name: "assert tool history",
+          kind: "action",
+          action: "adapter:spark-x-agent/tool.assert-history",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            expectedUserText:
+              "自动化回归 ${run.id}：只调用一次 builtin-demo__calculator 计算 6×7，并回复 spark-x-tool-${run.id}:42。",
+            expectedAssistantText: "spark-x-tool-${run.id}:42",
+            expectedAssistantSha256: "${step.assistant-sha256}",
+            expectedToolName: "builtin-demo__calculator",
+            expectedArgumentsSha256: "${step.arguments-sha256}",
+            expectedResultSha256: "${step.result-sha256}",
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "delete-conversation",
+          name: "delete conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.delete",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+          },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(invocationDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "tools",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const unsafeInvocation = {
+      ...invocationDefinition,
+      steps: [
+        {
+          ...(invocationDefinition.steps as readonly JsonObject[])[1],
+          params: {
+            ...((invocationDefinition.steps as readonly JsonObject[])[1]?.params as JsonObject),
+            message: "只调用计算器计算 6×7。",
+            script: "return process.env",
+          },
+        },
+      ],
+      finally: [],
+    } as JsonObject;
+    expect(
+      validateDefinition(unsafeInvocation, {
+        systemKey: "spark-x-agent",
+        moduleKey: "tools",
+        environment: sparkEnvironment,
+      }).issues.map((issue) => issue.code),
+    ).toEqual(
+      expect.arrayContaining(["ARBITRARY_ADAPTER_INPUT_FORBIDDEN", "RUN_TRACEABILITY_REQUIRED"]),
+    );
+  });
 });

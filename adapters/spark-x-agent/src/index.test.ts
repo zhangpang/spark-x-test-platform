@@ -47,11 +47,27 @@ function urlOf(input: URL | RequestInfo): string {
   return input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
 }
 
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => canonical(item)).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const record = value as Readonly<Record<string, unknown>>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function hashCanonical(value: unknown): string {
+  return createHash("sha256").update(canonical(value)).digest("hex");
+}
+
 describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.3.0",
+      version: "0.4.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -65,6 +81,18 @@ describe("spark-x-agent adapter", () => {
           expect.objectContaining({ key: "chat.ask", producesResource: false }),
           expect.objectContaining({
             key: "chat.assert-history",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "tool.assert-safe-catalog",
+            actionLevel: "read",
+          }),
+          expect.objectContaining({
+            key: "tool.invoke-safe",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "tool.assert-history",
             actionLevel: "write",
           }),
           expect.objectContaining({
@@ -454,6 +482,380 @@ describe("spark-x-agent adapter", () => {
       assistantContentSha256: assistantHash,
       assistantFinishReason: "stop",
       assistantTurnStatus: "completed",
+    });
+  });
+
+  it("asserts the credential-free builtin demo catalog without returning raw schemas", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                id: "00000000-0000-4000-8000-000000000210",
+                name: "builtin-demo",
+                is_enabled: true,
+                status: "running",
+                tools_count: 3,
+              },
+            ],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                name: "time",
+                is_enabled: true,
+                is_discovered: true,
+                is_write: false,
+                requires_review: false,
+                risk_level: "low",
+                input_schema: { type: "object" },
+              },
+              {
+                name: "calculator",
+                is_enabled: true,
+                is_discovered: true,
+                is_write: false,
+                requires_review: null,
+                risk_level: "read",
+                input_schema: { type: "object" },
+              },
+              {
+                name: "echo",
+                is_enabled: true,
+                is_discovered: true,
+                is_write: false,
+                requires_review: false,
+                risk_level: "low",
+                input_schema: { type: "object" },
+              },
+            ],
+          },
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/tool.assert-safe-catalog",
+      environment,
+      credentials,
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      serverName: "builtin-demo",
+      visible: true,
+      running: true,
+      credentialFieldsAbsent: true,
+      advertisedToolCount: 3,
+      enabledDiscoveredToolCount: 3,
+      expectedToolsMatched: true,
+      catalogSha256: hashCanonical(["calculator", "echo", "time"]),
+    });
+    expect(urlOf(fetcher.mock.calls[1]?.[0] as URL | RequestInfo)).toBe(
+      "http://192.168.110.136/trade/api/mcp/servers",
+    );
+    expect(urlOf(fetcher.mock.calls[2]?.[0] as URL | RequestInfo)).toBe(
+      "http://192.168.110.136/trade/api/admin/mcp/servers/00000000-0000-4000-8000-000000000210/tools",
+    );
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain("input_schema");
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("fails closed when the user catalog leaks an administrator field", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                id: "00000000-0000-4000-8000-000000000210",
+                name: "builtin-demo",
+                is_enabled: true,
+                status: "running",
+                tools_count: 3,
+                env: { TOKEN: "must-not-cross-boundary" },
+              },
+            ],
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/tool.assert-safe-catalog",
+        environment,
+        credentials,
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_TOOL_CATALOG_LEAKED_PRIVATE_FIELDS",
+        classification: "product_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("matches one safe tool call, arguments, result and final answer without leaking payloads", async () => {
+    const marker = `spark-x-tool-${variables["run.id"]}:42`;
+    const message = `回归 ${variables["run.id"]}：只调用一次计算器计算 6×7，再回复 ${marker}`;
+    const argumentsValue = { operation: "multiply", a: 6, b: 7 };
+    const resultValue = { success: true, operation: "multiply", a: 6, b: 7, result: 42 };
+    const finalContent = `结果为 ${marker}`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          { event: "conversation_id", data: { conversation_id: conversationId } },
+          {
+            event: "tool_call",
+            data: {
+              id: "call-safe-1",
+              name: "builtin-demo__calculator",
+              arguments: JSON.stringify({ b: 7, operation: "multiply", a: 6 }),
+            },
+          },
+          {
+            event: "tool_result",
+            data: {
+              id: "call-safe-1",
+              name: "builtin-demo__calculator",
+              result: resultValue,
+              success: true,
+            },
+          },
+          { event: "content", data: { content: finalContent } },
+          {
+            event: "done",
+            data: { final_content: finalContent, truncated: false, stop_reason: "stop" },
+          },
+        ]),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/tool.invoke-safe",
+      environment,
+      {
+        ...credentials,
+        conversationId,
+        message: "回归 ${run.id}：只调用一次计算器计算 6×7，再回复 spark-x-tool-${run.id}:42",
+        expectedText: "spark-x-tool-${run.id}:42",
+        expectedToolName: "builtin-demo__calculator",
+        expectedArgumentsJson: JSON.stringify(argumentsValue),
+        expectedResultJson: JSON.stringify(resultValue),
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      conversationId,
+      done: true,
+      expectedTextMatched: true,
+      expectedToolNameMatched: true,
+      argumentsMatched: true,
+      resultMatched: true,
+      toolCallCount: 1,
+      toolResultCount: 1,
+      reviewEventCount: 0,
+      toolCallIdSha256: createHash("sha256").update("call-safe-1").digest("hex"),
+      argumentsSha256: hashCanonical(argumentsValue),
+      resultSha256: hashCanonical(resultValue),
+      finalContentLength: finalContent.length,
+      finalContentSha256: createHash("sha256").update(finalContent).digest("hex"),
+      streamBytes: output.streamBytes,
+      truncated: false,
+    });
+    expect(fetcher.mock.calls[1]?.[1]?.body).toBe(
+      JSON.stringify({ message, conversation_id: conversationId }),
+    );
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain("multiply");
+    expect(serialized).not.toContain('"result":42');
+    expect(serialized).not.toContain(finalContent);
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("rejects a malformed tool result event with a stable product failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          { event: "conversation_id", data: { conversation_id: conversationId } },
+          {
+            event: "tool_call",
+            data: {
+              id: "call-safe-1",
+              name: "builtin-demo__calculator",
+              arguments: { operation: "multiply", a: 6, b: 7 },
+            },
+          },
+          {
+            event: "tool_result",
+            data: {
+              id: "call-safe-1",
+              name: "builtin-demo__calculator",
+              result: { success: true, result: 42 },
+            },
+          },
+        ]),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/tool.invoke-safe",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          message: "回归 ${run.id} 调用安全计算器",
+          expectedText: "42",
+          expectedToolName: "builtin-demo__calculator",
+          expectedArgumentsJson: '{"operation":"multiply","a":6,"b":7}',
+          expectedResultJson: '{"success":true,"result":42}',
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_TOOL_TRACE_INVALID",
+        classification: "product_failed",
+      },
+    });
+  });
+
+  it("links persisted tool history and public trace to the stream hashes", async () => {
+    const marker = `spark-x-tool-${variables["run.id"]}:42`;
+    const userContent = `回归 ${variables["run.id"]} 调用计算器并回复 ${marker}`;
+    const assistantContent = `结果为 ${marker}`;
+    const argumentsValue = { operation: "multiply", a: 6, b: 7 };
+    const resultValue = { success: true, operation: "multiply", a: 6, b: 7, result: 42 };
+    const argumentsHash = hashCanonical(argumentsValue);
+    const resultHash = hashCanonical(resultValue);
+    const assistantHash = createHash("sha256").update(assistantContent).digest("hex");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { role: "user", content: userContent, payload_truncated: false },
+              {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call-safe-1",
+                    type: "function",
+                    function: {
+                      name: "builtin-demo__calculator",
+                      arguments: JSON.stringify({ b: 7, a: 6, operation: "multiply" }),
+                    },
+                  },
+                ],
+                payload_truncated: false,
+                public_execution_trace: [
+                  {
+                    kind: "tool_call",
+                    id: "call-safe-1",
+                    name: "builtin-demo__calculator",
+                    arguments: argumentsValue,
+                  },
+                ],
+              },
+              {
+                role: "tool",
+                content: JSON.stringify(resultValue),
+                tool_call_id: "call-safe-1",
+                payload_truncated: false,
+                public_execution_trace: [
+                  {
+                    kind: "tool_result",
+                    id: "call-safe-1",
+                    name: "builtin-demo__calculator",
+                    result: resultValue,
+                    success: true,
+                  },
+                ],
+              },
+              {
+                role: "assistant",
+                content: assistantContent,
+                finish_reason: "stop",
+                payload_truncated: false,
+                public_execution_trace: [{ kind: "terminal", status: "completed" }],
+              },
+            ],
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/tool.assert-history",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          expectedUserText: "回归 ${run.id} 调用计算器并回复 spark-x-tool-${run.id}:42",
+          expectedAssistantText: "spark-x-tool-${run.id}:42",
+          expectedAssistantSha256: assistantHash,
+          expectedToolName: "builtin-demo__calculator",
+          expectedArgumentsSha256: argumentsHash,
+          expectedResultSha256: resultHash,
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).resolves.toEqual({
+      conversationId,
+      messageCount: 4,
+      userMessageCount: 1,
+      assistantMessageCount: 2,
+      toolMessageCount: 1,
+      toolCallCount: 1,
+      toolResultCount: 1,
+      traceToolCallCount: 1,
+      traceToolResultCount: 1,
+      expectedUserTextMatched: true,
+      expectedAssistantTextMatched: true,
+      expectedToolNameMatched: true,
+      argumentsSha256: argumentsHash,
+      resultSha256: resultHash,
+      assistantContentLength: assistantContent.length,
+      assistantContentSha256: assistantHash,
+      assistantFinishReason: "stop",
     });
   });
 

@@ -16,6 +16,9 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/conversation.delete",
   "adapter:spark-x-agent/chat.ask",
   "adapter:spark-x-agent/chat.assert-history",
+  "adapter:spark-x-agent/tool.assert-safe-catalog",
+  "adapter:spark-x-agent/tool.invoke-safe",
+  "adapter:spark-x-agent/tool.assert-history",
 ] as const;
 
 export type SparkXAgentAction = (typeof sparkXAgentActions)[number];
@@ -211,6 +214,197 @@ const conversationActionCapabilities = [
     },
   },
   {
+    key: "tool.assert-safe-catalog",
+    name: "校验安全工具目录",
+    description:
+      "校验当前用户可见的 builtin-demo 只读工具目录与管理员登记目录一致，且不暴露连接凭据。",
+    actionLevel: "read",
+    defaultTimeoutMs: 20_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "serverName",
+        "visible",
+        "running",
+        "credentialFieldsAbsent",
+        "advertisedToolCount",
+        "enabledDiscoveredToolCount",
+        "expectedToolsMatched",
+        "catalogSha256",
+      ],
+      properties: {
+        serverName: { const: "builtin-demo" },
+        visible: { const: true },
+        running: { const: true },
+        credentialFieldsAbsent: { const: true },
+        advertisedToolCount: { const: 3 },
+        enabledDiscoveredToolCount: { const: 3 },
+        expectedToolsMatched: { const: true },
+        catalogSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
+    key: "tool.invoke-safe",
+    name: "调用并校验安全工具",
+    description:
+      "通过受控对话只调用已允许的 builtin-demo 只读工具，并校验名称、参数、结果和最终回复。",
+    actionLevel: "write",
+    defaultTimeoutMs: 120_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "conversationId",
+        "message",
+        "expectedText",
+        "expectedToolName",
+        "expectedArgumentsJson",
+        "expectedResultJson",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        message: { type: "string", minLength: 1, maxLength: 20_000 },
+        expectedText: { type: "string", minLength: 1, maxLength: 5_000 },
+        expectedToolName: { type: "string", minLength: 1, maxLength: 200 },
+        expectedArgumentsJson: { type: "string", minLength: 2, maxLength: 20_000 },
+        expectedResultJson: { type: "string", minLength: 2, maxLength: 20_000 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "done",
+        "expectedTextMatched",
+        "expectedToolNameMatched",
+        "argumentsMatched",
+        "resultMatched",
+        "toolCallCount",
+        "toolResultCount",
+        "reviewEventCount",
+        "toolCallIdSha256",
+        "argumentsSha256",
+        "resultSha256",
+        "finalContentLength",
+        "finalContentSha256",
+        "streamBytes",
+        "truncated",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        done: { const: true },
+        expectedTextMatched: { const: true },
+        expectedToolNameMatched: { const: true },
+        argumentsMatched: { const: true },
+        resultMatched: { const: true },
+        toolCallCount: { const: 1 },
+        toolResultCount: { const: 1 },
+        reviewEventCount: { const: 0 },
+        toolCallIdSha256: { type: "string", minLength: 64, maxLength: 64 },
+        argumentsSha256: { type: "string", minLength: 64, maxLength: 64 },
+        resultSha256: { type: "string", minLength: 64, maxLength: 64 },
+        finalContentLength: { type: "integer", minimum: 1 },
+        finalContentSha256: { type: "string", minLength: 64, maxLength: 64 },
+        streamBytes: { type: "integer", minimum: 1, maximum: 1_000_000 },
+        truncated: { const: false },
+      },
+    },
+  },
+  {
+    key: "tool.assert-history",
+    name: "校验工具调用历史",
+    description: "重新登录并校验工具调用、工具结果、公开执行轨迹和最终助手回复已一致持久化。",
+    actionLevel: "write",
+    defaultTimeoutMs: 20_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "conversationId",
+        "expectedUserText",
+        "expectedAssistantText",
+        "expectedAssistantSha256",
+        "expectedToolName",
+        "expectedArgumentsSha256",
+        "expectedResultSha256",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        expectedUserText: { type: "string", minLength: 1, maxLength: 20_000 },
+        expectedAssistantText: { type: "string", minLength: 1, maxLength: 5_000 },
+        expectedAssistantSha256: { type: "string", minLength: 64, maxLength: 64 },
+        expectedToolName: { type: "string", minLength: 1, maxLength: 200 },
+        expectedArgumentsSha256: { type: "string", minLength: 64, maxLength: 64 },
+        expectedResultSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "messageCount",
+        "userMessageCount",
+        "assistantMessageCount",
+        "toolMessageCount",
+        "toolCallCount",
+        "toolResultCount",
+        "traceToolCallCount",
+        "traceToolResultCount",
+        "expectedUserTextMatched",
+        "expectedAssistantTextMatched",
+        "expectedToolNameMatched",
+        "argumentsSha256",
+        "resultSha256",
+        "assistantContentLength",
+        "assistantContentSha256",
+        "assistantFinishReason",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        messageCount: { type: "integer", minimum: 4 },
+        userMessageCount: { const: 1 },
+        assistantMessageCount: { const: 2 },
+        toolMessageCount: { const: 1 },
+        toolCallCount: { const: 1 },
+        toolResultCount: { const: 1 },
+        traceToolCallCount: { const: 1 },
+        traceToolResultCount: { const: 1 },
+        expectedUserTextMatched: { const: true },
+        expectedAssistantTextMatched: { const: true },
+        expectedToolNameMatched: { const: true },
+        argumentsSha256: { type: "string", minLength: 64, maxLength: 64 },
+        resultSha256: { type: "string", minLength: 64, maxLength: 64 },
+        assistantContentLength: { type: "integer", minimum: 1 },
+        assistantContentSha256: { type: "string", minLength: 64, maxLength: 64 },
+        assistantFinishReason: { const: "stop" },
+      },
+    },
+  },
+  {
     key: "conversation.delete",
     name: "删除会话",
     description: "重新登录后按会话 ID 执行幂等清理，可用于 finally 与独立补偿任务。",
@@ -244,7 +438,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.3.0",
+  version: "0.4.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -261,15 +455,136 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "core-smoke-chat" as const;
+export const sparkXAgentAdapterPhase = "core-smoke-tools" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const sha256Pattern = /^[0-9a-f]{64}$/u;
+const safeToolServerName = "builtin-demo";
+const safeToolCatalog = ["calculator", "echo", "time"] as const;
+const safeQualifiedToolNames = new Set(
+  safeToolCatalog.map((name) => `${safeToolServerName}__${name}`),
+);
+const privateCatalogFields = [
+  "command",
+  "args",
+  "env",
+  "address",
+  "cwd",
+  "filesystem_path",
+  "last_error",
+] as const;
 
 function objectValue(value: unknown): Readonly<Record<string, unknown>> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Readonly<Record<string, unknown>>)
     : null;
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function assertBoundedJson(
+  value: unknown,
+  failure: () => ExecutorFailure,
+  depth = 0,
+  budget: { nodes: number } = { nodes: 0 },
+): void {
+  budget.nodes += 1;
+  if (depth > 16 || budget.nodes > 2_000) throw failure();
+  if (typeof value === "number" && !Number.isFinite(value)) throw failure();
+  if (typeof value === "string" && value.length > 20_000) throw failure();
+  if (Array.isArray(value)) {
+    if (value.length > 1_000) throw failure();
+    value.forEach((item) => assertBoundedJson(item, failure, depth + 1, budget));
+    return;
+  }
+  const object = objectValue(value);
+  if (object === null) return;
+  const entries = Object.entries(object);
+  if (entries.length > 1_000) throw failure();
+  entries.forEach(([key, item]) => {
+    if (key.length > 500) throw failure();
+    assertBoundedJson(item, failure, depth + 1, budget);
+  });
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  const object = objectValue(value);
+  if (object !== null) {
+    return `{${Object.keys(object)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function structuredObject(
+  value: unknown,
+  code: string,
+  message: string,
+  classification: "product_failed" | "test_failed",
+): Readonly<Record<string, unknown>> {
+  const failure = (): ExecutorFailure => new ExecutorFailure({ code, message, classification });
+  let parsed = value;
+  if (typeof value === "string") {
+    if (value.length > 20_000) throw failure();
+    try {
+      parsed = JSON.parse(value) as unknown;
+    } catch (error) {
+      throw new ExecutorFailure({ code, message, classification }, error);
+    }
+  }
+  const object = objectValue(parsed);
+  if (object === null) throw failure();
+  assertBoundedJson(object, failure);
+  return object;
+}
+
+function expectedJsonObject(
+  params: Readonly<Record<string, unknown>>,
+  name: string,
+  variables: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const value = requiredString(params, name, variables, 20_000);
+  return structuredObject(
+    value,
+    "SPARK_X_AGENT_PARAMETER_INVALID",
+    `星火 Agent 适配器参数 ${name} 必须是受限 JSON 对象。`,
+    "test_failed",
+  );
+}
+
+function requiredSha256(
+  params: Readonly<Record<string, unknown>>,
+  name: string,
+  variables: Readonly<Record<string, unknown>>,
+): string {
+  const value = requiredString(params, name, variables, 64);
+  if (!sha256Pattern.test(value)) {
+    throw assertionFailure(
+      "SPARK_X_AGENT_PARAMETER_INVALID",
+      `星火 Agent 适配器参数 ${name} 必须是 64 位小写 SHA-256。`,
+    );
+  }
+  return value;
+}
+
+function requiredSafeToolName(
+  params: Readonly<Record<string, unknown>>,
+  variables: Readonly<Record<string, unknown>>,
+): string {
+  const value = requiredString(params, "expectedToolName", variables, 200);
+  if (!safeQualifiedToolNames.has(value)) {
+    throw assertionFailure(
+      "SPARK_X_AGENT_TOOL_NOT_ALLOWED",
+      "当前星火 Agent 工具回归动作只允许 builtin-demo 只读工具。",
+    );
+  }
+  return value;
 }
 
 function requiredString(
@@ -394,6 +709,19 @@ async function authenticatedRequest(
   );
 }
 
+interface SparkXAgentToolCallTrace {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: Readonly<Record<string, unknown>>;
+}
+
+interface SparkXAgentToolResultTrace {
+  readonly id: string;
+  readonly name: string;
+  readonly result: Readonly<Record<string, unknown>>;
+  readonly success: boolean;
+}
+
 interface SparkXAgentChatResult {
   readonly conversationId: string;
   readonly contentEventCount: number;
@@ -402,6 +730,8 @@ interface SparkXAgentChatResult {
   readonly toolEventCount: number;
   readonly skillEventCount: number;
   readonly reviewEventCount: number;
+  readonly toolCalls: readonly SparkXAgentToolCallTrace[];
+  readonly toolResults: readonly SparkXAgentToolResultTrace[];
   readonly streamBytes: number;
   readonly streamedContent: string;
   readonly finalContent: string;
@@ -422,6 +752,8 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
   let toolEventCount = 0;
   let skillEventCount = 0;
   let reviewEventCount = 0;
+  const toolCalls: SparkXAgentToolCallTrace[] = [];
+  const toolResults: SparkXAgentToolResultTrace[] = [];
   let stopReason: string | undefined;
   let durationMs: number | undefined;
 
@@ -463,8 +795,58 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
       statusEventCount += 1;
     } else if (event === "assistant_preview") {
       assistantPreviewEventCount += 1;
-    } else if (event === "tool_call" || event === "tool_result") {
+    } else if (event === "tool_call") {
       toolEventCount += 1;
+      if (
+        typeof data.id !== "string" ||
+        data.id.trim() === "" ||
+        data.id.length > 512 ||
+        typeof data.name !== "string" ||
+        data.name.trim() === "" ||
+        data.name.length > 200
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_TOOL_TRACE_INVALID",
+          "星火 Agent 工具调用事件缺少受限标识或工具名称。",
+        );
+      }
+      toolCalls.push({
+        id: data.id,
+        name: data.name,
+        arguments: structuredObject(
+          data.arguments,
+          "SPARK_X_AGENT_TOOL_TRACE_INVALID",
+          "星火 Agent 工具调用事件缺少受限结构化参数。",
+          "product_failed",
+        ),
+      });
+    } else if (event === "tool_result") {
+      toolEventCount += 1;
+      if (
+        typeof data.id !== "string" ||
+        data.id.trim() === "" ||
+        data.id.length > 512 ||
+        typeof data.name !== "string" ||
+        data.name.trim() === "" ||
+        data.name.length > 200 ||
+        typeof data.success !== "boolean"
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_TOOL_TRACE_INVALID",
+          "星火 Agent 工具结果事件缺少受限标识、名称或成功状态。",
+        );
+      }
+      toolResults.push({
+        id: data.id,
+        name: data.name,
+        result: structuredObject(
+          data.result,
+          "SPARK_X_AGENT_TOOL_TRACE_INVALID",
+          "星火 Agent 工具结果事件缺少受限结构化结果。",
+          "product_failed",
+        ),
+        success: data.success,
+      });
     } else if (event === "skill") {
       skillEventCount += 1;
     } else if (event === "review_required") {
@@ -522,6 +904,8 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
     toolEventCount,
     skillEventCount,
     reviewEventCount,
+    toolCalls,
+    toolResults,
     streamBytes,
     streamedContent,
     finalContent,
@@ -699,6 +1083,182 @@ export async function executeSparkXAgentAction(
   const password = requiredString(params, "password", variables, 4_096);
   const token = await login(environment, username, password, remainingOptions());
 
+  if (action === "adapter:spark-x-agent/tool.assert-safe-catalog") {
+    const visibleResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath("/mcp/servers") },
+      remainingOptions(),
+    );
+    accepted(visibleResponse, "SPARK_X_AGENT_TOOL_CATALOG_FAILED");
+    const visibleData = dataEnvelope(
+      visibleResponse.body,
+      "SPARK_X_AGENT_TOOL_CATALOG_RESPONSE_INVALID",
+    );
+    const visibleItems = Array.isArray(visibleData.items)
+      ? visibleData.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    const visibleServer = visibleItems.find((item) => item.name === safeToolServerName);
+    if (
+      visibleServer === undefined ||
+      typeof visibleServer.id !== "string" ||
+      !uuidPattern.test(visibleServer.id) ||
+      visibleServer.is_enabled !== true ||
+      visibleServer.status !== "running" ||
+      visibleServer.tools_count !== safeToolCatalog.length
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SAFE_TOOL_CATALOG_UNAVAILABLE",
+        "builtin-demo 安全工具目录未以运行中状态完整暴露给当前用户。",
+      );
+    }
+    if (privateCatalogFields.some((field) => Object.hasOwn(visibleServer, field))) {
+      throw apiFailure(
+        "SPARK_X_AGENT_TOOL_CATALOG_LEAKED_PRIVATE_FIELDS",
+        "星火 Agent 用户工具目录暴露了管理员连接配置字段。",
+      );
+    }
+    const adminResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(`/admin/mcp/servers/${encodeURIComponent(visibleServer.id)}/tools`),
+      },
+      remainingOptions(),
+    );
+    accepted(adminResponse, "SPARK_X_AGENT_TOOL_CATALOG_FAILED");
+    const adminData = dataEnvelope(
+      adminResponse.body,
+      "SPARK_X_AGENT_TOOL_CATALOG_RESPONSE_INVALID",
+    );
+    const enabledTools = Array.isArray(adminData.items)
+      ? adminData.items
+          .map(objectValue)
+          .filter(
+            (item): item is Readonly<Record<string, unknown>> =>
+              item !== null && item.is_enabled === true && item.is_discovered === true,
+          )
+      : [];
+    const names = enabledTools
+      .map((item) => item.name)
+      .filter((name): name is string => typeof name === "string")
+      .sort();
+    const expectedNames = [...safeToolCatalog].sort();
+    if (
+      names.length !== enabledTools.length ||
+      canonicalJson(names) !== canonicalJson(expectedNames) ||
+      enabledTools.some(
+        (item) =>
+          item.is_write === true ||
+          item.requires_review === true ||
+          !["low", "read"].includes(String(item.risk_level)),
+      )
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SAFE_TOOL_CATALOG_MISMATCH",
+        "builtin-demo 当前启用工具、风险等级或复核策略与只读基线不一致。",
+      );
+    }
+    return {
+      serverName: safeToolServerName,
+      visible: true,
+      running: true,
+      credentialFieldsAbsent: true,
+      advertisedToolCount: visibleServer.tools_count,
+      enabledDiscoveredToolCount: enabledTools.length,
+      expectedToolsMatched: true,
+      catalogSha256: sha256(canonicalJson(names)),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/tool.invoke-safe") {
+    const conversationId = requiredString(params, "conversationId", variables, 100);
+    const message = requiredString(params, "message", variables, 20_000);
+    const expectedText = requiredString(params, "expectedText", variables, 5_000);
+    const expectedToolName = requiredSafeToolName(params, variables);
+    const expectedArguments = expectedJsonObject(params, "expectedArgumentsJson", variables);
+    const expectedResult = expectedJsonObject(params, "expectedResultJson", variables);
+    if (message.includes("\u0000")) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "星火 Agent 工具对话消息不能包含空字符。",
+      );
+    }
+    const result = await streamChat(
+      environment,
+      token,
+      conversationId,
+      message,
+      remainingOptions(),
+    );
+    if (!result.finalContent.includes(expectedText)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_FINAL_RESPONSE_FAILED",
+        "星火 Agent 工具调用后的最终回复未包含预期运行标识或结果。",
+      );
+    }
+    if (
+      result.toolCalls.length !== 1 ||
+      result.toolResults.length !== 1 ||
+      result.reviewEventCount !== 0
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_CARDINALITY_FAILED",
+        "安全工具回归必须且只能产生一组无需人工复核的工具调用与结果。",
+      );
+    }
+    const call = result.toolCalls[0];
+    const toolResult = result.toolResults[0];
+    if (
+      call === undefined ||
+      toolResult === undefined ||
+      call.name !== expectedToolName ||
+      toolResult.name !== expectedToolName ||
+      call.id !== toolResult.id ||
+      toolResult.success !== true
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_IDENTITY_FAILED",
+        "安全工具调用与结果的名称、调用标识或成功状态不一致。",
+      );
+    }
+    const argumentsCanonical = canonicalJson(call.arguments);
+    const resultCanonical = canonicalJson(toolResult.result);
+    if (argumentsCanonical !== canonicalJson(expectedArguments)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_ARGUMENTS_FAILED",
+        "模型提交给安全工具的参数与预期绑定不一致。",
+      );
+    }
+    if (resultCanonical !== canonicalJson(expectedResult)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_RESULT_FAILED",
+        "安全工具的结构化结果与预期结果不一致。",
+      );
+    }
+    return {
+      conversationId: result.conversationId,
+      done: true,
+      expectedTextMatched: true,
+      expectedToolNameMatched: true,
+      argumentsMatched: true,
+      resultMatched: true,
+      toolCallCount: result.toolCalls.length,
+      toolResultCount: result.toolResults.length,
+      reviewEventCount: result.reviewEventCount,
+      toolCallIdSha256: sha256(call.id),
+      argumentsSha256: sha256(argumentsCanonical),
+      resultSha256: sha256(resultCanonical),
+      finalContentLength: result.finalContent.length,
+      finalContentSha256: sha256(result.finalContent),
+      streamBytes: result.streamBytes,
+      truncated: false,
+    };
+  }
+
   if (action === "adapter:spark-x-agent/chat.ask") {
     const conversationId = requiredString(params, "conversationId", variables, 100);
     const message = requiredString(params, "message", variables, 20_000);
@@ -768,6 +1328,177 @@ export async function executeSparkXAgentAction(
   }
 
   const conversationId = requiredString(params, "conversationId", variables, 100);
+  if (action === "adapter:spark-x-agent/tool.assert-history") {
+    const expectedUserText = requiredString(params, "expectedUserText", variables, 20_000);
+    const expectedAssistantText = requiredString(params, "expectedAssistantText", variables, 5_000);
+    const expectedAssistantSha256 = requiredSha256(params, "expectedAssistantSha256", variables);
+    const expectedToolName = requiredSafeToolName(params, variables);
+    const expectedArgumentsSha256 = requiredSha256(params, "expectedArgumentsSha256", variables);
+    const expectedResultSha256 = requiredSha256(params, "expectedResultSha256", variables);
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+        ),
+      },
+      remainingOptions(),
+    );
+    accepted(response, "SPARK_X_AGENT_TOOL_HISTORY_FAILED");
+    const data = dataEnvelope(response.body, "SPARK_X_AGENT_TOOL_HISTORY_RESPONSE_INVALID");
+    const items = Array.isArray(data.items)
+      ? data.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    if (items.some((item) => item.payload_truncated === true)) {
+      throw apiFailure(
+        "SPARK_X_AGENT_TOOL_HISTORY_TRUNCATED",
+        "星火 Agent 工具调用历史包含已截断的公开消息。",
+      );
+    }
+    const userMessages = items.filter((item) => item.role === "user");
+    const assistantMessages = items.filter((item) => item.role === "assistant");
+    const toolMessages = items.filter((item) => item.role === "tool");
+    const calls = assistantMessages.flatMap((item) =>
+      Array.isArray(item.tool_calls)
+        ? item.tool_calls
+            .map(objectValue)
+            .filter((call): call is Readonly<Record<string, unknown>> => call !== null)
+        : [],
+    );
+    const finalAssistants = assistantMessages.filter(
+      (item) =>
+        item.finish_reason === "stop" &&
+        typeof item.content === "string" &&
+        (!Array.isArray(item.tool_calls) || item.tool_calls.length === 0),
+    );
+    if (
+      userMessages.length !== 1 ||
+      assistantMessages.length !== 2 ||
+      toolMessages.length !== 1 ||
+      calls.length !== 1 ||
+      finalAssistants.length !== 1
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_HISTORY_CARDINALITY_FAILED",
+        "工具回归历史必须包含一条用户消息、一次工具调用、一条工具结果和一条最终回复。",
+      );
+    }
+    const userContent = userMessages[0]?.content;
+    const call = calls[0];
+    const toolMessage = toolMessages[0];
+    const finalAssistant = finalAssistants[0];
+    const functionValue = call === undefined ? null : objectValue(call.function);
+    if (
+      typeof userContent !== "string" ||
+      userContent !== expectedUserText ||
+      call === undefined ||
+      typeof call.id !== "string" ||
+      functionValue === null ||
+      functionValue.name !== expectedToolName ||
+      toolMessage === undefined ||
+      toolMessage.tool_call_id !== call.id ||
+      typeof toolMessage.content !== "string" ||
+      finalAssistant === undefined ||
+      typeof finalAssistant.content !== "string" ||
+      !finalAssistant.content.includes(expectedAssistantText)
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_HISTORY_IDENTITY_FAILED",
+        "工具回归历史的用户消息、工具身份、结果关联或最终回复不一致。",
+      );
+    }
+    const argumentsObject = structuredObject(
+      functionValue.arguments,
+      "SPARK_X_AGENT_TOOL_HISTORY_RESPONSE_INVALID",
+      "星火 Agent 工具调用历史缺少受限结构化参数。",
+      "product_failed",
+    );
+    const resultObject = structuredObject(
+      toolMessage.content,
+      "SPARK_X_AGENT_TOOL_HISTORY_RESPONSE_INVALID",
+      "星火 Agent 工具结果历史缺少受限结构化结果。",
+      "product_failed",
+    );
+    const argumentsSha256 = sha256(canonicalJson(argumentsObject));
+    const resultSha256 = sha256(canonicalJson(resultObject));
+    const assistantContentSha256 = sha256(finalAssistant.content);
+    if (
+      argumentsSha256 !== expectedArgumentsSha256 ||
+      resultSha256 !== expectedResultSha256 ||
+      assistantContentSha256 !== expectedAssistantSha256
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_HISTORY_HASH_MISMATCH",
+        "工具参数、结果或最终回复的持久化哈希与流式证据不一致。",
+      );
+    }
+    const traceEvents = items.flatMap((item) =>
+      Array.isArray(item.public_execution_trace)
+        ? item.public_execution_trace
+            .map(objectValue)
+            .filter((event): event is Readonly<Record<string, unknown>> => event !== null)
+        : [],
+    );
+    const traceCalls = traceEvents.filter((event) => event.kind === "tool_call");
+    const traceResults = traceEvents.filter((event) => event.kind === "tool_result");
+    if (
+      traceCalls.length !== 1 ||
+      traceResults.length !== 1 ||
+      traceCalls[0]?.id !== call.id ||
+      traceCalls[0]?.name !== expectedToolName ||
+      traceResults[0]?.id !== call.id ||
+      traceResults[0]?.name !== expectedToolName ||
+      traceResults[0]?.success !== true ||
+      sha256(
+        canonicalJson(
+          structuredObject(
+            traceCalls[0]?.arguments,
+            "SPARK_X_AGENT_TOOL_HISTORY_RESPONSE_INVALID",
+            "星火 Agent 公开执行轨迹缺少结构化工具参数。",
+            "product_failed",
+          ),
+        ),
+      ) !== expectedArgumentsSha256 ||
+      sha256(
+        canonicalJson(
+          structuredObject(
+            traceResults[0]?.result,
+            "SPARK_X_AGENT_TOOL_HISTORY_RESPONSE_INVALID",
+            "星火 Agent 公开执行轨迹缺少结构化工具结果。",
+            "product_failed",
+          ),
+        ),
+      ) !== expectedResultSha256
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_HISTORY_TRACE_FAILED",
+        "工具调用公开执行轨迹与消息历史不一致。",
+      );
+    }
+    return {
+      conversationId,
+      messageCount: items.length,
+      userMessageCount: userMessages.length,
+      assistantMessageCount: assistantMessages.length,
+      toolMessageCount: toolMessages.length,
+      toolCallCount: calls.length,
+      toolResultCount: toolMessages.length,
+      traceToolCallCount: traceCalls.length,
+      traceToolResultCount: traceResults.length,
+      expectedUserTextMatched: true,
+      expectedAssistantTextMatched: true,
+      expectedToolNameMatched: true,
+      argumentsSha256,
+      resultSha256,
+      assistantContentLength: finalAssistant.content.length,
+      assistantContentSha256,
+      assistantFinishReason: "stop",
+    };
+  }
   if (action === "adapter:spark-x-agent/chat.assert-history") {
     const expectedUserText = requiredString(params, "expectedUserText", variables, 20_000);
     const expectedAssistantText = requiredString(params, "expectedAssistantText", variables, 5_000);
@@ -777,7 +1508,7 @@ export async function executeSparkXAgentAction(
       variables,
       64,
     );
-    if (!/^[0-9a-f]{64}$/u.test(expectedAssistantSha256)) {
+    if (!sha256Pattern.test(expectedAssistantSha256)) {
       throw assertionFailure(
         "SPARK_X_AGENT_PARAMETER_INVALID",
         "星火 Agent 助手回复哈希必须是 64 位小写 SHA-256。",

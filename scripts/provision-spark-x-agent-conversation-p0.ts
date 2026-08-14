@@ -440,6 +440,180 @@ function chatDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function toolCatalogDefinition(): Readonly<Record<string, unknown>> {
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "TOOL-001 内置只读工具目录与凭据边界",
+      description:
+        "校验普通用户只看到 builtin-demo 的三个只读工具，管理员目录风险策略一致且不返回连接凭据。",
+      systemKey: "spark-x-agent",
+      moduleKey: "tools",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "read",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "tool", "p0", "core-smoke", "read-only"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 20_000,
+      caseTimeoutMs: 60_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: [],
+    steps: [
+      {
+        id: "assert-safe-tool-catalog",
+        name: "校验内置只读工具目录与凭据边界",
+        kind: "action",
+        action: "adapter:spark-x-agent/tool.assert-safe-catalog",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+        },
+      },
+    ],
+    finally: [],
+  };
+}
+
+function toolInvocationDefinition(): Readonly<Record<string, unknown>> {
+  const message =
+    "自动化回归 ${run.id}：只调用一次 builtin-demo__calculator 计算 6×7，并回复 spark-x-tool-${run.id}:42。";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "TOOL-002 安全工具调用、结果回填与历史证据",
+      description:
+        "创建带 run_id 的会话，调用一次内置只读计算器，校验参数、结果、最终回复和历史公开轨迹的哈希关联，并在 finally 清理。",
+      systemKey: "spark-x-agent",
+      moduleKey: "tools",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "tool", "p0", "core-smoke", "real-model", "read-only"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 120_000,
+      caseTimeoutMs: 420_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:tools"],
+    steps: [
+      {
+        id: "create-tool-conversation",
+        name: "创建并登记工具测试会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: "spark-x-tool-${run.id}",
+        },
+        capture: { "conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "invoke-safe-tool",
+        name: "调用一次内置只读计算器并校验结构化结果",
+        kind: "action",
+        action: "adapter:spark-x-agent/tool.invoke-safe",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.conversation-id}",
+          message,
+          expectedText: "spark-x-tool-${run.id}:42",
+          expectedToolName: "builtin-demo__calculator",
+          expectedArgumentsJson: '{"operation":"multiply","a":6,"b":7}',
+          expectedResultJson: '{"success":true,"operation":"multiply","a":6,"b":7,"result":42}',
+        },
+        capture: {
+          "assistant-sha256": "$.finalContentSha256",
+          "arguments-sha256": "$.argumentsSha256",
+          "result-sha256": "$.resultSha256",
+        },
+      },
+      {
+        id: "assert-tool-history",
+        name: "校验工具消息与公开轨迹完整持久化",
+        kind: "action",
+        action: "adapter:spark-x-agent/tool.assert-history",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.conversation-id}",
+          expectedUserText: message,
+          expectedAssistantText: "spark-x-tool-${run.id}:42",
+          expectedAssistantSha256: "${step.assistant-sha256}",
+          expectedToolName: "builtin-demo__calculator",
+          expectedArgumentsSha256: "${step.arguments-sha256}",
+          expectedResultSha256: "${step.result-sha256}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "delete-tool-conversation",
+        name: "删除工具测试会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
 async function ensureCase(
   systemId: string,
   moduleId: string,
@@ -539,7 +713,7 @@ async function ensureSuite(
 }
 
 async function waitForRun(runId: string): Promise<RunDetail> {
-  const deadline = Date.now() + 360_000;
+  const deadline = Date.now() + 600_000;
   let last: RunDetail | undefined;
   while (Date.now() < deadline) {
     last = (await api<RunDetail>(`/runs/${runId}`)).body;
@@ -571,9 +745,9 @@ async function executeSmoke(
   check(accepted.status === 202, "Spark X Agent core smoke run was not newly accepted");
   const run = await waitForRun(accepted.body.id);
   check(run.gateResult === "passed", `Spark X Agent core smoke gate is ${String(run.gateResult)}`);
-  check(run.summary.passed === 2, "Spark X Agent core smoke cases did not both pass");
+  check(run.summary.passed === 4, "Spark X Agent core smoke cases did not all pass");
   check(run.firstFailure === null, "Spark X Agent core smoke retained an unexpected first failure");
-  check(run.cases.length === 2, "Spark X Agent core smoke run case linkage is incomplete");
+  check(run.cases.length === 4, "Spark X Agent core smoke run case linkage is incomplete");
   check(
     run.cases.every((item) => item.result === "passed"),
     "Spark X Agent core smoke case failed",
@@ -583,8 +757,8 @@ async function executeSmoke(
     "Spark X Agent core smoke finally cleanup did not pass",
   );
   check(
-    run.steps.length === 7,
-    "Spark X Agent core smoke did not record five main steps and two finally steps",
+    run.steps.length === 12,
+    "Spark X Agent core smoke did not record nine main steps and three finally steps",
   );
   check(
     run.steps.every((step) => step.status === "passed"),
@@ -600,10 +774,15 @@ async function executeSmoke(
         "main:adapter:spark-x-agent/chat.ask",
         "main:adapter:spark-x-agent/chat.assert-history",
         "finally:adapter:spark-x-agent/conversation.delete",
+        "main:adapter:spark-x-agent/tool.assert-safe-catalog",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/tool.invoke-safe",
+        "main:adapter:spark-x-agent/tool.assert-history",
+        "finally:adapter:spark-x-agent/conversation.delete",
       ].join(","),
     "Spark X Agent core smoke structured step sequence is incorrect",
   );
-  check(run.resources.length === 2, "Spark X Agent core smoke resource ledger linkage is missing");
+  check(run.resources.length === 3, "Spark X Agent core smoke resource ledger linkage is missing");
   check(
     run.resources.every((resource) => resource.resourceType === "spark-x-agent-conversation"),
     "Spark X Agent core smoke resource type is incorrect",
@@ -634,6 +813,59 @@ async function executeSmoke(
       chatHistory.outputSummary.assistantContentSha256 === chatAsk.outputSummary.finalContentSha256,
     "CHAT-001 persisted history is not linked to the streamed answer",
   );
+  const toolCatalog = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/tool.assert-safe-catalog",
+  );
+  check(
+    toolCatalog?.outputSummary?.serverName === "builtin-demo" &&
+      toolCatalog.outputSummary.visible === true &&
+      toolCatalog.outputSummary.running === true &&
+      toolCatalog.outputSummary.credentialFieldsAbsent === true &&
+      toolCatalog.outputSummary.advertisedToolCount === 3 &&
+      toolCatalog.outputSummary.enabledDiscoveredToolCount === 3 &&
+      toolCatalog.outputSummary.expectedToolsMatched === true &&
+      typeof toolCatalog.outputSummary.catalogSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(toolCatalog.outputSummary.catalogSha256),
+    "TOOL-001 safe catalog evidence is incomplete",
+  );
+  const toolInvocation = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/tool.invoke-safe",
+  );
+  const toolHistory = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/tool.assert-history",
+  );
+  check(
+    toolInvocation?.outputSummary?.done === true &&
+      toolInvocation.outputSummary.expectedTextMatched === true &&
+      toolInvocation.outputSummary.expectedToolNameMatched === true &&
+      toolInvocation.outputSummary.argumentsMatched === true &&
+      toolInvocation.outputSummary.resultMatched === true &&
+      toolInvocation.outputSummary.toolCallCount === 1 &&
+      toolInvocation.outputSummary.toolResultCount === 1 &&
+      toolInvocation.outputSummary.reviewEventCount === 0 &&
+      toolInvocation.outputSummary.truncated === false &&
+      typeof toolInvocation.outputSummary.argumentsSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(toolInvocation.outputSummary.argumentsSha256) &&
+      typeof toolInvocation.outputSummary.resultSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(toolInvocation.outputSummary.resultSha256) &&
+      typeof toolInvocation.outputSummary.finalContentSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(toolInvocation.outputSummary.finalContentSha256),
+    "TOOL-002 streamed tool evidence is incomplete",
+  );
+  check(
+    toolHistory?.outputSummary?.expectedUserTextMatched === true &&
+      toolHistory.outputSummary.expectedAssistantTextMatched === true &&
+      toolHistory.outputSummary.expectedToolNameMatched === true &&
+      toolHistory.outputSummary.toolCallCount === 1 &&
+      toolHistory.outputSummary.toolResultCount === 1 &&
+      toolHistory.outputSummary.traceToolCallCount === 1 &&
+      toolHistory.outputSummary.traceToolResultCount === 1 &&
+      toolHistory.outputSummary.argumentsSha256 === toolInvocation.outputSummary.argumentsSha256 &&
+      toolHistory.outputSummary.resultSha256 === toolInvocation.outputSummary.resultSha256 &&
+      toolHistory.outputSummary.assistantContentSha256 ===
+        toolInvocation.outputSummary.finalContentSha256,
+    "TOOL-002 persisted messages or public trace are not linked to the streamed evidence",
+  );
   const evidence = JSON.stringify(run);
   if (password !== undefined) {
     check(
@@ -641,6 +873,11 @@ async function executeSmoke(
       "Spark X Agent administrator password leaked into evidence",
     );
   }
+  check(
+    !evidence.includes('{"operation":"multiply","a":6,"b":7}') &&
+      !evidence.includes('{"success":true,"operation":"multiply","a":6,"b":7,"result":42}'),
+    "Spark X Agent tool arguments or result leaked into structured evidence",
+  );
   return run;
 }
 
@@ -651,6 +888,8 @@ const recentConversations = modules.get("recent-conversations");
 check(recentConversations !== undefined, "recent-conversations module was not provisioned");
 const chat = modules.get("chat");
 check(chat !== undefined, "chat module was not provisioned");
+const tools = modules.get("tools");
+check(tools !== undefined, "tools module was not provisioned");
 const environment = await ensureEnvironment(system.id);
 if (password !== undefined) await upsertSecrets(system.id, environment.id, password);
 const conversation = await ensureCase(
@@ -669,6 +908,22 @@ const chatCase = await ensureCase(
   chatDefinition(),
   "新增星火 Agent 真实流式对话与历史证据闭环",
 );
+const toolCatalogCase = await ensureCase(
+  system.id,
+  tools.id,
+  environment.id,
+  "TOOL-001 内置只读工具目录与凭据边界",
+  toolCatalogDefinition(),
+  "新增内置只读工具目录与凭据边界 P0 回归",
+);
+const toolInvocationCase = await ensureCase(
+  system.id,
+  tools.id,
+  environment.id,
+  "TOOL-002 安全工具调用、结果回填与历史证据",
+  toolInvocationDefinition(),
+  "新增安全工具调用、结果回填和历史公开轨迹证据闭环",
+);
 const conversationSuite = await ensureSuite(
   system.id,
   "spark-x-agent-conversation-p0",
@@ -676,12 +931,24 @@ const conversationSuite = await ensureSuite(
   "CONV-001 真实会话创建、最近排序、资源登记与清理闭环。",
   [conversation.testCase.id],
 );
+const toolSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-tools-p0",
+  "星火 Agent 工具 P0 纵向切片",
+  "TOOL-001/002 内置只读工具目录、调用、结果回填、历史证据与会话清理闭环。",
+  [toolCatalogCase.testCase.id, toolInvocationCase.testCase.id],
+);
 const suite = await ensureSuite(
   system.id,
   "spark-x-agent-core-smoke",
   "星火 Agent 核心冒烟",
-  "发布后核心冒烟套件；当前包含 CONV-001 与 CHAT-001，后续按模块扩充到 10～12 条 P0。",
-  [conversation.testCase.id, chatCase.testCase.id],
+  "发布后核心冒烟套件；当前包含 CONV-001、CHAT-001 与 TOOL-001/002，后续按模块扩充到 10～12 条 P0。",
+  [
+    conversation.testCase.id,
+    chatCase.testCase.id,
+    toolCatalogCase.testCase.id,
+    toolInvocationCase.testCase.id,
+  ],
 );
 const run = runSmoke
   ? await executeSmoke(system.id, environment.id, suite.id, password)
@@ -691,8 +958,8 @@ console.info(
   JSON.stringify({
     status: run === undefined ? "provisioned" : "passed",
     scenario: "spark-x-agent-core-smoke",
-    assertions: run === undefined ? 0 : 23,
-    caseCount: 2,
+    assertions: run === undefined ? 0 : 38,
+    caseCount: 4,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
     systemId: system.id,
@@ -701,7 +968,12 @@ console.info(
     conversationCaseVersionId: conversation.version.id,
     chatCaseId: chatCase.testCase.id,
     chatCaseVersionId: chatCase.version.id,
+    toolCatalogCaseId: toolCatalogCase.testCase.id,
+    toolCatalogCaseVersionId: toolCatalogCase.version.id,
+    toolInvocationCaseId: toolInvocationCase.testCase.id,
+    toolInvocationCaseVersionId: toolInvocationCase.version.id,
     conversationSuiteId: conversationSuite.id,
+    toolSuiteId: toolSuite.id,
     suiteId: suite.id,
     ...(run === undefined ? {} : { runId: run.id, gateResult: run.gateResult }),
   }),

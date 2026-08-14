@@ -81,6 +81,22 @@ function requestUrl(input: URL | RequestInfo | undefined): string | undefined {
   return input?.url;
 }
 
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => canonical(item)).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const record = value as Readonly<Record<string, unknown>>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function hashCanonical(value: unknown): string {
+  return createHash("sha256").update(canonical(value)).digest("hex");
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("run worker", () => {
@@ -1165,6 +1181,256 @@ describe("run worker", () => {
       ["adapter:spark-x-agent/conversation.create", "main"],
       ["adapter:spark-x-agent/chat.ask", "main"],
       ["adapter:spark-x-agent/chat.assert-history", "main"],
+      ["adapter:spark-x-agent/conversation.delete", "finally"],
+    ]);
+  });
+
+  it("routes one bounded Spark X Agent tool call through hash-linked history and cleanup", async () => {
+    const conversationId = "00000000-0000-4000-8000-000000000121";
+    const password = "tool-password-that-must-not-persist";
+    const marker = `spark-x-tool-${job.runId}:42`;
+    const message = `自动化回归 ${job.runId}：只调用一次 builtin-demo__calculator 计算 6×7，并回复 ${marker}。`;
+    const assistantContent = `计算完成，${marker}`;
+    const argumentsValue = { operation: "multiply", a: 6, b: 7 };
+    const resultValue = { success: true, operation: "multiply", a: 6, b: 7, result: 42 };
+    const assistantHash = createHash("sha256").update(assistantContent).digest("hex");
+    const argumentsHash = hashCanonical(argumentsValue);
+    const resultHash = hashCanonical(resultValue);
+    const executionSnapshot: RunExecutionSnapshot = {
+      ...snapshot({
+        inputs: [
+          { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
+          { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
+        ],
+        execution: { stepTimeoutMs: 5_000, caseTimeoutMs: 15_000, diagnosticRetries: 0 },
+        resourceLocks: ["spark-x-agent:admin:tools"],
+        steps: [
+          {
+            id: "create-conversation",
+            action: "adapter:spark-x-agent/conversation.create",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              title: "spark-x-tool-${run.id}",
+            },
+            capture: { "conversation-id": "$.conversationId" },
+            resource: {
+              type: "spark-x-agent-conversation",
+              id: "${step.conversation-id}",
+              cleanup: {
+                action: "adapter:spark-x-agent/conversation.delete",
+                params: {
+                  username: "${case.admin-username}",
+                  password: "${case.admin-password}",
+                  conversationId: "${resource.id}",
+                },
+              },
+            },
+          },
+          {
+            id: "invoke-safe-tool",
+            action: "adapter:spark-x-agent/tool.invoke-safe",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${step.conversation-id}",
+              message:
+                "自动化回归 ${run.id}：只调用一次 builtin-demo__calculator 计算 6×7，并回复 spark-x-tool-${run.id}:42。",
+              expectedText: "spark-x-tool-${run.id}:42",
+              expectedToolName: "builtin-demo__calculator",
+              expectedArgumentsJson: JSON.stringify(argumentsValue),
+              expectedResultJson: JSON.stringify(resultValue),
+            },
+            capture: {
+              "assistant-sha256": "$.finalContentSha256",
+              "arguments-sha256": "$.argumentsSha256",
+              "result-sha256": "$.resultSha256",
+            },
+          },
+          {
+            id: "assert-tool-history",
+            action: "adapter:spark-x-agent/tool.assert-history",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${step.conversation-id}",
+              expectedUserText:
+                "自动化回归 ${run.id}：只调用一次 builtin-demo__calculator 计算 6×7，并回复 spark-x-tool-${run.id}:42。",
+              expectedAssistantText: "spark-x-tool-${run.id}:42",
+              expectedAssistantSha256: "${step.assistant-sha256}",
+              expectedToolName: "builtin-demo__calculator",
+              expectedArgumentsSha256: "${step.arguments-sha256}",
+              expectedResultSha256: "${step.result-sha256}",
+            },
+          },
+        ],
+        finally: [
+          {
+            id: "delete-conversation",
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${step.conversation-id}",
+            },
+          },
+        ],
+      }),
+      environment: {
+        id: "00000000-0000-4000-8000-000000000102",
+        baseUrl: "http://192.168.110.136/trade/",
+        actionLevel: "dangerous",
+        adapterKey: "spark-x-agent",
+        allowlist: [
+          {
+            protocol: "http",
+            host: "192.168.110.136",
+            ports: [80],
+            pathPrefixes: ["/trade/"],
+          },
+        ],
+      },
+    };
+    const store = fakeStore(executionSnapshot);
+    vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      "case.admin-username": "admin",
+      "case.admin-password": password,
+    });
+    const tokenResponse = (): Response =>
+      new Response(
+        JSON.stringify({ success: true, data: { token: "adapter-memory-only-token-value" } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    const responses = [
+      tokenResponse(),
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { id: conversationId, title: `spark-x-tool-${job.runId}` },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      tokenResponse(),
+      new Response(
+        [
+          { event: "conversation_id", data: { conversation_id: conversationId } },
+          {
+            event: "tool_call",
+            data: {
+              id: "call-worker-safe-1",
+              name: "builtin-demo__calculator",
+              arguments: argumentsValue,
+            },
+          },
+          {
+            event: "tool_result",
+            data: {
+              id: "call-worker-safe-1",
+              name: "builtin-demo__calculator",
+              result: resultValue,
+              success: true,
+            },
+          },
+          { event: "content", data: { content: assistantContent } },
+          {
+            event: "done",
+            data: { final_content: assistantContent, truncated: false, stop_reason: "stop" },
+          },
+        ]
+          .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+          .join(""),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      ),
+      tokenResponse(),
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            items: [
+              { role: "user", content: message, payload_truncated: false },
+              {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call-worker-safe-1",
+                    type: "function",
+                    function: {
+                      name: "builtin-demo__calculator",
+                      arguments: JSON.stringify(argumentsValue),
+                    },
+                  },
+                ],
+                payload_truncated: false,
+                public_execution_trace: [
+                  {
+                    kind: "tool_call",
+                    id: "call-worker-safe-1",
+                    name: "builtin-demo__calculator",
+                    arguments: argumentsValue,
+                  },
+                ],
+              },
+              {
+                role: "tool",
+                content: JSON.stringify(resultValue),
+                tool_call_id: "call-worker-safe-1",
+                payload_truncated: false,
+                public_execution_trace: [
+                  {
+                    kind: "tool_result",
+                    id: "call-worker-safe-1",
+                    name: "builtin-demo__calculator",
+                    result: resultValue,
+                    success: true,
+                  },
+                ],
+              },
+              {
+                role: "assistant",
+                content: assistantContent,
+                payload_truncated: false,
+                finish_reason: "stop",
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      tokenResponse(),
+      new Response(JSON.stringify({ success: true, message: "deleted" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(responses.shift() as Response)),
+    );
+
+    await expect(executeRunJob(job, "worker-1", store)).resolves.toMatchObject({
+      summary: { passed: 1 },
+    });
+
+    const evidence = JSON.stringify(vi.mocked(store.recordStep).mock.calls);
+    expect(evidence).toContain(assistantHash);
+    expect(evidence).toContain(argumentsHash);
+    expect(evidence).toContain(resultHash);
+    expect(evidence).not.toContain(assistantContent);
+    expect(evidence).not.toContain(JSON.stringify(argumentsValue));
+    expect(evidence).not.toContain(JSON.stringify(resultValue));
+    expect(evidence).not.toContain(password);
+    expect(evidence).not.toContain("adapter-memory-only-token-value");
+    expect(vi.mocked(store.registerResource).mock.calls[0]?.[1]).toMatchObject({
+      resourceType: "spark-x-agent-conversation",
+      systemResourceId: conversationId,
+    });
+    expect(
+      vi.mocked(store.recordStep).mock.calls.map(([, input]) => [input.action, input.phase]),
+    ).toEqual([
+      ["adapter:spark-x-agent/conversation.create", "main"],
+      ["adapter:spark-x-agent/tool.invoke-safe", "main"],
+      ["adapter:spark-x-agent/tool.assert-history", "main"],
       ["adapter:spark-x-agent/conversation.delete", "finally"],
     ]);
   });

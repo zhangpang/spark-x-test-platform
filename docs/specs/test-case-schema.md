@@ -77,8 +77,11 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/conversation.assert-recent`：重新登录并验证新会话位于最近会话列表的首个非置顶位置，输出列表位置与消息数摘要；
 - `adapter:spark-x-agent/chat.ask`：向此前已创建并登记的测试会话发送消息含 `${run.id}` 的受控真实模型请求，逐次校验重定向目标，限制 SSE 为 1 MB，只输出终态、事件计数、长度和最终回答 SHA-256；流中会话 ID 必须与登记 ID 一致；
 - `adapter:spark-x-agent/chat.assert-history`：重新登录并校验唯一用户消息、唯一助手回复、`stop` 终止原因，以及落库回答 SHA-256 与流式最终回答一致；
+- `adapter:spark-x-agent/tool.assert-safe-catalog`：校验 `builtin-demo` 三个内置只读工具在普通用户与管理员目录中一致，且用户投影不暴露连接配置；
+- `adapter:spark-x-agent/tool.invoke-safe`：只允许一次白名单内置工具调用，精确匹配工具名、参数、成功结果和最终回复，只输出计数、判定和 SHA-256；
+- `adapter:spark-x-agent/tool.assert-history`：重新登录并校验工具调用消息、工具结果、最终回复及 `public_execution_trace` 与流式哈希一致；
 - `adapter:spark-x-agent/conversation.delete`：重新登录并按资源 ID 幂等删除，用于普通 `finally` 和独立补偿任务；
-- 五个动作只接受清单声明的字符串参数，不接受 URL、host、脚本、表达式或任意扩展字段；内部 HTTP 请求及重定向仍执行环境 allowlist 校验；
+- 八个动作只接受清单声明的字符串参数，不接受 URL、host、脚本、表达式或任意扩展字段；内部 HTTP 请求及重定向仍执行环境 allowlist 校验；
 - 用户名、密码与登录 Token 不写入动作输出。补偿定义只能引用 `resource.id` 和用例声明的密钥输入，避免把临时 Token 持久化。
 
 ### 3.2 `if`
