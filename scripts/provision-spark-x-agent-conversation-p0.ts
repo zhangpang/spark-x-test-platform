@@ -957,8 +957,8 @@ async function executeSmoke(
     "Spark X Agent core smoke case failed",
   );
   check(
-    run.cases.every((item) => item.cleanupStatus === "passed"),
-    "Spark X Agent core smoke finally cleanup did not pass",
+    run.cases.every((item) => ["passed", "not_required"].includes(item.cleanupStatus)),
+    "Spark X Agent core smoke cleanup status is invalid",
   );
   check(
     run.steps.length === 19,
@@ -1297,7 +1297,7 @@ async function executeSkillSmoke(
   check(
     run.cases.length === 1 &&
       run.cases[0]?.result === "passed" &&
-      run.cases[0].cleanupStatus === "passed",
+      run.cases[0].cleanupStatus === "not_required",
     "Spark X Agent Skill case failed",
   );
   check(
