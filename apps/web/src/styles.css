@@ -2043,10 +2043,12 @@ th {
 
   .sidebar {
     position: relative;
+    width: 100%;
+    min-width: 0;
     min-height: auto;
     height: auto;
     padding: 14px 16px;
-    overflow: visible;
+    overflow: hidden;
   }
 
   .sidebar::after,
@@ -2067,6 +2069,9 @@ th {
   }
 
   .sidebar-nav {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
     margin-top: 13px;
     display: flex;
     gap: 7px;

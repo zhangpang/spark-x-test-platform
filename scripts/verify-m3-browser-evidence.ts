@@ -216,7 +216,7 @@ async function createFixture(): Promise<
         secretRef: "m3-browser-token",
       },
     ],
-    execution: { stepTimeoutMs: 15_000, caseTimeoutMs: 40_000, diagnosticRetries: 0 },
+    execution: { stepTimeoutMs: 15_000, caseTimeoutMs: 60_000, diagnosticRetries: 0 },
     resourceLocks: [],
     steps: [
       {
@@ -245,7 +245,15 @@ async function createFixture(): Promise<
         params: { selector: ".brand-lockup", text: "自动化测试平台", exact: false },
       },
     ],
-    finally: [],
+    finally: [
+      {
+        id: "reset-browser",
+        name: "重置浏览器上下文",
+        kind: "action",
+        action: "browser:navigate",
+        params: { path: "/", expectedStatus: 200, waitUntil: "domcontentloaded" },
+      },
+    ],
   };
   const testCase = await api<CaseRecord>("/test-cases", {
     method: "POST",
@@ -304,12 +312,12 @@ try {
     check(fixture.run.gateResult === "passed", "browser run gate did not pass");
     check(fixture.run.summary.passed === 1, "browser run summary was not passed");
     check(fixture.run.firstFailure === null, "browser run retained an unexpected failure");
-    check(fixture.run.steps.length === 3, "browser run did not record all three steps");
+    check(fixture.run.steps.length === 4, "browser run did not record main and finally steps");
     check(
       fixture.run.steps.every((step) => step.status === "passed"),
       "browser step failed",
     );
-    check(fixture.artifacts.length === 6, "expected screenshot and trace for each browser step");
+    check(fixture.artifacts.length === 8, "expected screenshot and trace for each browser step");
     for (const artifact of fixture.artifacts) {
       check(artifact.runId === fixture.run.id, "artifact run linkage is missing");
       check(artifact.runCaseId === fixture.run.cases[0]?.id, "artifact case linkage is missing");
@@ -351,7 +359,7 @@ try {
       (response) => response.text(),
     );
     check(
-      (events.match(/event: artifact\.created/g) ?? []).length === 6,
+      (events.match(/event: artifact\.created/g) ?? []).length === 8,
       "artifact SSE events missing",
     );
 
