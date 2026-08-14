@@ -20,6 +20,7 @@ export type RunRouteStore = Pick<
   | "listEvents"
   | "listArtifacts"
   | "getArtifactContent"
+  | "updateArtifactRetention"
 >;
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -49,6 +50,11 @@ function integer(value: unknown, name: string, min: number, max: number): number
     throw badRequest(`${name} 必须是 ${min} 到 ${max} 之间的整数。`);
   }
   return value as number;
+}
+
+function booleanValue(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") throw badRequest(`${name} 必须是布尔值。`);
+  return value;
 }
 
 function routeParams(request: FastifyRequest): Record<string, unknown> {
@@ -180,6 +186,19 @@ export function registerRunRoutes(
       reply.header("x-content-type-options", "nosniff");
       reply.type(content.artifact.contentType);
       return reply.send(content.stream);
+    } catch (error) {
+      if (error instanceof ArtifactAccessError) throw artifactAccessError(error);
+      throw error;
+    }
+  });
+
+  app.patch(`${prefix}/artifacts/:artifactId/retention`, async (request) => {
+    const input = objectValue(request.body, "请求体");
+    try {
+      return await store.updateArtifactRetention(
+        uuid(routeParams(request).artifactId, "artifactId"),
+        booleanValue(input.locked, "locked"),
+      );
     } catch (error) {
       if (error instanceof ArtifactAccessError) throw artifactAccessError(error);
       throw error;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import type { HealthResponse } from "@spark-x-test/contracts";
 
@@ -32,6 +32,7 @@ const navigation = [
 type PageId = (typeof navigation)[number]["id"];
 type Readiness = HealthResponse | { status: "loading" | "unreachable"; message?: string };
 type Notice = Readonly<{ tone: "success" | "error" | "info"; text: string }>;
+type ArtifactPreview = Readonly<{ artifact: ArtifactRecord; objectUrl: string }>;
 
 const pageDetails: Record<
   PageId,
@@ -171,6 +172,84 @@ function artifactSize(sizeBytes: number): string {
   return `${(sizeBytes / (1_024 * 1_024)).toFixed(1)} MB`;
 }
 
+function artifactRetentionLabel(artifact: ArtifactRecord): string {
+  if (artifact.locked) return "长期保留";
+  if (artifact.retainedUntil === null) return "未设置到期时间";
+  return `保留至 ${new Date(artifact.retainedUntil).toLocaleString("zh-CN")}`;
+}
+
+function downloadBlob(blob: Blob, fileName: string): void {
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName;
+  link.style.display = "none";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+}
+
+function ArtifactPreviewDialog(
+  props: Readonly<{ preview: ArtifactPreview | undefined; onClose: () => void }>,
+) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    if (props.preview !== undefined && !dialog.open) dialog.showModal();
+    if (props.preview === undefined && dialog.open) dialog.close();
+  }, [props.preview]);
+
+  return (
+    <dialog
+      aria-labelledby="artifact-preview-title"
+      className="artifact-preview-dialog"
+      onClose={props.onClose}
+      ref={dialogRef}
+    >
+      {props.preview === undefined ? null : (
+        <div className="artifact-preview-shell">
+          <header>
+            <div>
+              <span>REDACTED EVIDENCE</span>
+              <h3 id="artifact-preview-title">截图证据预览</h3>
+              <p>
+                尝试 {props.preview.artifact.attempt ?? "-"} · {artifactSize(props.preview.artifact.sizeBytes)} ·
+                {artifactRetentionLabel(props.preview.artifact)}
+              </p>
+            </div>
+            <button aria-label="关闭截图预览" onClick={props.onClose} type="button">
+              ×
+            </button>
+          </header>
+          <div className="artifact-preview-canvas">
+            <img
+              alt="已脱敏的自动化测试步骤截图"
+              src={props.preview.objectUrl}
+            />
+          </div>
+          <footer>
+            <span>
+              SHA-256
+              <code>{props.preview.artifact.sha256}</code>
+            </span>
+            <div>
+              <a download={props.preview.artifact.fileName} href={props.preview.objectUrl}>
+                下载 PNG
+              </a>
+              <button className="secondary" onClick={props.onClose} type="button">
+                关闭
+              </button>
+            </div>
+          </footer>
+        </div>
+      )}
+    </dialog>
+  );
+}
+
 function runProgress(run: TestRunRecord): number {
   if (run.summary.total === 0) return 0;
   const finished =
@@ -279,6 +358,8 @@ export function App() {
   const [selectedRunId, setSelectedRunId] = useState("");
   const [selectedRun, setSelectedRun] = useState<TestRunDetail>();
   const [artifacts, setArtifacts] = useState<readonly ArtifactRecord[]>([]);
+  const [artifactBusyId, setArtifactBusyId] = useState("");
+  const [artifactPreview, setArtifactPreview] = useState<ArtifactPreview>();
   const [validation, setValidation] = useState<ValidationResult>();
   const [comparison, setComparison] = useState<
     readonly Readonly<{ path: string; before?: unknown; after?: unknown }>[]
@@ -450,6 +531,13 @@ export function App() {
       unsubscribe();
     };
   }, [refreshRuns, selectedRunId]);
+
+  useEffect(
+    () => () => {
+      if (artifactPreview !== undefined) URL.revokeObjectURL(artifactPreview.objectUrl);
+    },
+    [artifactPreview],
+  );
 
   async function createSystem(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -714,6 +802,75 @@ export function App() {
       controlPlaneApi.cancelRun(selectedRunId),
     );
     if (cancelled !== undefined) await refreshRuns(selectedRunId);
+  }
+
+  function recordArtifactAccessFailure(artifactId: string, error: unknown): void {
+    if (!(error instanceof ApiError)) return;
+    const availability =
+      error.code === "ARTIFACT_EXPIRED"
+        ? "expired"
+        : error.code === "ARTIFACT_OBJECT_MISSING" || error.code === "ARTIFACT_NOT_FOUND"
+          ? "missing"
+          : undefined;
+    if (availability === undefined) return;
+    setArtifacts((current) =>
+      current.map((artifact) =>
+        artifact.id === artifactId ? { ...artifact, availability } : artifact,
+      ),
+    );
+    setArtifactPreview((current) =>
+      current?.artifact.id === artifactId ? undefined : current,
+    );
+  }
+
+  async function openArtifactEvidence(artifact: ArtifactRecord): Promise<void> {
+    if (artifact.availability !== "available" || artifactBusyId !== "") return;
+    setArtifactBusyId(artifact.id);
+    try {
+      const content = await controlPlaneApi.getArtifactContent(artifact.id);
+      if (artifact.kind === "screenshot") {
+        setArtifactPreview({ artifact, objectUrl: URL.createObjectURL(content) });
+      } else {
+        downloadBlob(content, artifact.fileName);
+        setNotice({ tone: "success", text: `${artifactKindLabels[artifact.kind]}已开始下载。` });
+      }
+    } catch (error) {
+      recordArtifactAccessFailure(artifact.id, error);
+      setNotice({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setArtifactBusyId("");
+    }
+  }
+
+  async function toggleArtifactRetention(artifact: ArtifactRecord): Promise<void> {
+    if (artifact.availability !== "available" || artifactBusyId !== "") return;
+    setArtifactBusyId(artifact.id);
+    try {
+      const updated = await controlPlaneApi.updateArtifactRetention(artifact.id, !artifact.locked);
+      setArtifacts((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setArtifactPreview((current) =>
+        current?.artifact.id === updated.id
+          ? updated.availability === "available"
+            ? { ...current, artifact: updated }
+            : undefined
+          : current,
+      );
+      setNotice({
+        tone: updated.locked ? "success" : "info",
+        text: updated.locked
+          ? "附件已锁定，将跳过到期清理。"
+          : updated.availability === "expired"
+            ? "保留锁已解除，附件原期限已到期。"
+            : "附件已恢复按原期限保留。",
+      });
+    } catch (error) {
+      recordArtifactAccessFailure(artifact.id, error);
+      setNotice({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setArtifactBusyId("");
+    }
   }
 
   const overviewMetrics =
@@ -1695,51 +1852,76 @@ export function App() {
                                     {stepArtifacts.map((artifact) => (
                                       <li key={artifact.id}>
                                         {artifact.availability === "available" ? (
-                                          <a
-                                            aria-label={`查看${artifactKindLabels[artifact.kind]}，${artifactSize(artifact.sizeBytes)}，已脱敏`}
-                                            href={`/api/v1/artifacts/${artifact.id}/content`}
-                                            rel="noreferrer"
-                                            target={
-                                              artifact.kind === "screenshot" ? "_blank" : undefined
-                                            }
-                                          >
-                                            <span
-                                              aria-hidden="true"
-                                              className={`artifact-kind artifact-kind-${artifact.kind}`}
+                                          <div className="artifact-card">
+                                            <button
+                                              aria-label={`${artifact.kind === "screenshot" ? "预览" : "下载"}${artifactKindLabels[artifact.kind]}，${artifactSize(artifact.sizeBytes)}，已脱敏`}
+                                              className="artifact-open"
+                                              disabled={artifactBusyId !== ""}
+                                              onClick={() => void openArtifactEvidence(artifact)}
+                                              type="button"
                                             >
-                                              {artifact.kind === "screenshot" ? "PNG" : "ZIP"}
-                                            </span>
-                                            <span>
-                                              <strong>{artifactKindLabels[artifact.kind]}</strong>
-                                              <small>
-                                                {artifactSize(artifact.sizeBytes)} · 尝试
-                                                {artifact.attempt ?? step.attempt} · 已脱敏
-                                              </small>
-                                            </span>
-                                            <b>
-                                              {artifactAvailabilityLabels[artifact.availability]}
-                                            </b>
-                                          </a>
+                                              <span
+                                                aria-hidden="true"
+                                                className={`artifact-kind artifact-kind-${artifact.kind}`}
+                                              >
+                                                {artifact.kind === "screenshot" ? "PNG" : "ZIP"}
+                                              </span>
+                                              <span>
+                                                <strong>{artifactKindLabels[artifact.kind]}</strong>
+                                                <small>
+                                                  {artifactSize(artifact.sizeBytes)} · 尝试
+                                                  {artifact.attempt ?? step.attempt} · 已脱敏
+                                                </small>
+                                              </span>
+                                              <b>
+                                                {artifactBusyId === artifact.id
+                                                  ? "处理中"
+                                                  : artifact.kind === "screenshot"
+                                                    ? "预览"
+                                                    : "下载"}
+                                              </b>
+                                            </button>
+                                            <div className="artifact-retention-row">
+                                              <small>{artifactRetentionLabel(artifact)}</small>
+                                              <button
+                                                aria-label={`${artifact.locked ? "解除" : "启用"}${artifactKindLabels[artifact.kind]}长期保留`}
+                                                aria-pressed={artifact.locked}
+                                                className={artifact.locked ? "locked" : ""}
+                                                disabled={artifactBusyId !== ""}
+                                                onClick={() => void toggleArtifactRetention(artifact)}
+                                                type="button"
+                                              >
+                                                {artifact.locked ? "解除保留" : "长期保留"}
+                                              </button>
+                                            </div>
+                                          </div>
                                         ) : (
                                           <span
                                             aria-disabled="true"
-                                            className={`artifact-unavailable artifact-${artifact.availability}`}
+                                            className={`artifact-card artifact-unavailable artifact-${artifact.availability}`}
                                           >
-                                            <span
-                                              aria-hidden="true"
-                                              className={`artifact-kind artifact-kind-${artifact.kind}`}
-                                            >
-                                              {artifact.kind === "screenshot" ? "PNG" : "ZIP"}
+                                            <span className="artifact-open">
+                                              <span
+                                                aria-hidden="true"
+                                                className={`artifact-kind artifact-kind-${artifact.kind}`}
+                                              >
+                                                {artifact.kind === "screenshot" ? "PNG" : "ZIP"}
+                                              </span>
+                                              <span>
+                                                <strong>{artifactKindLabels[artifact.kind]}</strong>
+                                                <small>
+                                                  {artifactSize(artifact.sizeBytes)} · 已脱敏
+                                                </small>
+                                              </span>
+                                              <b>
+                                                {artifactAvailabilityLabels[artifact.availability]}
+                                              </b>
                                             </span>
-                                            <span>
-                                              <strong>{artifactKindLabels[artifact.kind]}</strong>
-                                              <small>
-                                                {artifactSize(artifact.sizeBytes)} · 已脱敏
-                                              </small>
-                                            </span>
-                                            <b>
-                                              {artifactAvailabilityLabels[artifact.availability]}
-                                            </b>
+                                            <small className="artifact-unavailable-note">
+                                              {artifact.availability === "expired"
+                                                ? "保留期限已结束，不能重新锁定。"
+                                                : "附件登记仍保留，请检查对象存储。"}
+                                            </small>
                                           </span>
                                         )}
                                       </li>
@@ -1872,6 +2054,10 @@ export function App() {
           ) : null}
         </main>
       </div>
+      <ArtifactPreviewDialog
+        onClose={() => setArtifactPreview(undefined)}
+        preview={artifactPreview}
+      />
     </div>
   );
 }

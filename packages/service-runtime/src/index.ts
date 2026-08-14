@@ -684,6 +684,78 @@ export class TestRunStore {
     }
   }
 
+  async updateArtifactRetention(id: string, locked: boolean): Promise<ArtifactRecord> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin");
+      const result = await client.query<ArtifactRow>(
+        `select a.*, sr.attempt
+         from artifacts a
+         left join step_runs sr on sr.id = a.step_run_id
+         where a.id = $1
+         for update of a`,
+        [id],
+      );
+      const row = result.rows[0];
+      if (row === undefined) throw new ArtifactAccessError("ARTIFACT_NOT_FOUND", 404);
+      if (locked && artifactExpired(row)) {
+        throw new ArtifactAccessError("ARTIFACT_EXPIRED", 410);
+      }
+      if (!locked && artifactExpired(row)) {
+        await client.query("commit");
+        return mapArtifact(row, "expired");
+      }
+
+      const storage = this.#artifactStorage;
+      if (storage === undefined) {
+        throw new ArtifactAccessError("ARTIFACT_STORAGE_UNAVAILABLE", 503);
+      }
+      try {
+        await storage.client.statObject(storage.bucket, row.object_key);
+      } catch (error) {
+        if (objectMissing(error)) {
+          throw new ArtifactAccessError("ARTIFACT_OBJECT_MISSING", 410);
+        }
+        throw new ArtifactAccessError("ARTIFACT_STORAGE_UNAVAILABLE", 503);
+      }
+
+      if (row.locked === locked) {
+        await client.query("commit");
+        return mapArtifact(row, "available");
+      }
+
+      const updated = await client.query<ArtifactRow>(
+        `update artifacts
+         set locked = $2
+         where id = $1
+         returning *, $3::integer as attempt`,
+        [id, locked, row.attempt],
+      );
+      const updatedRow = updated.rows[0];
+      if (updatedRow === undefined) throw new ArtifactAccessError("ARTIFACT_NOT_FOUND", 404);
+      await client.query(
+        `insert into run_events (run_id, event_type, data)
+         values ($1, 'artifact.retention_changed', $2::jsonb)`,
+        [
+          row.run_id,
+          JSON.stringify({
+            artifactId: row.id,
+            locked,
+            retainedUntil:
+              row.retained_until === null ? null : isoTimestamp(row.retained_until),
+          }),
+        ],
+      );
+      await client.query("commit");
+      return mapArtifact(updatedRow, artifactExpired(updatedRow) ? "expired" : "available");
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async listEvents(runId: string, afterId = 0): Promise<readonly RunEvent[]> {
     const result = await this.#pool.query<RunEventRow>(
       `select * from run_events where run_id = $1 and id > $2 order by id limit 500`,

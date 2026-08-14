@@ -100,15 +100,27 @@ interface ApiErrorPayload {
 }
 
 export class ApiError extends Error {
+  readonly code: string | undefined;
   readonly status: number;
   readonly requestId: string | undefined;
 
   constructor(status: number, payload: ApiErrorPayload) {
     super(payload.message ?? `请求失败（HTTP ${status}）`);
     this.name = "ApiError";
+    this.code = payload.code;
     this.status = status;
     this.requestId = payload.requestId;
   }
+}
+
+async function responseError(response: Response): Promise<ApiError> {
+  let payload: ApiErrorPayload = {};
+  try {
+    payload = (await response.json()) as ApiErrorPayload;
+  } catch {
+    payload = {};
+  }
+  return new ApiError(response.status, payload);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -120,13 +132,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!response.ok) {
-    let payload: ApiErrorPayload = {};
-    try {
-      payload = (await response.json()) as ApiErrorPayload;
-    } catch {
-      payload = {};
-    }
-    throw new ApiError(response.status, payload);
+    throw await responseError(response);
   }
   return (await response.json()) as T;
 }
@@ -259,6 +265,19 @@ export const controlPlaneApi = {
   async listRunArtifacts(runId: string): Promise<readonly ArtifactRecord[]> {
     return (await request<Page<ArtifactRecord>>(`/runs/${runId}/artifacts`)).items;
   },
+  async getArtifactContent(artifactId: string): Promise<Blob> {
+    const response = await fetch(`/api/v1/artifacts/${artifactId}/content`, {
+      headers: { accept: "image/png, application/zip, application/octet-stream" },
+    });
+    if (!response.ok) throw await responseError(response);
+    return response.blob();
+  },
+  updateArtifactRetention(artifactId: string, locked: boolean): Promise<ArtifactRecord> {
+    return request(`/artifacts/${artifactId}/retention`, {
+      method: "PATCH",
+      body: JSON.stringify({ locked }),
+    });
+  },
   cancelRun(runId: string): Promise<TestRunRecord> {
     return request(`/runs/${runId}/cancel`, { method: "POST" });
   },
@@ -275,6 +294,7 @@ export const controlPlaneApi = {
       "case.completed",
       "step.completed",
       "artifact.created",
+      "artifact.retention_changed",
     ].forEach((name) => source.addEventListener(name, listener));
     return () => source.close();
   },

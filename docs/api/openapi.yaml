@@ -1006,6 +1006,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Artifact"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          description: Artifact expired or its object content is missing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Artifact object storage is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /runs/{runId}/events:
     parameters:
       - $ref: "#/components/parameters/RunId"

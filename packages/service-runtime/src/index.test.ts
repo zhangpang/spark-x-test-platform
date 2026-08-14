@@ -196,6 +196,144 @@ describe("artifact evidence persistence", () => {
       expect.objectContaining({ availability: "missing", attempt: 1 }),
     ]);
   });
+
+  it("locks available evidence and records the retention change atomically", async () => {
+    const row = {
+      id: "00000000-0000-4000-8000-000000000004",
+      run_id: "00000000-0000-4000-8000-000000000001",
+      run_case_id: "00000000-0000-4000-8000-000000000003",
+      step_run_id: "00000000-0000-4000-8000-000000000002",
+      attempt: 1,
+      kind: "screenshot",
+      object_key: "available.png",
+      size_bytes: 3,
+      sha256: "a".repeat(64),
+      redacted: true,
+      locked: false,
+      retained_until: new Date(Date.now() + 60_000),
+      created_at: new Date(0),
+    } as const;
+    const query = vi.fn((sql: string, _values?: readonly unknown[]) => {
+      if (sql.includes("select a.*")) return Promise.resolve({ rows: [row] });
+      if (sql.includes("update artifacts")) {
+        return Promise.resolve({ rows: [{ ...row, locked: true }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const client = { query, release: vi.fn() };
+    const pool = { connect: vi.fn(() => Promise.resolve(client)) };
+    const objects = {
+      putObject: vi.fn(),
+      removeObject: vi.fn(),
+      statObject: vi.fn(() => Promise.resolve()),
+      getObject: vi.fn(),
+    } satisfies ArtifactObjectStore;
+    const store = new TestRunStore(pool as never, undefined, {
+      client: objects,
+      bucket: "test-artifacts",
+    });
+
+    await expect(store.updateArtifactRetention(row.id, true)).resolves.toMatchObject({
+      id: row.id,
+      locked: true,
+      availability: "available",
+    });
+
+    expect(objects.statObject).toHaveBeenCalledWith("test-artifacts", "available.png");
+    expect(
+      query.mock.calls.some(
+        ([sql, values]) =>
+          String(sql).includes("artifact.retention_changed") &&
+          Array.isArray(values) &&
+          String(values[1]).includes('"locked":true'),
+      ),
+    ).toBe(true);
+    expect(query).toHaveBeenLastCalledWith("commit");
+  });
+
+  it("does not resurrect expired evidence when a retention lock is requested", async () => {
+    const row = {
+      id: "00000000-0000-4000-8000-000000000004",
+      run_id: "00000000-0000-4000-8000-000000000001",
+      run_case_id: null,
+      step_run_id: null,
+      attempt: null,
+      kind: "trace",
+      object_key: "expired.zip",
+      size_bytes: 3,
+      sha256: "a".repeat(64),
+      redacted: true,
+      locked: false,
+      retained_until: new Date(Date.now() - 60_000),
+      created_at: new Date(0),
+    } as const;
+    const query = vi.fn((sql: string) =>
+      sql.includes("select a.*")
+        ? Promise.resolve({ rows: [row] })
+        : Promise.resolve({ rows: [] }),
+    );
+    const client = { query, release: vi.fn() };
+    const objects = {
+      putObject: vi.fn(),
+      removeObject: vi.fn(),
+      statObject: vi.fn(),
+      getObject: vi.fn(),
+    } satisfies ArtifactObjectStore;
+    const store = new TestRunStore(
+      { connect: vi.fn(() => Promise.resolve(client)) } as never,
+      undefined,
+      { client: objects, bucket: "test-artifacts" },
+    );
+
+    await expect(store.updateArtifactRetention(row.id, true)).rejects.toMatchObject({
+      code: "ARTIFACT_EXPIRED",
+    });
+    expect(objects.statObject).not.toHaveBeenCalled();
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("update artifacts"))).toBe(false);
+    expect(query).toHaveBeenLastCalledWith("rollback");
+  });
+
+  it("makes a locked artifact expire immediately when its elapsed retention is unlocked", async () => {
+    const row = {
+      id: "00000000-0000-4000-8000-000000000004",
+      run_id: "00000000-0000-4000-8000-000000000001",
+      run_case_id: "00000000-0000-4000-8000-000000000003",
+      step_run_id: "00000000-0000-4000-8000-000000000002",
+      attempt: 1,
+      kind: "screenshot",
+      object_key: "locked.png",
+      size_bytes: 3,
+      sha256: "a".repeat(64),
+      redacted: true,
+      locked: true,
+      retained_until: new Date(Date.now() - 60_000),
+      created_at: new Date(0),
+    } as const;
+    const query = vi.fn((sql: string) => {
+      if (sql.includes("select a.*")) return Promise.resolve({ rows: [row] });
+      if (sql.includes("update artifacts")) {
+        return Promise.resolve({ rows: [{ ...row, locked: false }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const client = { query, release: vi.fn() };
+    const objects = {
+      putObject: vi.fn(),
+      removeObject: vi.fn(),
+      statObject: vi.fn(() => Promise.resolve()),
+      getObject: vi.fn(),
+    } satisfies ArtifactObjectStore;
+    const store = new TestRunStore(
+      { connect: vi.fn(() => Promise.resolve(client)) } as never,
+      undefined,
+      { client: objects, bucket: "test-artifacts" },
+    );
+
+    await expect(store.updateArtifactRetention(row.id, false)).resolves.toMatchObject({
+      locked: false,
+      availability: "expired",
+    });
+  });
 });
 
 describe("run idempotency locking", () => {

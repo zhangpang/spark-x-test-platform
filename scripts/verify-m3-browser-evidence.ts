@@ -36,6 +36,8 @@ interface ArtifactRecord extends RecordWithId {
   readonly sizeBytes: number;
   readonly sha256: string;
   readonly redacted: boolean;
+  readonly locked: boolean;
+  readonly retainedUntil: string | null;
   readonly availability: "available" | "expired" | "missing";
 }
 
@@ -355,12 +357,30 @@ try {
         "artifact content does not have a PNG or ZIP signature",
       );
     }
+    const retentionProbe = fixture.artifacts[0];
+    check(retentionProbe !== undefined, "retention probe artifact is missing");
+    const locked = await api<ArtifactRecord>(`/artifacts/${retentionProbe.id}/retention`, {
+      method: "PATCH",
+      body: { locked: true },
+    });
+    check(locked.status === 200, "retention lock did not return HTTP 200");
+    check(locked.body.locked, "artifact retention lock was not persisted");
+    check(locked.body.availability === "available", "locked artifact became unavailable");
+    const unlocked = await api<ArtifactRecord>(`/artifacts/${retentionProbe.id}/retention`, {
+      method: "PATCH",
+      body: { locked: false },
+    });
+    check(!unlocked.body.locked, "artifact retention lock was not released");
     const events = await fetch(`${apiBase}/runs/${fixture.run.id}/events?after=0`).then(
       (response) => response.text(),
     );
     check(
       (events.match(/event: artifact\.created/g) ?? []).length === 8,
       "artifact SSE events missing",
+    );
+    check(
+      (events.match(/event: artifact\.retention_changed/g) ?? []).length === 2,
+      "artifact retention SSE events missing",
     );
 
     if (process.env.M3_BROWSER_FAULT_PROBES !== "false") {
@@ -385,7 +405,7 @@ try {
       JSON.stringify({
         status: "passed",
         scenario: "m3-chromium-structured-evidence",
-        assertions: 16,
+        assertions: 21,
         systemId,
         runId: fixture.run.id,
         artifactCount: fixture.artifacts.length,

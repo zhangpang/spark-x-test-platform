@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Readable } from "node:stream";
 
 import type { ControlPlaneRepository, JsonObject } from "./control-plane/model.js";
@@ -253,5 +253,62 @@ describe("API service", () => {
     expect(response.headers["content-type"]).toContain("image/png");
     expect(response.headers["cache-control"]).toBe("private, no-store");
     expect(response.body).toBe("png");
+  });
+
+  it("updates an artifact retention lock through the versioned API", async () => {
+    const updateArtifactRetention = vi.fn(() =>
+      Promise.resolve({
+        id: "00000000-0000-4000-8000-000000000109",
+        runId: "00000000-0000-4000-8000-000000000101",
+        runCaseId: "00000000-0000-4000-8000-000000000104",
+        stepRunId: "00000000-0000-4000-8000-000000000110",
+        attempt: 1,
+        kind: "screenshot" as const,
+        fileName: "screenshot-00000000-0000-4000-8000-000000000109.png",
+        contentType: "image/png",
+        sizeBytes: 3,
+        sha256: "a".repeat(64),
+        redacted: true,
+        locked: true,
+        retainedUntil: new Date(Date.now() + 60_000).toISOString(),
+        availability: "available" as const,
+        createdAt: new Date(0).toISOString(),
+      }),
+    );
+    const application = buildApiApplication(environment, {
+      runStore: { updateArtifactRetention } as unknown as RunRouteStore,
+    });
+    applications.push(application);
+
+    const response = await application.app.inject({
+      method: "PATCH",
+      url: "/api/v1/artifacts/00000000-0000-4000-8000-000000000109/retention",
+      payload: { locked: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ locked: true, availability: "available" });
+    expect(updateArtifactRetention).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000109",
+      true,
+    );
+  });
+
+  it("rejects an ambiguous artifact retention value before persistence", async () => {
+    const updateArtifactRetention = vi.fn();
+    const application = buildApiApplication(environment, {
+      runStore: { updateArtifactRetention } as unknown as RunRouteStore,
+    });
+    applications.push(application);
+
+    const response = await application.app.inject({
+      method: "PATCH",
+      url: "/api/v1/artifacts/00000000-0000-4000-8000-000000000109/retention",
+      payload: { locked: "true" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(updateArtifactRetention).not.toHaveBeenCalled();
   });
 });
