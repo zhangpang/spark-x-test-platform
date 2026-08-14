@@ -187,11 +187,12 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.6.1` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
+当前 `0.7.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
 `chat.assert-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.cleanup` 和
-`skill.assert-trusted-publication`。动作只调用适配器内
+`skill.assert-trusted-publication`，以及 `automation.create`、`automation.wait-fired` 和
+`automation.cleanup`。动作只调用适配器内
 固定的 `/trade/api` 与 `/trade-domain-api` 路径，所有请求与
 重定向执行环境 allowlist 校验；登录 Token、用户密码和模型回答正文都不进入输出、日志、资源台账或
 结构化证据。`chat.ask` 只向此前已创建并登记的测试会话发送消息，将 SSE 限制在 1 MB 内，要求流中会话
@@ -226,3 +227,11 @@ Worker 内存中按被测系统 frontmatter 解析后的 `trim()` 语义计算 S
 不一致归为 `product_failed`，精确发布哈希不匹配保留为 `test_failed`。当前被测系统的删除接口尚不能完整撤销
 不可变发布目录、授权和对象存储内容，因此适配器不会创建临时 Skill；实际注入用例将在依赖工具上线且被测系统
 具备完整回收语义后单独实现，避免产生无法补偿的残留资源。
+
+AUTOMATION 动作固定创建 `selected_skill_id=null`、300 秒周期且首次执行时间为当前时刻的无工具任务，不接受
+任意 Skill、周期或执行脚本参数。等待动作把所有者任务定义中的 `state_version`、`last_fire_at`、`next_fire_at`
+与绑定会话历史关联，要求计划只推进一个周期、恰好一条用户目标和一条 `stop` 助手回复，并拒绝任何工具消息、
+工具调用或工具公开轨迹。目标与回复原文只在 Worker 内存中比较，证据仅登记计数、状态、时间和 SHA-256。目标
+系统调度会递增乐观状态版本，因此清理先读取最新定义再按该版本软删除；只在 HTTP 409 时执行最多两次有界
+版本协调，普通业务失败不会重试。任务资源后于会话登记，普通 `finally` 和独立补偿都先删除任务再删除会话；
+HTTP 404 视为已经完成幂等清理。

@@ -25,6 +25,9 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/knowledge-base.wait-ready",
   "adapter:spark-x-agent/knowledge-base.cleanup",
   "adapter:spark-x-agent/skill.assert-trusted-publication",
+  "adapter:spark-x-agent/automation.create",
+  "adapter:spark-x-agent/automation.wait-fired",
+  "adapter:spark-x-agent/automation.cleanup",
 ] as const;
 
 export type SparkXAgentAction = (typeof sparkXAgentActions)[number];
@@ -624,6 +627,166 @@ const conversationActionCapabilities = [
     },
   },
   {
+    key: "automation.create",
+    name: "创建立即触发的自动任务",
+    description: "为已登记测试会话创建固定五分钟周期、无 Skill 的立即触发任务并登记清理资源。",
+    actionLevel: "write",
+    defaultTimeoutMs: 20_000,
+    producesResource: true,
+    cleanupAction: "automation.cleanup",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "conversationId", "name", "goal"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        name: { type: "string", minLength: 1, maxLength: 160 },
+        goal: { type: "string", minLength: 1, maxLength: 65_536 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "automationId",
+        "conversationId",
+        "created",
+        "enabled",
+        "stateVersion",
+        "intervalSeconds",
+        "selectedSkillAbsent",
+        "nextFireAt",
+        "nameSha256",
+        "goalSha256",
+      ],
+      properties: {
+        automationId: { type: "string", format: "uuid" },
+        conversationId: { type: "string", format: "uuid" },
+        created: { const: true },
+        enabled: { const: true },
+        stateVersion: { type: "integer", minimum: 1 },
+        intervalSeconds: { const: 300 },
+        selectedSkillAbsent: { const: true },
+        nextFireAt: { type: "string", format: "date-time" },
+        nameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        goalSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
+    key: "automation.wait-fired",
+    name: "等待自动任务单次执行",
+    description: "有界轮询任务调度与会话历史，验证定义未漂移、仅触发一次且无工具或 Skill 执行。",
+    actionLevel: "write",
+    defaultTimeoutMs: 180_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "automationId",
+        "conversationId",
+        "expectedName",
+        "expectedGoal",
+        "expectedAssistantText",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        automationId: { type: "string", format: "uuid" },
+        conversationId: { type: "string", format: "uuid" },
+        expectedName: { type: "string", minLength: 1, maxLength: 160 },
+        expectedGoal: { type: "string", minLength: 1, maxLength: 65_536 },
+        expectedAssistantText: { type: "string", minLength: 1, maxLength: 5_000 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "automationId",
+        "conversationId",
+        "fired",
+        "singleFireObserved",
+        "enabled",
+        "stateVersion",
+        "lastFireAt",
+        "nextFireAt",
+        "scheduleAdvancedBySeconds",
+        "userMessageCount",
+        "assistantMessageCount",
+        "toolMessageCount",
+        "toolCallCount",
+        "toolTraceEventCount",
+        "selectedSkillAbsent",
+        "expectedAssistantTextMatched",
+        "userContentSha256",
+        "assistantContentSha256",
+        "assistantContentLength",
+        "assistantFinishReason",
+        "pollAttempts",
+      ],
+      properties: {
+        automationId: { type: "string", format: "uuid" },
+        conversationId: { type: "string", format: "uuid" },
+        fired: { const: true },
+        singleFireObserved: { const: true },
+        enabled: { const: true },
+        stateVersion: { type: "integer", minimum: 2 },
+        lastFireAt: { type: "string", format: "date-time" },
+        nextFireAt: { type: "string", format: "date-time" },
+        scheduleAdvancedBySeconds: { const: 300 },
+        userMessageCount: { const: 1 },
+        assistantMessageCount: { const: 1 },
+        toolMessageCount: { const: 0 },
+        toolCallCount: { const: 0 },
+        toolTraceEventCount: { const: 0 },
+        selectedSkillAbsent: { const: true },
+        expectedAssistantTextMatched: { const: true },
+        userContentSha256: { type: "string", minLength: 64, maxLength: 64 },
+        assistantContentSha256: { type: "string", minLength: 64, maxLength: 64 },
+        assistantContentLength: { type: "integer", minimum: 1 },
+        assistantFinishReason: { const: "stop" },
+        pollAttempts: { type: "integer", minimum: 1, maximum: 120 },
+      },
+    },
+  },
+  {
+    key: "automation.cleanup",
+    name: "清理自动任务",
+    description: "重新读取最新状态版本并幂等软删除自动任务，供 finally 与独立补偿任务使用。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 30_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "automationId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        automationId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["automationId", "cleaned", "deleted", "conflictCount"],
+      properties: {
+        automationId: { type: "string", format: "uuid" },
+        cleaned: { const: true },
+        deleted: { type: "boolean" },
+        conflictCount: { type: "integer", minimum: 0, maximum: 2 },
+        alreadyMissing: { type: "boolean" },
+        deletedStateVersion: { type: "integer", minimum: 2 },
+      },
+    },
+  },
+  {
     key: "skill.assert-trusted-publication",
     name: "校验受信任 Skill 发布",
     description: "只读核对发布系统预置 Skill 的用户/管理员投影、有效能力、主资产和精确内容哈希。",
@@ -713,7 +876,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.6.1",
+  version: "0.7.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -730,7 +893,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "core-smoke-skill-publication" as const;
+export const sparkXAgentAdapterPhase = "core-smoke-automation" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -961,6 +1124,195 @@ function acceptedSkillRuntime(response: HttpExecutionResult, code: string): void
     throw environmentFailure(code, `星火 Agent Skill 运行时返回 HTTP ${response.status}。`);
   }
   accepted(response, code);
+}
+
+function acceptedAutomationRuntime(response: HttpExecutionResult, code: string): void {
+  if (response.status >= 500) {
+    throw environmentFailure(code, `星火 Agent 自动任务运行时返回 HTTP ${response.status}。`);
+  }
+  accepted(response, code);
+}
+
+interface AutomationDefinitionProjection {
+  readonly automationId: string;
+  readonly conversationId: string;
+  readonly name: string;
+  readonly goal: string;
+  readonly intervalSeconds: number;
+  readonly status: string;
+  readonly stateVersion: number;
+  readonly nextFireAt: string;
+  readonly lastFireAt: string | null;
+  readonly selectedSkillId: string | null;
+}
+
+function validTimestamp(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 100 && Number.isFinite(Date.parse(value));
+}
+
+function automationDefinitionProjection(
+  value: unknown,
+  code: string,
+): AutomationDefinitionProjection {
+  const definition = objectValue(value);
+  if (
+    definition === null ||
+    typeof definition.definition_id !== "string" ||
+    !uuidPattern.test(definition.definition_id) ||
+    typeof definition.conversation_id !== "string" ||
+    !uuidPattern.test(definition.conversation_id) ||
+    typeof definition.name !== "string" ||
+    definition.name.length === 0 ||
+    definition.name.length > 160 ||
+    typeof definition.goal !== "string" ||
+    definition.goal.length === 0 ||
+    definition.goal.length > 65_536 ||
+    !Number.isInteger(definition.interval_seconds) ||
+    typeof definition.status !== "string" ||
+    !Number.isInteger(definition.state_version) ||
+    Number(definition.state_version) < 1 ||
+    !validTimestamp(definition.next_fire_at) ||
+    (definition.last_fire_at !== null && !validTimestamp(definition.last_fire_at)) ||
+    (definition.selected_skill_id !== null && typeof definition.selected_skill_id !== "string")
+  ) {
+    throw apiFailure(code, "星火 Agent 自动任务定义响应缺少受限公开字段。");
+  }
+  return {
+    automationId: definition.definition_id,
+    conversationId: definition.conversation_id,
+    name: definition.name,
+    goal: definition.goal,
+    intervalSeconds: Number(definition.interval_seconds),
+    status: definition.status,
+    stateVersion: Number(definition.state_version),
+    nextFireAt: definition.next_fire_at,
+    lastFireAt: typeof definition.last_fire_at === "string" ? definition.last_fire_at : null,
+    selectedSkillId:
+      typeof definition.selected_skill_id === "string" ? definition.selected_skill_id : null,
+  };
+}
+
+function listedAutomation(
+  response: HttpExecutionResult,
+  automationId: string,
+  code: string,
+): AutomationDefinitionProjection | null {
+  acceptedAutomationRuntime(response, code);
+  const body = objectValue(response.body);
+  if (body === null || !Array.isArray(body.items) || body.items.length > 100) {
+    throw apiFailure(code, "星火 Agent 自动任务列表响应不完整或超过安全边界。");
+  }
+  const matches = body.items
+    .map((item) => objectValue(item))
+    .filter((item) => item?.definition_id === automationId);
+  if (matches.length > 1) {
+    throw apiFailure(code, "星火 Agent 自动任务列表返回了重复定义标识。");
+  }
+  return matches[0] === undefined ? null : automationDefinitionProjection(matches[0], code);
+}
+
+interface AutomationHistoryEvidence {
+  readonly userMessageCount: 1;
+  readonly assistantMessageCount: 1;
+  readonly toolMessageCount: 0;
+  readonly toolCallCount: 0;
+  readonly toolTraceEventCount: 0;
+  readonly userContentSha256: string;
+  readonly assistantContentSha256: string;
+  readonly assistantContentLength: number;
+}
+
+function automationHistoryEvidence(
+  body: unknown,
+  expectedGoal: string,
+  expectedAssistantText: string,
+): AutomationHistoryEvidence | null {
+  const data = dataEnvelope(body, "SPARK_X_AGENT_AUTOMATION_HISTORY_RESPONSE_INVALID");
+  if (!Array.isArray(data.items) || data.items.length > 100) {
+    throw apiFailure(
+      "SPARK_X_AGENT_AUTOMATION_HISTORY_RESPONSE_INVALID",
+      "自动任务目标会话历史不完整或超过安全边界。",
+    );
+  }
+  const items = data.items.map((item) => objectValue(item));
+  if (items.some((item) => item === null)) {
+    throw apiFailure(
+      "SPARK_X_AGENT_AUTOMATION_HISTORY_RESPONSE_INVALID",
+      "自动任务目标会话历史包含无效消息。",
+    );
+  }
+  const messages = items as readonly Readonly<Record<string, unknown>>[];
+  if (messages.some((item) => item.payload_truncated === true)) {
+    throw apiFailure(
+      "SPARK_X_AGENT_AUTOMATION_HISTORY_TRUNCATED",
+      "自动任务目标会话历史包含已截断的公开消息。",
+    );
+  }
+  const userMessages = messages.filter((item) => item.role === "user");
+  const assistantMessages = messages.filter((item) => item.role === "assistant");
+  const toolMessages = messages.filter((item) => item.role === "tool");
+  const toolCallCount = assistantMessages.reduce(
+    (count, item) => count + (Array.isArray(item.tool_calls) ? item.tool_calls.length : 0),
+    0,
+  );
+  const toolTraceEventCount = messages.reduce((count, item) => {
+    if (!Array.isArray(item.public_execution_trace)) return count;
+    return (
+      count +
+      item.public_execution_trace.filter((event) => {
+        const trace = objectValue(event);
+        return trace?.kind === "tool_call" || trace?.kind === "tool_result";
+      }).length
+    );
+  }, 0);
+  if (
+    userMessages.length > 1 ||
+    assistantMessages.length > 1 ||
+    toolMessages.length > 0 ||
+    toolCallCount > 0 ||
+    toolTraceEventCount > 0
+  ) {
+    throw apiFailure(
+      "SPARK_X_AGENT_AUTOMATION_SINGLE_FIRE_FAILED",
+      "立即触发自动任务产生了重复消息或不允许的工具执行。",
+    );
+  }
+  const user = userMessages[0];
+  const assistant = assistantMessages[0];
+  if (user === undefined || assistant === undefined) return null;
+  if (user.content !== expectedGoal) {
+    throw apiFailure(
+      "SPARK_X_AGENT_AUTOMATION_GOAL_MISMATCH",
+      "自动任务持久化的用户目标与已创建定义不一致。",
+    );
+  }
+  if (assistant.finish_reason === null || assistant.finish_reason === undefined) return null;
+  if (assistant.finish_reason !== "stop") {
+    throw assertionFailure(
+      "SPARK_X_AGENT_AUTOMATION_FINISH_REASON_FAILED",
+      "自动任务助手回复没有以 stop 正常结束。",
+    );
+  }
+  if (
+    typeof assistant.content !== "string" ||
+    assistant.content.length === 0 ||
+    !assistant.content.includes(expectedAssistantText)
+  ) {
+    throw assertionFailure(
+      "SPARK_X_AGENT_AUTOMATION_ASSISTANT_ASSERTION_FAILED",
+      "自动任务助手回复未包含预期运行标识。",
+    );
+  }
+  return {
+    userMessageCount: 1,
+    assistantMessageCount: 1,
+    toolMessageCount: 0,
+    toolCallCount: 0,
+    toolTraceEventCount: 0,
+    userContentSha256: sha256(expectedGoal),
+    assistantContentSha256: sha256(assistant.content),
+    assistantContentLength: assistant.content.length,
+  };
 }
 
 function actionPath(suffix: string): string {
@@ -1734,6 +2086,252 @@ export async function executeSparkXAgentAction(
   const username = requiredString(params, "username", variables, 200);
   const password = requiredString(params, "password", variables, 4_096);
   const token = await login(environment, username, password, remainingOptions());
+
+  if (action === "adapter:spark-x-agent/automation.create") {
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const name = requiredString(params, "name", variables, 160);
+    const goal = requiredString(params, "goal", variables, 65_536);
+    if (
+      name.trim() !== name ||
+      goal.includes("\u0000") ||
+      goal.includes("\r") ||
+      new TextEncoder().encode(goal).byteLength > 65_536
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "自动任务名称或目标违反受控文本边界。",
+      );
+    }
+    const firstFireAt = new Date().toISOString();
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath("/v5/automations"),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          conversation_id: conversationId,
+          name,
+          goal,
+          selected_skill_id: null,
+          interval_seconds: 300,
+          first_fire_at: firstFireAt,
+        },
+      },
+      remainingOptions(),
+    );
+    acceptedAutomationRuntime(response, "SPARK_X_AGENT_AUTOMATION_CREATE_FAILED");
+    const receipt = objectValue(response.body);
+    if (
+      receipt === null ||
+      typeof receipt.definition_id !== "string" ||
+      !uuidPattern.test(receipt.definition_id) ||
+      !Number.isInteger(receipt.state_version) ||
+      Number(receipt.state_version) < 1 ||
+      receipt.status !== "enabled" ||
+      !validTimestamp(receipt.next_fire_at) ||
+      Math.abs(Date.parse(receipt.next_fire_at) - Date.parse(firstFireAt)) > 1_000
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_AUTOMATION_CREATE_RESPONSE_INVALID",
+        "星火 Agent 自动任务创建响应与立即触发请求不一致。",
+      );
+    }
+    return {
+      automationId: receipt.definition_id,
+      conversationId,
+      created: true,
+      enabled: true,
+      stateVersion: Number(receipt.state_version),
+      intervalSeconds: 300,
+      selectedSkillAbsent: true,
+      nextFireAt: receipt.next_fire_at,
+      nameSha256: sha256(name),
+      goalSha256: sha256(goal),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/automation.wait-fired") {
+    const automationId = requiredUuid(params, "automationId", variables);
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const expectedName = requiredString(params, "expectedName", variables, 160);
+    const expectedGoal = requiredString(params, "expectedGoal", variables, 65_536);
+    const expectedAssistantText = requiredString(params, "expectedAssistantText", variables, 5_000);
+    for (let attempt = 1; attempt <= 120; attempt += 1) {
+      const listResponse = await authenticatedRequest(
+        environment,
+        token,
+        { method: "GET", path: actionPath("/v5/automations?limit=100") },
+        remainingOptions(),
+      );
+      const definition = listedAutomation(
+        listResponse,
+        automationId,
+        "SPARK_X_AGENT_AUTOMATION_LIST_FAILED",
+      );
+      if (definition === null) {
+        throw apiFailure(
+          "SPARK_X_AGENT_AUTOMATION_MISSING",
+          "本次运行创建的自动任务未出现在所有者任务列表。",
+        );
+      }
+      if (
+        definition.conversationId !== conversationId ||
+        definition.name !== expectedName ||
+        definition.goal !== expectedGoal ||
+        definition.intervalSeconds !== 300 ||
+        definition.selectedSkillId !== null
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_AUTOMATION_DEFINITION_MISMATCH",
+          "自动任务定义、会话绑定、固定周期或无 Skill 约束发生漂移。",
+        );
+      }
+      if (definition.status === "suspended") {
+        throw environmentFailure(
+          "SPARK_X_AGENT_AUTOMATION_SUSPENDED",
+          "自动任务在调度前置检查中被暂停。",
+        );
+      }
+      if (definition.status !== "enabled") {
+        throw apiFailure(
+          "SPARK_X_AGENT_AUTOMATION_STATUS_INVALID",
+          "自动任务在单次执行完成前进入了非启用状态。",
+        );
+      }
+      if (definition.lastFireAt !== null) {
+        const scheduleAdvancedBySeconds =
+          (Date.parse(definition.nextFireAt) - Date.parse(definition.lastFireAt)) / 1_000;
+        if (scheduleAdvancedBySeconds !== 300 || definition.stateVersion < 2) {
+          throw apiFailure(
+            "SPARK_X_AGENT_AUTOMATION_SCHEDULE_INVALID",
+            "自动任务触发后没有按固定周期推进唯一下一次计划。",
+          );
+        }
+        const historyResponse = await authenticatedRequest(
+          environment,
+          token,
+          {
+            method: "GET",
+            path: actionPath(
+              `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+            ),
+          },
+          remainingOptions(),
+        );
+        acceptedAutomationRuntime(historyResponse, "SPARK_X_AGENT_AUTOMATION_HISTORY_FAILED");
+        const history = automationHistoryEvidence(
+          historyResponse.body,
+          expectedGoal,
+          expectedAssistantText,
+        );
+        if (history !== null) {
+          return {
+            automationId,
+            conversationId,
+            fired: true,
+            singleFireObserved: true,
+            enabled: true,
+            stateVersion: definition.stateVersion,
+            lastFireAt: definition.lastFireAt,
+            nextFireAt: definition.nextFireAt,
+            scheduleAdvancedBySeconds,
+            ...history,
+            selectedSkillAbsent: true,
+            expectedAssistantTextMatched: true,
+            assistantFinishReason: "stop",
+            pollAttempts: attempt,
+          };
+        }
+      }
+      await boundedDelay(1_000, remainingOptions().signal);
+    }
+    throw environmentFailure(
+      "SPARK_X_AGENT_AUTOMATION_EXECUTION_TIMEOUT",
+      "自动任务调度或模型回复未在有界时间内完成。",
+    );
+  }
+
+  if (action === "adapter:spark-x-agent/automation.cleanup") {
+    const automationId = requiredUuid(params, "automationId", variables);
+    let conflictCount = 0;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const listResponse = await authenticatedRequest(
+        environment,
+        token,
+        { method: "GET", path: actionPath("/v5/automations?limit=100") },
+        remainingOptions(),
+      );
+      const definition = listedAutomation(
+        listResponse,
+        automationId,
+        "SPARK_X_AGENT_AUTOMATION_CLEANUP_LIST_FAILED",
+      );
+      if (definition === null) {
+        return {
+          automationId,
+          cleaned: true,
+          deleted: false,
+          conflictCount,
+          alreadyMissing: true,
+        };
+      }
+      const response = await authenticatedRequest(
+        environment,
+        token,
+        {
+          method: "DELETE",
+          path: actionPath(`/v5/automations/${encodeURIComponent(automationId)}`),
+          headers: { "Content-Type": "application/json" },
+          body: { expected_version: definition.stateVersion },
+        },
+        remainingOptions(),
+      );
+      if (response.status === 404) {
+        return {
+          automationId,
+          cleaned: true,
+          deleted: false,
+          conflictCount,
+          alreadyMissing: true,
+        };
+      }
+      if (response.status === 409) {
+        conflictCount += 1;
+        if (attempt < 2) {
+          await boundedDelay(50, remainingOptions().signal);
+          continue;
+        }
+        break;
+      }
+      acceptedAutomationRuntime(response, "SPARK_X_AGENT_AUTOMATION_CLEANUP_FAILED");
+      const receipt = objectValue(response.body);
+      if (
+        receipt === null ||
+        receipt.definition_id !== automationId ||
+        receipt.status !== "disabled" ||
+        receipt.next_fire_at !== null ||
+        receipt.state_version !== definition.stateVersion + 1
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_AUTOMATION_CLEANUP_RESPONSE_INVALID",
+          "自动任务删除回执与最新状态版本不一致。",
+        );
+      }
+      return {
+        automationId,
+        cleaned: true,
+        deleted: true,
+        conflictCount,
+        deletedStateVersion: receipt.state_version,
+      };
+    }
+    throw environmentFailure(
+      "SPARK_X_AGENT_AUTOMATION_CLEANUP_CONFLICT",
+      "自动任务状态持续并发变化，无法在有界版本协调内完成清理。",
+    );
+  }
 
   if (action === "adapter:spark-x-agent/skill.assert-trusted-publication") {
     const expectedPublicationSha256 = requiredSha256(

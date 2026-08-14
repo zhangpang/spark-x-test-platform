@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -652,6 +652,166 @@
             "rawDocumentDeleted": { "type": "boolean" },
             "knowledgeBaseArchived": { "type": "boolean" },
             "alreadyMissing": { "type": "boolean" }
+          }
+        }
+      },
+      {
+        "key": "automation.create",
+        "name": "创建立即触发的自动任务",
+        "description": "为已登记测试会话创建固定五分钟周期、无 Skill 的立即触发任务并登记清理资源。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 20000,
+        "producesResource": true,
+        "cleanupAction": "automation.cleanup",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "conversationId", "name", "goal"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "goal": { "type": "string", "minLength": 1, "maxLength": 65536 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "automationId",
+            "conversationId",
+            "created",
+            "enabled",
+            "stateVersion",
+            "intervalSeconds",
+            "selectedSkillAbsent",
+            "nextFireAt",
+            "nameSha256",
+            "goalSha256"
+          ],
+          "properties": {
+            "automationId": { "type": "string", "format": "uuid" },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "created": { "const": true },
+            "enabled": { "const": true },
+            "stateVersion": { "type": "integer", "minimum": 1 },
+            "intervalSeconds": { "const": 300 },
+            "selectedSkillAbsent": { "const": true },
+            "nextFireAt": { "type": "string", "format": "date-time" },
+            "nameSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "goalSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+          }
+        }
+      },
+      {
+        "key": "automation.wait-fired",
+        "name": "等待自动任务单次执行",
+        "description": "有界轮询任务调度与会话历史，验证定义未漂移、仅触发一次且无工具或 Skill 执行。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 180000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "automationId",
+            "conversationId",
+            "expectedName",
+            "expectedGoal",
+            "expectedAssistantText"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "automationId": { "type": "string", "format": "uuid" },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "expectedName": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "expectedGoal": { "type": "string", "minLength": 1, "maxLength": 65536 },
+            "expectedAssistantText": { "type": "string", "minLength": 1, "maxLength": 5000 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "automationId",
+            "conversationId",
+            "fired",
+            "singleFireObserved",
+            "enabled",
+            "stateVersion",
+            "lastFireAt",
+            "nextFireAt",
+            "scheduleAdvancedBySeconds",
+            "userMessageCount",
+            "assistantMessageCount",
+            "toolMessageCount",
+            "toolCallCount",
+            "toolTraceEventCount",
+            "selectedSkillAbsent",
+            "expectedAssistantTextMatched",
+            "userContentSha256",
+            "assistantContentSha256",
+            "assistantContentLength",
+            "assistantFinishReason",
+            "pollAttempts"
+          ],
+          "properties": {
+            "automationId": { "type": "string", "format": "uuid" },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "fired": { "const": true },
+            "singleFireObserved": { "const": true },
+            "enabled": { "const": true },
+            "stateVersion": { "type": "integer", "minimum": 2 },
+            "lastFireAt": { "type": "string", "format": "date-time" },
+            "nextFireAt": { "type": "string", "format": "date-time" },
+            "scheduleAdvancedBySeconds": { "const": 300 },
+            "userMessageCount": { "const": 1 },
+            "assistantMessageCount": { "const": 1 },
+            "toolMessageCount": { "const": 0 },
+            "toolCallCount": { "const": 0 },
+            "toolTraceEventCount": { "const": 0 },
+            "selectedSkillAbsent": { "const": true },
+            "expectedAssistantTextMatched": { "const": true },
+            "userContentSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "assistantContentSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "assistantContentLength": { "type": "integer", "minimum": 1 },
+            "assistantFinishReason": { "const": "stop" },
+            "pollAttempts": { "type": "integer", "minimum": 1, "maximum": 120 }
+          }
+        }
+      },
+      {
+        "key": "automation.cleanup",
+        "name": "清理自动任务",
+        "description": "重新读取最新状态版本并幂等软删除自动任务，供 finally 与独立补偿任务使用。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 30000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "automationId"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "automationId": { "type": "string", "format": "uuid" }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["automationId", "cleaned", "deleted", "conflictCount"],
+          "properties": {
+            "automationId": { "type": "string", "format": "uuid" },
+            "cleaned": { "const": true },
+            "deleted": { "type": "boolean" },
+            "conflictCount": { "type": "integer", "minimum": 0, "maximum": 2 },
+            "alreadyMissing": { "type": "boolean" },
+            "deletedStateVersion": { "type": "integer", "minimum": 2 }
           }
         }
       },

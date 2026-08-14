@@ -64,6 +64,7 @@ const apiBase = process.env.SPARK_X_TEST_PLATFORM_API_URL ?? "http://127.0.0.1:4
 const runSmoke = process.env.SPARK_X_AGENT_RUN_SMOKE === "true";
 const runKnowledgeSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_SMOKE === "true";
 const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
+const runAutomationSmoke = process.env.SPARK_X_AGENT_RUN_AUTOMATION_SMOKE === "true";
 const useExistingSecrets = process.env.SPARK_X_AGENT_USE_EXISTING_SECRETS === "true";
 const testedVersion = process.env.SPARK_X_AGENT_TESTED_VERSION?.trim() || "test-environment";
 const adminUsername = process.env.SPARK_X_AGENT_ADMIN_USERNAME?.trim() || "admin";
@@ -818,6 +819,146 @@ function skillPublicationDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function automationDefinition(): Readonly<Record<string, unknown>> {
+  const name = "spark-x-auto-${run.id}";
+  const goal =
+    "自动任务回归标识 spark-x-auto-${run.id}。请只回复这个标识，不要调用任何工具或 Skill。";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "AUTO-001 新建任务、立即触发、单次结果与完整清理",
+      description:
+        "创建带 run_id 的无 Skill 自动任务，验证定义持久化、调度只触发一次、结果关联正确，并先删除任务再删除会话。",
+      systemKey: "spark-x-agent",
+      moduleKey: "automations",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "automation", "p0", "core-smoke", "real-model", "no-tool"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 180_000,
+      caseTimeoutMs: 300_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:automations"],
+    steps: [
+      {
+        id: "create-automation-conversation",
+        name: "创建并登记自动任务目标会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: name,
+        },
+        capture: { "conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "create-immediate-automation",
+        name: "创建并登记立即触发的无 Skill 自动任务",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.conversation-id}",
+          name,
+          goal,
+        },
+        capture: { "automation-id": "$.automationId" },
+        resource: {
+          type: "spark-x-agent-automation",
+          id: "${step.automation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/automation.cleanup",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              automationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "wait-single-automation-fire",
+        name: "校验单次调度、完整回复和无工具证据",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.wait-fired",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          automationId: "${step.automation-id}",
+          conversationId: "${step.conversation-id}",
+          expectedName: name,
+          expectedGoal: goal,
+          expectedAssistantText: "spark-x-auto-${run.id}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "cleanup-automation",
+        name: "按最新状态版本删除自动任务",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.cleanup",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          automationId: "${step.automation-id}",
+        },
+      },
+      {
+        id: "delete-automation-conversation",
+        name: "删除自动任务目标会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
 async function ensureCase(
   systemId: string,
   moduleId: string,
@@ -949,9 +1090,9 @@ async function executeSmoke(
   check(accepted.status === 202, "Spark X Agent core smoke run was not newly accepted");
   const run = await waitForRun(accepted.body.id);
   check(run.gateResult === "passed", `Spark X Agent core smoke gate is ${String(run.gateResult)}`);
-  check(run.summary.passed === 6, "Spark X Agent core smoke cases did not all pass");
+  check(run.summary.passed === 7, "Spark X Agent core smoke cases did not all pass");
   check(run.firstFailure === null, "Spark X Agent core smoke retained an unexpected first failure");
-  check(run.cases.length === 6, "Spark X Agent core smoke run case linkage is incomplete");
+  check(run.cases.length === 7, "Spark X Agent core smoke run case linkage is incomplete");
   check(
     run.cases.every((item) => item.result === "passed"),
     "Spark X Agent core smoke case failed",
@@ -961,8 +1102,8 @@ async function executeSmoke(
     "Spark X Agent core smoke cleanup status is invalid",
   );
   check(
-    run.steps.length === 19,
-    "Spark X Agent core smoke did not record fifteen main steps and four finally steps",
+    run.steps.length === 24,
+    "Spark X Agent core smoke did not record eighteen main steps and six finally steps",
   );
   check(
     run.steps.every((step) => step.status === "passed"),
@@ -990,14 +1131,21 @@ async function executeSmoke(
         "main:adapter:spark-x-agent/knowledge-base.wait-ready",
         "finally:adapter:spark-x-agent/knowledge-base.cleanup",
         "main:adapter:spark-x-agent/skill.assert-trusted-publication",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/automation.create",
+        "main:adapter:spark-x-agent/automation.wait-fired",
+        "finally:adapter:spark-x-agent/automation.cleanup",
+        "finally:adapter:spark-x-agent/conversation.delete",
       ].join(","),
     "Spark X Agent core smoke structured step sequence is incorrect",
   );
-  check(run.resources.length === 4, "Spark X Agent core smoke resource ledger linkage is missing");
+  check(run.resources.length === 6, "Spark X Agent core smoke resource ledger linkage is missing");
   check(
     run.resources.filter((resource) => resource.resourceType === "spark-x-agent-conversation")
-      .length === 3 &&
+      .length === 4 &&
       run.resources.filter((resource) => resource.resourceType === "spark-x-agent-knowledge-base")
+        .length === 1 &&
+      run.resources.filter((resource) => resource.resourceType === "spark-x-agent-automation")
         .length === 1,
     "Spark X Agent core smoke resource type is incorrect",
   );
@@ -1082,6 +1230,7 @@ async function executeSmoke(
   );
   assertKnowledgeEvidence(run);
   assertSkillEvidence(run);
+  assertAutomationEvidence(run);
   const evidence = JSON.stringify(run);
   if (password !== undefined) {
     check(
@@ -1319,6 +1468,125 @@ async function executeSkillSmoke(
   return run;
 }
 
+function assertAutomationEvidence(run: RunDetail): void {
+  const create = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/automation.create",
+  );
+  const fired = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/automation.wait-fired",
+  );
+  const cleanup = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/automation.cleanup",
+  );
+  check(
+    create?.outputSummary?.created === true &&
+      create.outputSummary.enabled === true &&
+      create.outputSummary.intervalSeconds === 300 &&
+      create.outputSummary.selectedSkillAbsent === true &&
+      typeof create.outputSummary.automationId === "string" &&
+      typeof create.outputSummary.goalSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(create.outputSummary.goalSha256) &&
+      typeof create.outputSummary.nameSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(create.outputSummary.nameSha256),
+    "AUTO-001 immediate automation creation evidence is incomplete",
+  );
+  check(
+    fired?.outputSummary?.automationId === create.outputSummary.automationId &&
+      fired.outputSummary.fired === true &&
+      fired.outputSummary.singleFireObserved === true &&
+      fired.outputSummary.enabled === true &&
+      fired.outputSummary.scheduleAdvancedBySeconds === 300 &&
+      fired.outputSummary.userMessageCount === 1 &&
+      fired.outputSummary.assistantMessageCount === 1 &&
+      fired.outputSummary.toolMessageCount === 0 &&
+      fired.outputSummary.toolCallCount === 0 &&
+      fired.outputSummary.toolTraceEventCount === 0 &&
+      fired.outputSummary.selectedSkillAbsent === true &&
+      fired.outputSummary.expectedAssistantTextMatched === true &&
+      fired.outputSummary.userContentSha256 === create.outputSummary.goalSha256 &&
+      typeof fired.outputSummary.assistantContentSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(fired.outputSummary.assistantContentSha256) &&
+      fired.outputSummary.assistantFinishReason === "stop",
+    "AUTO-001 scheduler, single-turn or no-tool evidence is incomplete",
+  );
+  check(
+    cleanup?.phase === "finally" &&
+      cleanup.outputSummary?.automationId === create.outputSummary.automationId &&
+      cleanup.outputSummary.cleaned === true &&
+      typeof cleanup.outputSummary.deleted === "boolean" &&
+      typeof cleanup.outputSummary.conflictCount === "number",
+    "AUTO-001 version-aware cleanup evidence is incomplete",
+  );
+  const evidence = JSON.stringify({ create, fired, cleanup });
+  check(
+    !evidence.includes("自动任务回归标识") &&
+      !evidence.includes("请只回复") &&
+      !evidence.includes("memory-only-access-token"),
+    "AUTO-001 goal, answer or in-memory token leaked into structured evidence",
+  );
+}
+
+async function executeAutomationSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-automations-p0-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-automations-p0-verification",
+      priority: 95,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent automation run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(run.gateResult === "passed", `Spark X Agent automation gate is ${String(run.gateResult)}`);
+  check(run.summary.passed === 1, "Spark X Agent automation case did not pass");
+  check(run.firstFailure === null, "Spark X Agent automation run retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent automation case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/automation.create",
+        "main:adapter:spark-x-agent/automation.wait-fired",
+        "finally:adapter:spark-x-agent/automation.cleanup",
+        "finally:adapter:spark-x-agent/conversation.delete",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent automation structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 2 &&
+      run.resources[0]?.resourceType === "spark-x-agent-conversation" &&
+      run.resources[0].cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete" &&
+      run.resources[1]?.resourceType === "spark-x-agent-automation" &&
+      run.resources[1].cleanupDefinition.action === "adapter:spark-x-agent/automation.cleanup" &&
+      run.resources.every((resource) => resource.cleanupStatus === "passed"),
+    "Spark X Agent automation resource ledger or cleanup order is incomplete",
+  );
+  check(run.cleanupJob === null, "normal automation run unexpectedly required compensation");
+  assertAutomationEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into AUTO evidence",
+    );
+  }
+  return run;
+}
+
 const password = useExistingSecrets ? undefined : await readPassword();
 const system = await ensureSystem();
 const modules = await ensureModules(system.id);
@@ -1332,6 +1600,8 @@ const knowledgeBase = modules.get("knowledge-base");
 check(knowledgeBase !== undefined, "knowledge-base module was not provisioned");
 const skills = modules.get("skills");
 check(skills !== undefined, "skills module was not provisioned");
+const automations = modules.get("automations");
+check(automations !== undefined, "automations module was not provisioned");
 const environment = await ensureEnvironment(system.id);
 if (password !== undefined) await upsertSecrets(system.id, environment.id, password);
 const conversation = await ensureCase(
@@ -1382,6 +1652,14 @@ const skillPublicationCase = await ensureCase(
   skillPublicationDefinition(),
   "新增受信任 Skill 用户/管理员投影、有效能力、主资产和精确哈希 P0 校验",
 );
+const automationCase = await ensureCase(
+  system.id,
+  automations.id,
+  environment.id,
+  "AUTO-001 新建任务、立即触发、单次结果与完整清理",
+  automationDefinition(),
+  "新增自动任务定义、立即单次调度、无工具结果关联和版本化清理 P0 闭环",
+);
 const conversationSuite = await ensureSuite(
   system.id,
   "spark-x-agent-conversation-p0",
@@ -1410,11 +1688,18 @@ const skillSuite = await ensureSuite(
   "SKILL-001 受信任 Skill 发布清单、有效能力、主资产和精确内容哈希只读证据闭环。",
   [skillPublicationCase.testCase.id],
 );
+const automationSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-automations-p0",
+  "星火 Agent 自动任务 P0 纵向切片",
+  "AUTO-001 立即触发、单次会话结果、无工具证据、资源登记和版本化清理闭环。",
+  [automationCase.testCase.id],
+);
 const suite = await ensureSuite(
   system.id,
   "spark-x-agent-core-smoke",
   "星火 Agent 核心冒烟",
-  "发布后核心冒烟套件；当前包含 CONV-001、CHAT-001、TOOL-001/002、KB-001 与 SKILL-001，后续按模块扩充到 10～12 条 P0。",
+  "发布后核心冒烟套件；当前包含 CONV-001、CHAT-001、TOOL-001/002、KB-001、SKILL-001 与 AUTO-001，后续按模块扩充到 10～12 条 P0。",
   [
     conversation.testCase.id,
     chatCase.testCase.id,
@@ -1422,10 +1707,11 @@ const suite = await ensureSuite(
     toolInvocationCase.testCase.id,
     knowledgeBaseCase.testCase.id,
     skillPublicationCase.testCase.id,
+    automationCase.testCase.id,
   ],
 );
 check(
-  [runSmoke, runKnowledgeSmoke, runSkillSmoke].filter(Boolean).length <= 1,
+  [runSmoke, runKnowledgeSmoke, runSkillSmoke, runAutomationSmoke].filter(Boolean).length <= 1,
   "only one Spark X Agent smoke mode can be true",
 );
 const run = runSmoke
@@ -1434,19 +1720,32 @@ const run = runSmoke
     ? await executeKnowledgeSmoke(system.id, environment.id, knowledgeBaseSuite.id, password)
     : runSkillSmoke
       ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
-      : undefined;
+      : runAutomationSmoke
+        ? await executeAutomationSmoke(system.id, environment.id, automationSuite.id, password)
+        : undefined;
 const scenario = runKnowledgeSmoke
   ? "spark-x-agent-knowledge-base-p0"
   : runSkillSmoke
     ? "spark-x-agent-skills-p0"
-    : "spark-x-agent-core-smoke";
+    : runAutomationSmoke
+      ? "spark-x-agent-automations-p0"
+      : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
     status: run === undefined ? "provisioned" : "passed",
     scenario,
-    assertions: run === undefined ? 0 : runKnowledgeSmoke ? 16 : runSkillSmoke ? 12 : 62,
-    caseCount: 6,
+    assertions:
+      run === undefined
+        ? 0
+        : runKnowledgeSmoke
+          ? 16
+          : runSkillSmoke
+            ? 12
+            : runAutomationSmoke
+              ? 20
+              : 82,
+    caseCount: 7,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
     systemId: system.id,
@@ -1463,10 +1762,13 @@ console.info(
     knowledgeBaseCaseVersionId: knowledgeBaseCase.version.id,
     skillPublicationCaseId: skillPublicationCase.testCase.id,
     skillPublicationCaseVersionId: skillPublicationCase.version.id,
+    automationCaseId: automationCase.testCase.id,
+    automationCaseVersionId: automationCase.version.id,
     conversationSuiteId: conversationSuite.id,
     toolSuiteId: toolSuite.id,
     knowledgeBaseSuiteId: knowledgeBaseSuite.id,
     skillSuiteId: skillSuite.id,
+    automationSuiteId: automationSuite.id,
     suiteId: suite.id,
     ...(run === undefined ? {} : { runId: run.id, gateResult: run.gateResult }),
   }),

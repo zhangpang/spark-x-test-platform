@@ -32,6 +32,10 @@ const knowledgeBaseId = "00000000-0000-4000-8000-000000000210";
 const uploadedDocumentId = "00000000-0000-4000-8000-000000000211";
 const knowledgeDocumentId = "00000000-0000-4000-8000-000000000212";
 const skillId = "00000000-0000-4000-8000-000000000213";
+const automationId = "00000000-0000-4000-8000-000000000214";
+const automationMarker = `spark-x-auto-${variables["run.id"]}`;
+const automationName = automationMarker;
+const automationGoal = `自动任务回归标识 ${automationMarker}。请只回复这个标识，不要调用任何工具或 Skill。`;
 const skillPrompt = "Produce the trusted daily trade and port brief without exposing credentials.";
 const skillPromptSha256 = createHash("sha256").update(skillPrompt).digest("hex");
 
@@ -60,6 +64,27 @@ function trustedSkillProjection(
       main_file: localAssetPresent ? "trade-port-daily-brief.md" : null,
       asset_count: localAssetPresent ? 1 : 0,
     },
+  };
+}
+
+function automationProjection(
+  overrides: Readonly<Record<string, unknown>> = {},
+): Readonly<Record<string, unknown>> {
+  return {
+    definition_id: automationId,
+    conversation_id: conversationId,
+    name: automationName,
+    goal: automationGoal,
+    selected_skill_id: null,
+    interval_seconds: 300,
+    status: "enabled",
+    state_version: 2,
+    next_fire_at: "2026-08-15T04:05:00.000Z",
+    last_fire_at: "2026-08-15T04:00:00.000Z",
+    suspension_reason: null,
+    created_at: "2026-08-15T03:59:59.000Z",
+    updated_at: "2026-08-15T04:00:00.000Z",
+    ...overrides,
   };
 }
 
@@ -101,7 +126,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.6.1",
+      version: "0.7.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -148,6 +173,19 @@ describe("spark-x-agent adapter", () => {
           }),
           expect.objectContaining({
             key: "knowledge-base.cleanup",
+            actionLevel: "dangerous",
+          }),
+          expect.objectContaining({
+            key: "automation.create",
+            producesResource: true,
+            cleanupAction: "automation.cleanup",
+          }),
+          expect.objectContaining({
+            key: "automation.wait-fired",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "automation.cleanup",
             actionLevel: "dangerous",
           }),
           expect.objectContaining({
@@ -1328,6 +1366,272 @@ describe("spark-x-agent adapter", () => {
         method: "DELETE",
       },
     ]);
+  });
+
+  it("creates an immediate no-Skill automation with only hashed goal evidence", async () => {
+    const nextFireAt = new Date().toISOString();
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          definition_id: automationId,
+          state_version: 1,
+          status: "enabled",
+          next_fire_at: nextFireAt,
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/automation.create",
+      environment,
+      {
+        ...credentials,
+        conversationId,
+        name: "spark-x-auto-${run.id}",
+        goal: "自动任务回归标识 spark-x-auto-${run.id}。请只回复这个标识，不要调用任何工具或 Skill。",
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      automationId,
+      conversationId,
+      created: true,
+      enabled: true,
+      stateVersion: 1,
+      intervalSeconds: 300,
+      selectedSkillAbsent: true,
+      nextFireAt,
+      nameSha256: createHash("sha256").update(automationName).digest("hex"),
+      goalSha256: createHash("sha256").update(automationGoal).digest("hex"),
+    });
+    const request = fetcher.mock.calls[1]?.[1];
+    const requestBody = request?.body;
+    if (typeof requestBody !== "string") throw new Error("expected JSON request body");
+    const body = JSON.parse(requestBody) as Readonly<Record<string, unknown>>;
+    expect(body).toMatchObject({
+      conversation_id: conversationId,
+      name: automationName,
+      goal: automationGoal,
+      selected_skill_id: null,
+      interval_seconds: 300,
+    });
+    expect(Date.parse(String(body.first_fire_at))).toBeGreaterThan(Date.now() - 2_000);
+    expect(JSON.stringify(output)).not.toContain(automationGoal);
+    expect(JSON.stringify(output)).not.toContain("memory-only-access-token-value");
+    expect(JSON.stringify(output)).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("links one scheduler fire to one no-tool conversation turn without returning content", async () => {
+    const assistantContent = `已完成：${automationMarker}`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [automationProjection()] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { role: "user", content: automationGoal, payload_truncated: false },
+              {
+                role: "assistant",
+                content: assistantContent,
+                finish_reason: "stop",
+                tool_calls: [],
+                public_execution_trace: [],
+                payload_truncated: false,
+              },
+            ],
+          },
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/automation.wait-fired",
+      environment,
+      {
+        ...credentials,
+        automationId,
+        conversationId,
+        expectedName: "spark-x-auto-${run.id}",
+        expectedGoal:
+          "自动任务回归标识 spark-x-auto-${run.id}。请只回复这个标识，不要调用任何工具或 Skill。",
+        expectedAssistantText: "spark-x-auto-${run.id}",
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      automationId,
+      conversationId,
+      fired: true,
+      singleFireObserved: true,
+      enabled: true,
+      stateVersion: 2,
+      lastFireAt: "2026-08-15T04:00:00.000Z",
+      nextFireAt: "2026-08-15T04:05:00.000Z",
+      scheduleAdvancedBySeconds: 300,
+      userMessageCount: 1,
+      assistantMessageCount: 1,
+      toolMessageCount: 0,
+      toolCallCount: 0,
+      toolTraceEventCount: 0,
+      userContentSha256: createHash("sha256").update(automationGoal).digest("hex"),
+      assistantContentSha256: createHash("sha256").update(assistantContent).digest("hex"),
+      assistantContentLength: assistantContent.length,
+      selectedSkillAbsent: true,
+      expectedAssistantTextMatched: true,
+      assistantFinishReason: "stop",
+      pollAttempts: 1,
+    });
+    const evidence = JSON.stringify(output);
+    expect(evidence).not.toContain(automationGoal);
+    expect(evidence).not.toContain(assistantContent);
+    expect(evidence).not.toContain("memory-only-access-token-value");
+  });
+
+  it("rejects duplicate scheduler turns as a stable product failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [automationProjection()] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { role: "user", content: automationGoal },
+              { role: "assistant", content: automationMarker, finish_reason: "stop" },
+              { role: "user", content: automationGoal },
+              { role: "assistant", content: automationMarker, finish_reason: "stop" },
+            ],
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/automation.wait-fired",
+        environment,
+        {
+          ...credentials,
+          automationId,
+          conversationId,
+          expectedName: automationName,
+          expectedGoal: automationGoal,
+          expectedAssistantText: automationMarker,
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_AUTOMATION_SINGLE_FIRE_FAILED",
+        classification: "product_failed",
+      },
+    });
+  });
+
+  it("refreshes the optimistic state version before idempotent automation cleanup", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [automationProjection({ state_version: 4 })] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          definition_id: automationId,
+          state_version: 5,
+          status: "disabled",
+          next_fire_at: null,
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/automation.cleanup",
+        environment,
+        { ...credentials, automationId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).resolves.toEqual({
+      automationId,
+      cleaned: true,
+      deleted: true,
+      conflictCount: 0,
+      deletedStateVersion: 5,
+    });
+    const request = fetcher.mock.calls[2]?.[1];
+    expect(request?.method).toBe("DELETE");
+    const requestBody = request?.body;
+    if (typeof requestBody !== "string") throw new Error("expected JSON request body");
+    expect(JSON.parse(requestBody)).toEqual({ expected_version: 4 });
+  });
+
+  it("treats an absent automation as successful idempotent cleanup", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [] }));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/automation.cleanup",
+        environment,
+        { ...credentials, automationId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).resolves.toEqual({
+      automationId,
+      cleaned: true,
+      deleted: false,
+      conflictCount: 0,
+      alreadyMissing: true,
+    });
+  });
+
+  it("classifies an unavailable automation runtime as an environment failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ error: { code: "unavailable" } }, 503));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/automation.create",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          name: automationName,
+          goal: automationGoal,
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_AUTOMATION_CREATE_FAILED",
+        classification: "environment_failed",
+      },
+    });
   });
 
   it("matches a trusted Skill across user and admin projections without returning its prompt", async () => {

@@ -977,7 +977,8 @@ export async function executeCompensationJob(
       if (
         definition.action !== "http:request" &&
         definition.action !== "adapter:spark-x-agent/conversation.delete" &&
-        definition.action !== "adapter:spark-x-agent/knowledge-base.cleanup"
+        definition.action !== "adapter:spark-x-agent/knowledge-base.cleanup" &&
+        definition.action !== "adapter:spark-x-agent/automation.cleanup"
       ) {
         throw new ExecutorFailure({
           code: "CLEANUP_EXECUTOR_NOT_AVAILABLE",
