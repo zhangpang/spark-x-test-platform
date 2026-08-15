@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -1160,7 +1160,7 @@
       {
         "key": "knowledge-base.query-and-assert-evidence",
         "name": "查询知识并校验答案与引用证据",
-        "description": "使用不可变知识快照执行真实 V5 Turn，校验 B2C 订单事实、引用回执和证据文档均来自允许的订单文件。",
+        "description": "使用不可变知识快照执行真实 V5 Turn，校验 B2C 订单事实、资源标识、引用回执和证据文档均来自允许的订单文件。",
         "actionLevel": "write",
         "defaultTimeoutMs": 120000,
         "producesResource": false,
@@ -1191,6 +1191,8 @@
             "forbiddenKnowledgeDocumentId": { "type": "string", "format": "uuid" },
             "expectedFixtureSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
             "expectedTitle": { "type": "string", "minLength": 1, "maxLength": 512 },
+            "expectedResourceMarker": { "type": "string", "format": "uuid" },
+            "forbiddenResourceMarker": { "type": "string", "format": "uuid" },
             "message": { "type": "string", "minLength": 1, "maxLength": 20000 }
           }
         },
@@ -1207,6 +1209,8 @@
             "packetHash",
             "completed",
             "expectedFactsMatched",
+            "resourceMarkerChecked",
+            "resourceMarkerMatched",
             "citationSetMatched",
             "forbiddenEvidenceAbsent",
             "messageCount",
@@ -1231,6 +1235,8 @@
             "packetHash": { "type": "string", "minLength": 64, "maxLength": 64 },
             "completed": { "const": true },
             "expectedFactsMatched": { "const": true },
+            "resourceMarkerChecked": { "type": "boolean" },
+            "resourceMarkerMatched": { "const": true },
             "citationSetMatched": { "const": true },
             "forbiddenEvidenceAbsent": { "const": true },
             "messageCount": { "const": 2 },

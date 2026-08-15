@@ -1420,6 +1420,8 @@ describe("M2 asset validation", () => {
             forbiddenKnowledgeDocumentId: "00000000-0000-4000-8000-000000000099",
             expectedFixtureSha256: "${step.fixture-sha256}",
             expectedTitle: "spark-x-kb-${run.id}.pdf",
+            expectedResourceMarker: "${step.knowledge-base-id}",
+            forbiddenResourceMarker: "00000000-0000-4000-8000-000000000098",
             message:
               "自动化回归 ${run.id}：仅根据知识库回答订单 B2C-KB-001 的订单号、客户代码、金额和状态，并保留知识引用。",
           },

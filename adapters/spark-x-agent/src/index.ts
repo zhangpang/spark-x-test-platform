@@ -1124,7 +1124,7 @@ export const sparkXAgentActionCapabilities = [
     key: "knowledge-base.query-and-assert-evidence",
     name: "查询知识并校验答案与引用证据",
     description:
-      "使用不可变知识快照执行真实 V5 Turn，校验 B2C 订单事实、引用回执和证据文档均来自允许的订单文件。",
+      "使用不可变知识快照执行真实 V5 Turn，校验 B2C 订单事实、资源标识、引用回执和证据文档均来自允许的订单文件。",
     actionLevel: "write",
     defaultTimeoutMs: 120_000,
     producesResource: false,
@@ -1155,6 +1155,8 @@ export const sparkXAgentActionCapabilities = [
         forbiddenKnowledgeDocumentId: { type: "string", format: "uuid" },
         expectedFixtureSha256: { type: "string", minLength: 64, maxLength: 64 },
         expectedTitle: { type: "string", minLength: 1, maxLength: 512 },
+        expectedResourceMarker: { type: "string", format: "uuid" },
+        forbiddenResourceMarker: { type: "string", format: "uuid" },
         message: { type: "string", minLength: 1, maxLength: 20_000 },
       },
     },
@@ -1171,6 +1173,8 @@ export const sparkXAgentActionCapabilities = [
         "packetHash",
         "completed",
         "expectedFactsMatched",
+        "resourceMarkerChecked",
+        "resourceMarkerMatched",
         "citationSetMatched",
         "forbiddenEvidenceAbsent",
         "messageCount",
@@ -1195,6 +1199,8 @@ export const sparkXAgentActionCapabilities = [
         packetHash: { type: "string", minLength: 64, maxLength: 64 },
         completed: { const: true },
         expectedFactsMatched: { const: true },
+        resourceMarkerChecked: { type: "boolean" },
+        resourceMarkerMatched: { const: true },
         citationSetMatched: { const: true },
         forbiddenEvidenceAbsent: { const: true },
         messageCount: { const: 2 },
@@ -1663,7 +1669,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.17.0",
+  version: "0.18.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1680,7 +1686,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "full-regression-knowledge-retrieval" as const;
+export const sparkXAgentAdapterPhase = "full-regression-knowledge-isolation" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -5048,15 +5054,27 @@ export async function executeSparkXAgentAction(
     );
     const expectedFixtureSha256 = requiredSha256(params, "expectedFixtureSha256", variables);
     const expectedTitle = requiredString(params, "expectedTitle", variables, 512);
+    const expectedResourceMarker =
+      params.expectedResourceMarker === undefined
+        ? undefined
+        : requiredUuid(params, "expectedResourceMarker", variables);
+    const forbiddenResourceMarker =
+      params.forbiddenResourceMarker === undefined
+        ? undefined
+        : requiredUuid(params, "forbiddenResourceMarker", variables);
+    const resourceMarkerChecked = expectedResourceMarker !== undefined;
     const message = requiredString(params, "message", variables, 20_000);
     if (
       knowledgeDocumentId === forbiddenKnowledgeDocumentId ||
+      (expectedResourceMarker === undefined) !== (forbiddenResourceMarker === undefined) ||
+      (expectedResourceMarker !== undefined &&
+        expectedResourceMarker === forbiddenResourceMarker) ||
       message.includes("\u0000") ||
       expectedTitle.includes("\u0000")
     ) {
       throw assertionFailure(
         "SPARK_X_AGENT_PARAMETER_INVALID",
-        "知识检索回归必须使用不同的允许/禁止文档，且受控文本不能包含空字符。",
+        "知识检索回归必须使用不同的允许/禁止文档和成对的不同资源标识，且受控文本不能包含空字符。",
       );
     }
 
@@ -5174,8 +5192,19 @@ export async function executeSparkXAgentAction(
         "知识检索回答、Turn 关联或不可变知识回执不完整。",
       );
     }
-    const expectedFacts = ["B2C-KB-001", "SPARK-REGRESSION", "4200", "PAID"];
-    const forbiddenFacts = ["9900", "1122", "ACCOUNTS_RECEIVABLE"];
+    const expectedFacts = [
+      "B2C-KB-001",
+      "SPARK-REGRESSION",
+      "4200",
+      "PAID",
+      ...(expectedResourceMarker === undefined ? [] : [expectedResourceMarker]),
+    ];
+    const forbiddenFacts = [
+      "9900",
+      "1122",
+      "ACCOUNTS_RECEIVABLE",
+      ...(forbiddenResourceMarker === undefined ? [] : [forbiddenResourceMarker]),
+    ];
     if (
       expectedFacts.some((fact) => !answer.includes(fact)) ||
       forbiddenFacts.some((fact) => answer.includes(fact))
@@ -5298,6 +5327,8 @@ export async function executeSparkXAgentAction(
       packetHash: receipt.packet_hash,
       completed: true,
       expectedFactsMatched: true,
+      resourceMarkerChecked,
+      resourceMarkerMatched: true,
       citationSetMatched: true,
       forbiddenEvidenceAbsent: true,
       messageCount: items.length,

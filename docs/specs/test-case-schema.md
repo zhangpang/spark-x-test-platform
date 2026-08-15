@@ -87,7 +87,7 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/automation.wait-fired`：可引用创建回执的首次触发时间，校验真实调度误差以及 UTC/`Asia/Shanghai` 下一次计划均精确推进五分钟；
 - `adapter:spark-x-agent/automation.assert-no-duplicate-delivery`：一次调度完成后固定三次核对状态版本、触发游标和唯一消息对，任何第二次投递或内容漂移立即失败；
 - `adapter:spark-x-agent/knowledge-base.assert-conversation-scope`：将本次运行的唯一就绪知识库绑定到已登记会话，严格固定文档版本，并校验首次创建、幂等重放和最终范围稳定性；输出仅包含资源 ID、哈希、计数和布尔判定；
-- `adapter:spark-x-agent/knowledge-base.query-and-assert-evidence`：引用本次运行捕获的会话、订单文档与不可变快照执行真实 V5 Turn，要求订单事实、引用回执和结构化证据完全一致，并拒绝科目表隔离文档；答案、片段、定位器和密钥不进入证据，只登记 ID、计数、布尔判定和 SHA-256；
+- `adapter:spark-x-agent/knowledge-base.query-and-assert-evidence`：引用本次运行捕获的会话、订单文档与不可变快照执行真实 V5 Turn，要求订单事实、引用回执和结构化证据完全一致，并拒绝禁止文档；可成对声明已绑定/未绑定知识库 UUID 作为固定夹具资源标识，回答与证据必须包含前者且排除后者；答案、片段、定位器和密钥不进入证据，只登记 ID、计数、布尔判定和 SHA-256；
 - `adapter:spark-x-agent/conversation.delete`：重新登录并按资源 ID 幂等删除，用于普通 `finally` 和独立补偿任务；
 - 适配器动作只接受清单声明的受限参数，不接受 URL、host、脚本、表达式或任意扩展字段；内部 HTTP 请求及重定向仍执行环境 allowlist 校验；
 - 用户名、密码与登录 Token 不写入动作输出。补偿定义只能引用 `resource.id` 和用例声明的密钥输入，避免把临时 Token 持久化。

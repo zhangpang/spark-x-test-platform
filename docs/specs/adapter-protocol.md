@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -191,7 +191,7 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.17.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+当前 `0.18.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
 `conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
 `chat.cancel-and-resume`、`chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
 `tool.invoke-failure-recovery`、`tool.assert-history`、`tool.assert-failure-recovery-history` 和
@@ -288,6 +288,9 @@ HTTP 201，同一请求重放必须返回 HTTP 200，且范围哈希、快照 ID
 答案、证据片段、标题、定位器、密钥和 Token 只在 Worker 内存中校验；平台输出仅登记资源 ID、计数、布尔结论
 以及答案/证据集合 SHA-256。Provider 可重试故障归类为 `environment_failed`，事实、引用或隔离断言失败保留
 稳定首错并继续执行 `finally`，不会用重试掩盖问题。
+可选的 `expectedResourceMarker` 与 `forbiddenResourceMarker` 必须成对提供且为不同 UUID；适配器会同时在模型回答
+和每条证据片段中要求已绑定标识存在、未绑定标识缺失。KB-004 使用两份标题与业务事实完全相同、仅
+`RUN_RESOURCE_ID` 不同的固定订单 PDF，因此即使检索结果表面相似，也能以不可变运行标识证明没有跨知识库串读。
 
 SKILL 动作当前只读校验部署系统已经发布的固定 `trade-port-daily-brief`，不接受 Skill 名称、Prompt、文件、
 URL 或脚本参数。动作分别读取当前用户清单、用户详情和管理员清单，要求 UUID、名称、展示名、分类、启用状态、

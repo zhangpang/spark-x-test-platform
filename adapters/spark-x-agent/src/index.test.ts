@@ -49,6 +49,7 @@ const knowledgeSnapshotId = "00000000-0000-4000-8000-000000000217";
 const knowledgeQueryTurnId = "00000000-0000-4000-8000-000000000218";
 const knowledgeQueryMessageId = "00000000-0000-4000-8000-000000000219";
 const knowledgeQueryAssistantMessageId = "00000000-0000-4000-8000-00000000021a";
+const forbiddenKnowledgeBaseId = "00000000-0000-4000-8000-00000000021b";
 const forbiddenKnowledgeDocumentId = "00000000-0000-4000-8000-00000000021c";
 const knowledgeRetrievalId = "00000000-0000-4000-8000-00000000021d";
 const skillId = "00000000-0000-4000-8000-000000000213";
@@ -146,7 +147,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.17.0",
+      version: "0.18.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -3254,10 +3255,9 @@ describe("spark-x-agent adapter", () => {
     const packetHash = "c".repeat(64);
     const title = `spark-x-kb-query-${variables["run.id"]}.pdf`;
     const message = `自动化回归 ${variables["run.id"]}：仅根据知识库回答订单 B2C-KB-001 的订单号、客户代码、金额和状态，并保留知识引用。`;
-    const answer = "B2C-KB-001 | SPARK-REGRESSION | 4200 | PAID [K1]";
+    const answer = `B2C-KB-001 | SPARK-REGRESSION | 4200 | PAID | ${knowledgeBaseId} [K1]`;
     const locator = { page: 1 };
-    const snippet =
-      "ORDER_ID: B2C-KB-001 CUSTOMER_CODE: SPARK-REGRESSION AMOUNT_CNY: 4200 STATUS: PAID";
+    const snippet = `ORDER_ID: B2C-KB-001 CUSTOMER_CODE: SPARK-REGRESSION AMOUNT_CNY: 4200 STATUS: PAID RUN_RESOURCE_ID: ${knowledgeBaseId}`;
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -3372,6 +3372,8 @@ describe("spark-x-agent adapter", () => {
         forbiddenKnowledgeDocumentId,
         expectedFixtureSha256: fixtureSha256,
         expectedTitle: "spark-x-kb-query-${run.id}.pdf",
+        expectedResourceMarker: knowledgeBaseId,
+        forbiddenResourceMarker: forbiddenKnowledgeBaseId,
         message,
       },
       variables,
@@ -3405,6 +3407,8 @@ describe("spark-x-agent adapter", () => {
       packetHash,
       completed: true,
       expectedFactsMatched: true,
+      resourceMarkerChecked: true,
+      resourceMarkerMatched: true,
       citationSetMatched: true,
       forbiddenEvidenceAbsent: true,
       messageCount: 2,
@@ -3425,6 +3429,110 @@ describe("spark-x-agent adapter", () => {
     expect(serialized).not.toContain("B2C-KB-001");
     expect(serialized).not.toContain("9900");
     expect(serialized).not.toContain("memory-only-access-token-value");
+  });
+
+  it("rejects an answer contaminated with the unbound knowledge-base marker", async () => {
+    const snapshotHash = "b".repeat(64);
+    const packetHash = "c".repeat(64);
+    const message = `自动化回归 ${variables["run.id"]}：回答已绑定订单文件中的资源标识。`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            turn_id: knowledgeQueryTurnId,
+            submission_id: "00000000-0000-4000-8000-00000000021e",
+            message_id: knowledgeQueryMessageId,
+            status: "queued",
+            sequence_no: 1,
+            queue_position: 1,
+            state_version: 1,
+            idempotent_replay: false,
+          },
+          202,
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          turn_id: knowledgeQueryTurnId,
+          conversation_id: conversationId,
+          status: "completed",
+          state_version: 4,
+          cancel_requested_at: null,
+          finished_at: "2026-08-15T05:00:00.000Z",
+          assistant_message_id: knowledgeQueryAssistantMessageId,
+          finish_reason: "stop",
+          failure_code: null,
+          failure_retryable: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                id: knowledgeQueryMessageId,
+                role: "user",
+                content: message,
+                turn_id: knowledgeQueryTurnId,
+                turn_status: "completed",
+                payload_truncated: false,
+              },
+              {
+                id: knowledgeQueryAssistantMessageId,
+                role: "assistant",
+                content: `B2C-KB-001 | SPARK-REGRESSION | 4200 | PAID | ${forbiddenKnowledgeBaseId} [K1]`,
+                turn_id: knowledgeQueryTurnId,
+                turn_status: "completed",
+                finish_reason: "stop",
+                payload_truncated: false,
+                document_context: {
+                  provider: "caishui_knowledge",
+                  snapshot_id: knowledgeSnapshotId,
+                  snapshot_hash: snapshotHash,
+                  retrieval_id: knowledgeRetrievalId,
+                  packet_hash: packetHash,
+                  cited_refs: ["K1"],
+                  evidence_count: 1,
+                },
+              },
+            ],
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.query-and-assert-evidence",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          requestId: "${run.id}",
+          snapshotId: knowledgeSnapshotId,
+          snapshotHash,
+          knowledgeDocumentId,
+          forbiddenKnowledgeDocumentId,
+          expectedFixtureSha256: "a".repeat(64),
+          expectedTitle: "spark-x-kb-query-${run.id}.pdf",
+          expectedResourceMarker: knowledgeBaseId,
+          forbiddenResourceMarker: forbiddenKnowledgeBaseId,
+          message,
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_KNOWLEDGE_QUERY_ANSWER_FAILED",
+        classification: "test_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(4);
   });
 
   it("preserves a stable product failure when retrieval evidence points at the forbidden chart", async () => {
@@ -3483,7 +3591,7 @@ describe("spark-x-agent adapter", () => {
               {
                 id: knowledgeQueryAssistantMessageId,
                 role: "assistant",
-                content: "B2C-KB-001 | SPARK-REGRESSION | 4200 | PAID [K1]",
+                content: `B2C-KB-001 | SPARK-REGRESSION | 4200 | PAID | ${knowledgeBaseId} [K1]`,
                 turn_id: knowledgeQueryTurnId,
                 turn_status: "completed",
                 finish_reason: "stop",
@@ -3524,8 +3632,7 @@ describe("spark-x-agent adapter", () => {
                 content_hash: fixtureSha256,
                 title,
                 locator: { page: 1 },
-                snippet:
-                  "ORDER_ID: B2C-KB-001 CUSTOMER_CODE: SPARK-REGRESSION AMOUNT_CNY: 4200 STATUS: PAID",
+                snippet: `ORDER_ID: B2C-KB-001 CUSTOMER_CODE: SPARK-REGRESSION AMOUNT_CNY: 4200 STATUS: PAID RUN_RESOURCE_ID: ${knowledgeBaseId}`,
                 score: 0.99,
                 retrieval_mode: "hybrid",
                 truncated: false,
@@ -3549,6 +3656,8 @@ describe("spark-x-agent adapter", () => {
           forbiddenKnowledgeDocumentId,
           expectedFixtureSha256: fixtureSha256,
           expectedTitle: "spark-x-kb-query-${run.id}.pdf",
+          expectedResourceMarker: knowledgeBaseId,
+          forbiddenResourceMarker: forbiddenKnowledgeBaseId,
           message,
         },
         variables,
