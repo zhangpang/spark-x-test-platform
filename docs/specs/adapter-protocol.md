@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -188,16 +188,16 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.19.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+当前 `0.20.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
 `conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
 `chat.cancel-and-resume`、`chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
 `tool.invoke-failure-recovery`、`tool.assert-history`、`tool.assert-failure-recovery-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
-`knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-conversation-scope`、
+`knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-large-table-continuation`、`knowledge-base.assert-conversation-scope`、
 `knowledge-base.query-and-assert-evidence`、`knowledge-base.assert-cleaned-state`、`knowledge-base.cleanup` 和
 `skill.assert-trusted-publication`，以及 `automation.create`、`automation.wait-fired`、`automation.assert-no-duplicate-delivery`、`automation.assert-lifecycle` 和
-`automation.cleanup`。动作只调用适配器内
-固定的 `/trade/api` 与 `/trade-domain-api` 路径，所有请求与
+`automation.cleanup`。动作只调用适配器内固定的 `/trade/api`、`/trade-domain-api` 路径，以及 KB-006 所需、与被测环境同主机的固定
+`http://<environment-host>:18121/mcp/document` 解析检索端点；所有请求与
 重定向执行环境 allowlist 校验；登录 Token、用户密码和模型回答正文都不进入输出、日志、资源台账或
 结构化证据。`conversation.assert-recent` 不把列表响应缺失的 `message_count` 当作零，而是通过会话历史接口
 读取最多 99 条持久化消息；用例可以声明精确预期数，数量偏差直接归类为产品失败，不轮询或重试。旧用例
@@ -263,8 +263,8 @@ MCP Server 用户可见状态、管理员发现工具、只读风险策略和私
 记为产品失败；服务上线后则要求同一用例完整通过。
 
 KNOWLEDGE-BASE 动作不接受文件路径、文件内容、URL 或脚本参数；上传内容只能由适配器仓库代码生成固定的
-小型 PDF，并以知识库 UUID 作为幂等键。短期签名解析源只在 Worker 内存中从原始文档接口传递给知识库接口，
-不会进入输出或证据。完成判定同时核对知识库文档计数、解析终态、单一当前版本、Parser 版本和原始 PDF
+小型 PDF 或 KB-006 的固定 96 行 XLSX，并以知识库 UUID 作为幂等键。短期签名解析源只在 Worker 内存中从原始文档接口传递给知识库接口，
+不会进入输出或证据。完成判定同时核对知识库文档计数、解析终态、单一当前版本、Parser 版本和原始文件
 SHA-256。创建动作只登记一个 `spark-x-agent-knowledge-base` 顶层资源；统一清理动作根据该 UUID 恢复原始上传，
 先删除知识文档与 Parser 资源，再删除原始上传并归档知识库，因此普通 `finally` 和 Worker 中断后的独立补偿
 不依赖中间步骤是否完成捕获。解析服务缺失、配置错误或 5xx 归为 `environment_failed`，首次失败不会被清理
@@ -277,8 +277,8 @@ HTTP 201，同一请求重放必须返回 HTTP 200，且范围哈希、快照 ID
 资源 ID、哈希、计数和布尔结论；文件名、标题、Parser 内部 ID、签名地址、文档内容、密码和 Token 均不进入
 结构化证据。会话后于知识库登记，普通 `finally` 明确先删会话再清知识库，独立补偿按资源倒序保持同一顺序。
 
-`knowledge-base.upload-fixture` 的可选 `fixtureKind` 只允许 `order` 或 `account-chart`，两类 PDF 均由适配器
-源码固定生成，不接受任意文件、URL 或脚本。`knowledge-base.query-and-assert-evidence` 只接受本次运行捕获的
+`knowledge-base.upload-fixture` 的可选 `fixtureKind` 只允许 `order`、`account-chart` 或 `large-table`，两类 PDF 和
+96 行 XLSX 均由适配器源码固定生成，不接受任意文件、单元格、URL 或脚本。`knowledge-base.query-and-assert-evidence` 只接受本次运行捕获的
 会话、订单文档和不可变快照 ID/哈希，以 V5 Turn 执行真实模型检索；重定向后仍重新执行环境 allowlist 校验。
 动作要求历史恰好为一条用户消息和一条 `stop` 助手消息，回答必须包含固定订单事实，引用回执与
 `knowledge-evidence` 的 ref 集合必须一致，且每条证据只能指向允许的订单文档，禁止命中科目表隔离文档。
@@ -293,6 +293,14 @@ HTTP 201，同一请求重放必须返回 HTTP 200，且范围哈希、快照 ID
 领域文档和原始上传 UUID，依次证明活动详情与列表无目标、领域文档与版本为 404、原知识库被检索接口拒绝、上传状态
 为缺失或已退役且原始文档为 404。KB-005 再执行两次同一清理动作，要求零新增删除且 `alreadyMissing=true`；首次失败
 仍保留并进入 `finally`，不存在业务失败重试。所有输出仅为 UUID、计数和布尔结论，不登记对象存储键、签名地址或文档内容。
+
+`knowledge-base.assert-large-table-continuation` 先通过已登录领域接口确认本次知识库、文档、SHA-256 和唯一当前 Parser
+版本，再对固定解析端点发起 `coverage=complete`、`targets=[tables]`、`version_scope=exact` 的完整遍历。第一页明确绑定
+Parser 文档与版本，后续请求只携带服务端 HMAC 签名的 opaque `next_cursor`；每页最多 1000 字符和一个单元，最多 64 页。
+动作要求唯一表格单元的 `text_segment.start/end` 严格首尾相接、所有返回项保持同一文档/版本、游标哈希不重复，最终
+`source_complete=true` 且 96 个顺序行标识和运行资源 UUID 无遗漏或重复。原始表格、Parser ID 和游标只在 Worker 内存中
+使用；证据只登记资源 UUID、计数、布尔判定及 Parser ID、游标链和重建表格的 SHA-256。解析端点使用独立 allowlist 条目，
+任何重定向都会重新校验；失败不重试并仍进入统一清理。
 
 SKILL 动作当前只读校验部署系统已经发布的固定 `trade-port-daily-brief`，不接受 Skill 名称、Prompt、文件、
 URL 或脚本参数。动作分别读取当前用户清单、用户详情和管理员清单，要求 UUID、名称、展示名、分类、启用状态、

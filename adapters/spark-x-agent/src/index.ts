@@ -29,6 +29,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/knowledge-base.upload-fixture",
   "adapter:spark-x-agent/knowledge-base.attach-upload",
   "adapter:spark-x-agent/knowledge-base.wait-ready",
+  "adapter:spark-x-agent/knowledge-base.assert-large-table-continuation",
   "adapter:spark-x-agent/knowledge-base.assert-conversation-scope",
   "adapter:spark-x-agent/knowledge-base.query-and-assert-evidence",
   "adapter:spark-x-agent/knowledge-base.assert-cleaned-state",
@@ -903,7 +904,7 @@ export const sparkXAgentActionCapabilities = [
         username: { type: "string", minLength: 1, maxLength: 200 },
         password: { type: "string", minLength: 1, maxLength: 4_096 },
         knowledgeBaseId: { type: "string", format: "uuid" },
-        fixtureKind: { type: "string", enum: ["order", "account-chart"] },
+        fixtureKind: { type: "string", enum: ["order", "account-chart", "large-table"] },
       },
     },
     outputSchema: {
@@ -922,7 +923,7 @@ export const sparkXAgentActionCapabilities = [
         knowledgeBaseId: { type: "string", format: "uuid" },
         uploadedDocumentId: { type: "string", format: "uuid" },
         uploaded: { const: true },
-        fixtureKind: { type: "string", enum: ["order", "account-chart"] },
+        fixtureKind: { type: "string", enum: ["order", "account-chart", "large-table"] },
         fixtureSizeBytes: { type: "integer", minimum: 1, maximum: 1_000_000 },
         fixtureSha256: { type: "string", minLength: 64, maxLength: 64 },
         fileNameSha256: { type: "string", minLength: 64, maxLength: 64 },
@@ -1033,6 +1034,79 @@ export const sparkXAgentActionCapabilities = [
         titleMatched: { const: true },
         fixtureSha256: { type: "string", minLength: 64, maxLength: 64 },
         pollAttempts: { type: "integer", minimum: 1, maximum: 120 },
+      },
+    },
+  },
+  {
+    key: "knowledge-base.assert-large-table-continuation",
+    name: "校验大表分段与续查游标",
+    description:
+      "在已授权知识文档的精确解析版本上执行完整表格遍历，校验表头、签名游标、分段连续性、行基数和文档边界。",
+    actionLevel: "write",
+    defaultTimeoutMs: 120_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "knowledgeBaseId",
+        "knowledgeDocumentId",
+        "expectedFixtureSha256",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        knowledgeDocumentId: { type: "string", format: "uuid" },
+        expectedFixtureSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "knowledgeBaseId",
+        "knowledgeDocumentId",
+        "fixtureSha256",
+        "parserDocumentIdSha256",
+        "parserVersionIdSha256",
+        "pageCount",
+        "cursorCount",
+        "tableUnitCount",
+        "expectedRowCount",
+        "recoveredRowCount",
+        "headerDetected",
+        "segmentsContiguous",
+        "cursorChainUnique",
+        "sourceComplete",
+        "documentBindingMatched",
+        "versionBindingMatched",
+        "fixtureMarkerMatched",
+        "cursorChainSha256",
+        "reconstructedTableSha256",
+      ],
+      properties: {
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        knowledgeDocumentId: { type: "string", format: "uuid" },
+        fixtureSha256: { type: "string", minLength: 64, maxLength: 64 },
+        parserDocumentIdSha256: { type: "string", minLength: 64, maxLength: 64 },
+        parserVersionIdSha256: { type: "string", minLength: 64, maxLength: 64 },
+        pageCount: { type: "integer", minimum: 2, maximum: 64 },
+        cursorCount: { type: "integer", minimum: 1, maximum: 63 },
+        tableUnitCount: { const: 1 },
+        expectedRowCount: { const: 96 },
+        recoveredRowCount: { const: 96 },
+        headerDetected: { const: true },
+        segmentsContiguous: { const: true },
+        cursorChainUnique: { const: true },
+        sourceComplete: { const: true },
+        documentBindingMatched: { const: true },
+        versionBindingMatched: { const: true },
+        fixtureMarkerMatched: { const: true },
+        cursorChainSha256: { type: "string", minLength: 64, maxLength: 64 },
+        reconstructedTableSha256: { type: "string", minLength: 64, maxLength: 64 },
       },
     },
   },
@@ -1741,7 +1815,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.19.0",
+  version: "0.20.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -2431,10 +2505,188 @@ interface KnowledgeFixture {
   readonly bytes: Uint8Array;
   readonly fileName: string;
   readonly kind: KnowledgeFixtureKind;
+  readonly mimeType: string;
   readonly sha256: string;
 }
 
-type KnowledgeFixtureKind = "order" | "account-chart";
+type KnowledgeFixtureKind = "order" | "account-chart" | "large-table";
+
+const largeTableFixtureRowCount = 96;
+
+function crc32(bytes: Uint8Array): number {
+  let value = 0xffffffff;
+  for (const byte of bytes) {
+    value ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function concatenateBytes(parts: readonly Uint8Array[]): Uint8Array {
+  const result = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0));
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.byteLength;
+  }
+  return result;
+}
+
+function littleEndian(values: readonly Readonly<{ value: number; bytes: 2 | 4 }>[]): Uint8Array {
+  const result = new Uint8Array(values.reduce((total, item) => total + item.bytes, 0));
+  const view = new DataView(result.buffer);
+  let offset = 0;
+  for (const item of values) {
+    if (item.bytes === 2) view.setUint16(offset, item.value, true);
+    else view.setUint32(offset, item.value, true);
+    offset += item.bytes;
+  }
+  return result;
+}
+
+function storedZip(files: readonly Readonly<{ name: string; content: string }>[]): Uint8Array {
+  const encoder = new TextEncoder();
+  const locals: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let localOffset = 0;
+  for (const file of files) {
+    const name = encoder.encode(file.name);
+    const content = encoder.encode(file.content);
+    const checksum = crc32(content);
+    const localHeader = littleEndian([
+      { value: 0x04034b50, bytes: 4 },
+      { value: 20, bytes: 2 },
+      { value: 0, bytes: 2 },
+      { value: 0, bytes: 2 },
+      { value: 0, bytes: 2 },
+      { value: 33, bytes: 2 },
+      { value: checksum, bytes: 4 },
+      { value: content.byteLength, bytes: 4 },
+      { value: content.byteLength, bytes: 4 },
+      { value: name.byteLength, bytes: 2 },
+      { value: 0, bytes: 2 },
+    ]);
+    const local = concatenateBytes([localHeader, name, content]);
+    locals.push(local);
+    central.push(
+      concatenateBytes([
+        littleEndian([
+          { value: 0x02014b50, bytes: 4 },
+          { value: 20, bytes: 2 },
+          { value: 20, bytes: 2 },
+          { value: 0, bytes: 2 },
+          { value: 0, bytes: 2 },
+          { value: 0, bytes: 2 },
+          { value: 33, bytes: 2 },
+          { value: checksum, bytes: 4 },
+          { value: content.byteLength, bytes: 4 },
+          { value: content.byteLength, bytes: 4 },
+          { value: name.byteLength, bytes: 2 },
+          { value: 0, bytes: 2 },
+          { value: 0, bytes: 2 },
+          { value: 0, bytes: 2 },
+          { value: 0, bytes: 2 },
+          { value: 0, bytes: 4 },
+          { value: localOffset, bytes: 4 },
+        ]),
+        name,
+      ]),
+    );
+    localOffset += local.byteLength;
+  }
+  const centralBytes = concatenateBytes(central);
+  const end = littleEndian([
+    { value: 0x06054b50, bytes: 4 },
+    { value: 0, bytes: 2 },
+    { value: 0, bytes: 2 },
+    { value: files.length, bytes: 2 },
+    { value: files.length, bytes: 2 },
+    { value: centralBytes.byteLength, bytes: 4 },
+    { value: localOffset, bytes: 4 },
+    { value: 0, bytes: 2 },
+  ]);
+  return concatenateBytes([...locals, centralBytes, end]);
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function buildLargeTableWorkbook(knowledgeBaseId: string): Uint8Array {
+  const header = ["ROW_ID", "RUN_RESOURCE_ID", "ACCOUNT_CODE", "AMOUNT_CNY"];
+  const rows = Array.from({ length: largeTableFixtureRowCount }, (_, index) => [
+    `KB006-ROW-${String(index + 1).padStart(3, "0")}`,
+    knowledgeBaseId,
+    `ACCT-${String(1001 + index)}`,
+    String(10_000 + index * 37),
+  ]);
+  const sheetRows = [header, ...rows]
+    .map((row, rowIndex) => {
+      const cells = row
+        .map((value, columnIndex) => {
+          const reference = `${String.fromCharCode(65 + columnIndex)}${rowIndex + 1}`;
+          return `<c r="${reference}" t="inlineStr"><is><t>${xmlEscape(value)}</t></is></c>`;
+        })
+        .join("");
+      return `<row r="${rowIndex + 1}">${cells}</row>`;
+    })
+    .join("");
+  return storedZip([
+    {
+      name: "[Content_Types].xml",
+      content:
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+        "</Types>",
+    },
+    {
+      name: "_rels/.rels",
+      content:
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+        "</Relationships>",
+    },
+    {
+      name: "xl/workbook.xml",
+      content:
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+        '<sheets><sheet name="KB006_LARGE_TABLE" sheetId="1" r:id="rId1"/></sheets>' +
+        "</workbook>",
+    },
+    {
+      name: "xl/_rels/workbook.xml.rels",
+      content:
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+        "</Relationships>",
+    },
+    {
+      name: "xl/worksheets/sheet1.xml",
+      content:
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+        `<dimension ref="A1:D${largeTableFixtureRowCount + 1}"/>` +
+        '<sheetViews><sheetView workbookViewId="0"/></sheetViews>' +
+        '<cols><col min="1" max="1" width="18" customWidth="1"/><col min="2" max="2" width="40" customWidth="1"/><col min="3" max="4" width="18" customWidth="1"/></cols>' +
+        `<sheetData>${sheetRows}</sheetData>` +
+        "</worksheet>",
+    },
+  ]);
+}
 
 function buildKnowledgeFixture(
   knowledgeBaseId: string,
@@ -2445,6 +2697,16 @@ function buildKnowledgeFixture(
       "SPARK_X_AGENT_PARAMETER_INVALID",
       "知识库测试资源标识必须是有效 UUID。",
     );
+  }
+  if (kind === "large-table") {
+    const bytes = buildLargeTableWorkbook(knowledgeBaseId);
+    return {
+      bytes,
+      fileName: `spark-x-large-table-${knowledgeBaseId}.xlsx`,
+      kind,
+      mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    };
   }
   const lines =
     kind === "order"
@@ -2497,8 +2759,157 @@ function buildKnowledgeFixture(
         ? `spark-x-kb-${knowledgeBaseId}.pdf`
         : `spark-x-account-chart-${knowledgeBaseId}.pdf`,
     kind,
+    mimeType: "application/pdf",
     sha256: createHash("sha256").update(bytes).digest("hex"),
   };
+}
+
+interface LargeTableParserBinding {
+  readonly parserDocumentId: string;
+  readonly parserVersionId: string;
+}
+
+interface LargeTableContinuationPage {
+  readonly items: readonly Readonly<Record<string, unknown>>[];
+  readonly totalUnits: number;
+  readonly completedUnits: number;
+  readonly deliveredChars: number;
+  readonly usedChars: number;
+  readonly sourceComplete: boolean;
+  readonly hasMore: boolean;
+  readonly nextCursor: string | null;
+}
+
+function boundedParserIdentifier(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 200;
+}
+
+function parserContinuationPage(body: unknown, requestId: string): LargeTableContinuationPage {
+  const envelope = objectValue(body);
+  const result = objectValue(envelope?.result);
+  const structured = objectValue(result?.structuredContent);
+  const coverage = objectValue(structured?.coverage);
+  const budget = objectValue(structured?.return_budget);
+  const rawItems = structured?.items;
+  const rawItemCount = Array.isArray(rawItems) ? rawItems.length : -1;
+  const items = Array.isArray(rawItems)
+    ? rawItems
+        .map(objectValue)
+        .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+    : null;
+  if (
+    envelope?.jsonrpc !== "2.0" ||
+    envelope.id !== requestId ||
+    envelope.error !== undefined ||
+    result?.isError !== false ||
+    structured === null ||
+    coverage === null ||
+    budget === null ||
+    items === null ||
+    items.length !== rawItemCount ||
+    coverage.requested !== "complete" ||
+    typeof coverage.source_complete !== "boolean" ||
+    !Number.isInteger(coverage.total_units) ||
+    !Number.isInteger(coverage.completed_units) ||
+    !Number.isInteger(coverage.delivered_chars) ||
+    !Number.isInteger(budget.used_chars) ||
+    typeof structured.has_more !== "boolean" ||
+    !(
+      structured.next_cursor === null ||
+      (typeof structured.next_cursor === "string" &&
+        structured.next_cursor.length > 0 &&
+        structured.next_cursor.length <= 100_000)
+    )
+  ) {
+    throw apiFailure(
+      "SPARK_X_AGENT_KNOWLEDGE_TABLE_CONTINUATION_RESPONSE_INVALID",
+      "大表完整遍历返回的 JSON-RPC、覆盖进度或游标结构无效。",
+    );
+  }
+  return {
+    items,
+    totalUnits: coverage.total_units as number,
+    completedUnits: coverage.completed_units as number,
+    deliveredChars: coverage.delivered_chars as number,
+    usedChars: budget.used_chars as number,
+    sourceComplete: coverage.source_complete,
+    hasMore: structured.has_more,
+    nextCursor: structured.next_cursor,
+  };
+}
+
+async function requestLargeTableContinuationPage(
+  environment: HttpExecutionEnvironment,
+  binding: LargeTableParserBinding,
+  cursor: string | null,
+  pageNumber: number,
+  options: SparkXAgentExecutionOptions,
+): Promise<LargeTableContinuationPage> {
+  const requestId = `spark-x-kb006-page-${pageNumber}`;
+  const parserTarget = new URL(environment.baseUrl);
+  parserTarget.port = "18121";
+  parserTarget.pathname = "/mcp/document";
+  parserTarget.search = "";
+  parserTarget.hash = "";
+  const response = await executeSparkXAgentRequest(
+    environment,
+    {
+      method: "POST",
+      path: parserTarget.toString(),
+      headers: { "Content-Type": "application/json" },
+      body: {
+        jsonrpc: "2.0",
+        id: requestId,
+        method: "tools/call",
+        params: {
+          name: "retrieve_parsed_documents",
+          arguments: {
+            task: "Verify every row in the fixed KB-006 large table without omissions.",
+            coverage: "complete",
+            coverage_reason: "A full ordered traversal is required to prove row continuity.",
+            max_return_chars: 1_000,
+            max_units: 1,
+            ...(cursor === null
+              ? {
+                  targets: ["tables"],
+                  include_bbox: false,
+                  filters: {
+                    document_ids: [binding.parserDocumentId],
+                    version_scope: "exact",
+                    version_id: binding.parserVersionId,
+                  },
+                }
+              : { cursor }),
+          },
+        },
+      },
+    },
+    options.timeoutMs,
+    options.signal,
+    options.fetcher,
+  );
+  if (response.status >= 500) {
+    throw environmentFailure(
+      "SPARK_X_AGENT_KNOWLEDGE_TABLE_PARSER_UNAVAILABLE",
+      `大表完整遍历运行时返回 HTTP ${response.status}。`,
+    );
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw apiFailure(
+      "SPARK_X_AGENT_KNOWLEDGE_TABLE_PARSER_REJECTED",
+      `大表完整遍历运行时返回 HTTP ${response.status}。`,
+      response.status,
+    );
+  }
+  const envelope = objectValue(response.body);
+  const result = objectValue(envelope?.result);
+  if (result?.isError === true) {
+    throw apiFailure(
+      "SPARK_X_AGENT_KNOWLEDGE_TABLE_PARSER_REJECTED",
+      "解析服务拒绝了固定大表的精确版本完整遍历。",
+    );
+  }
+  return parserContinuationPage(response.body, requestId);
 }
 
 async function boundedJsonResponse(
@@ -2586,7 +2997,7 @@ async function uploadKnowledgeFixture(
         "metadata",
         JSON.stringify({
           filename: fixture.fileName,
-          mime_type: "application/pdf",
+          mime_type: fixture.mimeType,
           size_bytes: fixture.bytes.byteLength,
           sha256: fixture.sha256,
           conversation_id: null,
@@ -2602,7 +3013,7 @@ async function uploadKnowledgeFixture(
               fixture.bytes.byteOffset + fixture.bytes.byteLength,
             ) as ArrayBuffer,
           ],
-          { type: "application/pdf" },
+          { type: fixture.mimeType },
         ),
         fixture.fileName,
       );
@@ -4589,10 +5000,14 @@ export async function executeSparkXAgentAction(
   if (action === "adapter:spark-x-agent/knowledge-base.upload-fixture") {
     const knowledgeBaseId = requiredUuid(params, "knowledgeBaseId", variables);
     const fixtureKind = params.fixtureKind ?? "order";
-    if (fixtureKind !== "order" && fixtureKind !== "account-chart") {
+    if (
+      fixtureKind !== "order" &&
+      fixtureKind !== "account-chart" &&
+      fixtureKind !== "large-table"
+    ) {
       throw assertionFailure(
         "SPARK_X_AGENT_PARAMETER_INVALID",
-        "知识库测试夹具类型必须是 order 或 account-chart。",
+        "知识库测试夹具类型必须是 order、account-chart 或 large-table。",
       );
     }
     const fixture = buildKnowledgeFixture(knowledgeBaseId, fixtureKind);
@@ -4889,6 +5304,225 @@ export async function executeSparkXAgentAction(
       titleMatched: true,
       fixtureSha256: expectedFixtureSha256,
       pollAttempts,
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/knowledge-base.assert-large-table-continuation") {
+    const knowledgeBaseId = requiredUuid(params, "knowledgeBaseId", variables);
+    const knowledgeDocumentId = requiredUuid(params, "knowledgeDocumentId", variables);
+    const expectedFixtureSha256 = requiredSha256(params, "expectedFixtureSha256", variables);
+    const documentResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: domainActionPath(
+          `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(knowledgeDocumentId)}`,
+        ),
+      },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(
+      documentResponse,
+      "SPARK_X_AGENT_KNOWLEDGE_TABLE_DOCUMENT_READ_FAILED",
+    );
+    const document = dataEnvelope(
+      documentResponse.body,
+      "SPARK_X_AGENT_KNOWLEDGE_TABLE_DOCUMENT_RESPONSE_INVALID",
+    );
+    const versionsResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: domainActionPath(
+          `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(knowledgeDocumentId)}/versions`,
+        ),
+      },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(versionsResponse, "SPARK_X_AGENT_KNOWLEDGE_TABLE_VERSION_READ_FAILED");
+    const versionsData = dataEnvelope(
+      versionsResponse.body,
+      "SPARK_X_AGENT_KNOWLEDGE_TABLE_VERSION_RESPONSE_INVALID",
+    );
+    const versions = Array.isArray(versionsData.items)
+      ? versionsData.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    const version = versions[0];
+    if (
+      document.id !== knowledgeDocumentId ||
+      document.knowledge_base_id !== knowledgeBaseId ||
+      document.status !== "completed" ||
+      document.current_version_number !== 1 ||
+      !boundedParserIdentifier(document.parser_document_id) ||
+      !boundedParserIdentifier(document.current_version_id) ||
+      versions.length !== 1 ||
+      version?.knowledge_document_id !== knowledgeDocumentId ||
+      version.version_number !== 1 ||
+      version.status !== "completed" ||
+      version.content_hash !== expectedFixtureSha256 ||
+      version.parser_version_id !== document.current_version_id
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_TABLE_BINDING_FAILED",
+        "固定大表的领域文档、内容哈希与精确解析版本绑定不一致。",
+      );
+    }
+    const binding = {
+      parserDocumentId: document.parser_document_id,
+      parserVersionId: document.current_version_id,
+    } satisfies LargeTableParserBinding;
+    const cursorHashes: string[] = [];
+    const seenCursorHashes = new Set<string>();
+    const tableUnitIds = new Set<string>();
+    let cursor: string | null = null;
+    let expectedSegmentStart = 0;
+    let reconstructed = "";
+    let pageCount = 0;
+    let sourceComplete = false;
+    for (let pageNumber = 1; pageNumber <= 64; pageNumber += 1) {
+      const page = await requestLargeTableContinuationPage(
+        environment,
+        binding,
+        cursor,
+        pageNumber,
+        remainingOptions(),
+      );
+      pageCount = pageNumber;
+      if (page.totalUnits !== 1 || page.items.length !== 1) {
+        throw assertionFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_TABLE_UNIT_BOUNDARY_FAILED",
+          "固定大表没有被解析为唯一、可连续读取的表格单元。",
+        );
+      }
+      const item = page.items[0];
+      const segment = objectValue(item?.text_segment);
+      if (
+        item?.kind !== "table" ||
+        item.document_id !== binding.parserDocumentId ||
+        item.version_id !== binding.parserVersionId
+      ) {
+        throw assertionFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_TABLE_DOCUMENT_BOUNDARY_FAILED",
+          "固定大表续查跳转到了非预期的文档、版本或内容类型。",
+        );
+      }
+      if (
+        typeof item.unit_id !== "string" ||
+        item.unit_id.length === 0 ||
+        item.unit_id.length > 1_000 ||
+        typeof item.text !== "string" ||
+        item.text.length === 0 ||
+        item.text.length > 1_000 ||
+        segment === null ||
+        !Number.isInteger(segment.start) ||
+        !Number.isInteger(segment.end) ||
+        typeof segment.unit_complete !== "boolean" ||
+        segment.start !== expectedSegmentStart ||
+        segment.end !== expectedSegmentStart + item.text.length
+      ) {
+        throw assertionFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_TABLE_SEGMENT_DISCONTINUITY",
+          "固定大表分段发生跳段、重叠、越界或文档版本漂移。",
+        );
+      }
+      tableUnitIds.add(item.unit_id);
+      expectedSegmentStart = segment.end;
+      reconstructed += item.text;
+      if (
+        page.usedChars !== item.text.length ||
+        page.deliveredChars !== reconstructed.length ||
+        page.completedUnits !== (segment.unit_complete ? 1 : 0) ||
+        page.sourceComplete !== !page.hasMore ||
+        page.sourceComplete !== (page.nextCursor === null) ||
+        segment.unit_complete !== page.sourceComplete
+      ) {
+        throw assertionFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_TABLE_COVERAGE_DRIFT",
+          "固定大表的累计字符、完成单元或续查终态发生漂移。",
+        );
+      }
+      if (page.sourceComplete) {
+        sourceComplete = true;
+        break;
+      }
+      if (page.nextCursor === null) {
+        throw assertionFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_TABLE_CURSOR_MISSING",
+          "固定大表尚未完整遍历，但解析服务没有返回续查游标。",
+        );
+      }
+      const cursorHash = sha256(page.nextCursor);
+      if (seenCursorHashes.has(cursorHash)) {
+        throw assertionFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_TABLE_CURSOR_REPEATED",
+          "固定大表续查游标重复，无法证明遍历向前推进。",
+        );
+      }
+      seenCursorHashes.add(cursorHash);
+      cursorHashes.push(cursorHash);
+      cursor = page.nextCursor;
+    }
+    if (
+      !sourceComplete ||
+      pageCount < 2 ||
+      cursorHashes.length !== pageCount - 1 ||
+      tableUnitIds.size !== 1
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_TABLE_CONTINUATION_INCOMPLETE",
+        "固定大表未在有界页数内通过唯一游标链完整遍历。",
+      );
+    }
+    const headerMarkers = ["ROW_ID", "RUN_RESOURCE_ID", "ACCOUNT_CODE", "AMOUNT_CNY"];
+    const firstRowMarker = "KB006-ROW-001";
+    const headerDetected = headerMarkers.every((marker) => {
+      const first = reconstructed.indexOf(marker);
+      return first >= 0 && first < reconstructed.indexOf(firstRowMarker);
+    });
+    const recoveredMarkers = [...reconstructed.matchAll(/KB006-ROW-\d{3}/gu)].map(
+      (match) => match[0],
+    );
+    const expectedMarkers = Array.from(
+      { length: largeTableFixtureRowCount },
+      (_, index) => `KB006-ROW-${String(index + 1).padStart(3, "0")}`,
+    );
+    const fixtureMarkerCount = reconstructed.split(knowledgeBaseId).length - 1;
+    if (
+      !headerDetected ||
+      recoveredMarkers.length !== largeTableFixtureRowCount ||
+      new Set(recoveredMarkers).size !== largeTableFixtureRowCount ||
+      expectedMarkers.some((marker, index) => recoveredMarkers[index] !== marker) ||
+      fixtureMarkerCount !== largeTableFixtureRowCount
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_TABLE_CONTENT_FAILED",
+        "固定大表的表头、顺序行标识或运行资源标识发生遗漏、重复或错序。",
+      );
+    }
+    return {
+      knowledgeBaseId,
+      knowledgeDocumentId,
+      fixtureSha256: expectedFixtureSha256,
+      parserDocumentIdSha256: sha256(binding.parserDocumentId),
+      parserVersionIdSha256: sha256(binding.parserVersionId),
+      pageCount,
+      cursorCount: cursorHashes.length,
+      tableUnitCount: tableUnitIds.size,
+      expectedRowCount: largeTableFixtureRowCount,
+      recoveredRowCount: recoveredMarkers.length,
+      headerDetected: true,
+      segmentsContiguous: true,
+      cursorChainUnique: true,
+      sourceComplete: true,
+      documentBindingMatched: true,
+      versionBindingMatched: true,
+      fixtureMarkerMatched: true,
+      cursorChainSha256: sha256(cursorHashes.join(":")),
+      reconstructedTableSha256: sha256(reconstructed),
     };
   }
 

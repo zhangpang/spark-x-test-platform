@@ -88,6 +88,7 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/automation.assert-no-duplicate-delivery`：一次调度完成后固定三次核对状态版本、触发游标和唯一消息对，任何第二次投递或内容漂移立即失败；
 - `adapter:spark-x-agent/knowledge-base.assert-conversation-scope`：将本次运行的唯一就绪知识库绑定到已登记会话，严格固定文档版本，并校验首次创建、幂等重放和最终范围稳定性；输出仅包含资源 ID、哈希、计数和布尔判定；
 - `adapter:spark-x-agent/knowledge-base.query-and-assert-evidence`：引用本次运行捕获的会话、订单文档与不可变快照执行真实 V5 Turn，要求订单事实、引用回执和结构化证据完全一致，并拒绝禁止文档；可成对声明已绑定/未绑定知识库 UUID 作为固定夹具资源标识，回答与证据必须包含前者且排除后者；答案、片段、定位器和密钥不进入证据，只登记 ID、计数、布尔判定和 SHA-256；
+- `adapter:spark-x-agent/knowledge-base.assert-large-table-continuation`：只在领域接口已确认的固定 XLSX 精确 Parser 版本上使用真实签名游标完整遍历唯一表格，校验表头、分段边界、游标推进、96 行顺序和文档绑定；表格正文、Parser ID 与游标不进入证据；
 - `adapter:spark-x-agent/knowledge-base.assert-cleaned-state`：只接受本次运行捕获的知识库、领域文档和原始上传 UUID，在显式清理后校验活动详情/列表、领域文档/版本、检索范围、上传状态和原始文档均无可用残留；
 - `adapter:spark-x-agent/conversation.delete`：重新登录并按资源 ID 幂等删除，用于普通 `finally` 和独立补偿任务；
 - 适配器动作只接受清单声明的受限参数，不接受 URL、host、脚本、表达式或任意扩展字段；内部 HTTP 请求及重定向仍执行环境 allowlist 校验；

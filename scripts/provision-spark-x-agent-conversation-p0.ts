@@ -77,6 +77,8 @@ const runKnowledgeRetrievalSmoke =
 const runKnowledgeIsolationSmoke =
   process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_ISOLATION_SMOKE === "true";
 const runKnowledgeCleanupSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_CLEANUP_SMOKE === "true";
+const runKnowledgeLargeTableSmoke =
+  process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_LARGE_TABLE_SMOKE === "true";
 const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
 const runMcpSmoke = process.env.SPARK_X_AGENT_RUN_MCP_SMOKE === "true";
 const expectMcpUnavailable = process.env.SPARK_X_AGENT_EXPECT_MCP_UNAVAILABLE === "true";
@@ -209,6 +211,12 @@ async function ensureEnvironment(systemId: string): Promise<EnvironmentRecord> {
         host: "192.168.110.136",
         ports: [80],
         pathPrefixes: ["/trade/", "/trade-domain-api/"],
+      },
+      {
+        protocol: "http",
+        host: "192.168.110.136",
+        ports: [18121],
+        pathPrefixes: ["/mcp/document"],
       },
     ],
     timezone: "Asia/Shanghai",
@@ -2832,6 +2840,160 @@ function knowledgeCleanupDefinition(): Readonly<Record<string, unknown>> {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
           knowledgeBaseId: "${step.cleanup-knowledge-base-id}",
+        },
+      },
+    ],
+  };
+}
+
+function knowledgeLargeTableDefinition(): Readonly<Record<string, unknown>> {
+  const title = "spark-x-kb-large-table-${run.id}.xlsx";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "KB-006 大型表格分段检索与续查",
+      description:
+        "上传适配器固定生成的 96 行 XLSX，在精确解析版本上通过真实签名游标完整遍历表格，校验表头、分段连续性、行顺序和文档边界。",
+      systemKey: "spark-x-agent",
+      moduleKey: "knowledge-base",
+      priority: "P1",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: [
+        "adapter",
+        "knowledge-base",
+        "xlsx",
+        "large-table",
+        "signed-cursor",
+        "exact-version",
+        "p1",
+        "full-regression",
+      ],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 180_000,
+      caseTimeoutMs: 1_200_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:knowledge-base"],
+    steps: [
+      {
+        id: "create-large-table-knowledge-base",
+        name: "创建并登记大表知识库",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          name: "spark-x-kb-large-table-${run.id}",
+          description: "Spark X Test Platform KB-006 large table continuation fixture",
+        },
+        capture: { "large-table-knowledge-base-id": "$.knowledgeBaseId" },
+        resource: {
+          type: "spark-x-agent-knowledge-base",
+          id: "${step.large-table-knowledge-base-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/knowledge-base.cleanup",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              knowledgeBaseId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "upload-large-table-fixture",
+        name: "上传适配器内置 96 行 XLSX",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.upload-fixture",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.large-table-knowledge-base-id}",
+          fixtureKind: "large-table",
+        },
+        capture: {
+          "large-table-uploaded-document-id": "$.uploadedDocumentId",
+          "large-table-fixture-sha256": "$.fixtureSha256",
+        },
+      },
+      {
+        id: "attach-large-table-fixture",
+        name: "绑定固定 XLSX 并登记知识文档",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.attach-upload",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.large-table-knowledge-base-id}",
+          uploadedDocumentId: "${step.large-table-uploaded-document-id}",
+          title,
+        },
+        capture: { "large-table-knowledge-document-id": "$.knowledgeDocumentId" },
+      },
+      {
+        id: "wait-large-table-ready",
+        name: "等待 XLSX 解析与精确版本索引就绪",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.wait-ready",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.large-table-knowledge-base-id}",
+          knowledgeDocumentId: "${step.large-table-knowledge-document-id}",
+          expectedFixtureSha256: "${step.large-table-fixture-sha256}",
+          expectedTitle: title,
+        },
+      },
+      {
+        id: "assert-large-table-continuation",
+        name: "校验表头、签名游标、分段连续性和 96 行完整性",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.assert-large-table-continuation",
+        timeoutMs: 120_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.large-table-knowledge-base-id}",
+          knowledgeDocumentId: "${step.large-table-knowledge-document-id}",
+          expectedFixtureSha256: "${step.large-table-fixture-sha256}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "cleanup-large-table-knowledge-base",
+        name: "删除大表文档、解析索引和原始上传并归档知识库",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.cleanup",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.large-table-knowledge-base-id}",
         },
       },
     ],
@@ -5475,6 +5637,174 @@ async function executeKnowledgeCleanupSmoke(
   return run;
 }
 
+function assertKnowledgeLargeTableEvidence(run: RunDetail): void {
+  const upload = run.steps.find((step) => step.stepId === "upload-large-table-fixture");
+  const attach = run.steps.find((step) => step.stepId === "attach-large-table-fixture");
+  const ready = run.steps.find((step) => step.stepId === "wait-large-table-ready");
+  const traversal = run.steps.find((step) => step.stepId === "assert-large-table-continuation");
+  const cleanup = run.steps.find((step) => step.stepId === "cleanup-large-table-knowledge-base");
+  check(
+    upload?.outputSummary !== null &&
+      upload?.outputSummary !== undefined &&
+      attach?.outputSummary !== null &&
+      attach?.outputSummary !== undefined &&
+      ready?.outputSummary !== null &&
+      ready?.outputSummary !== undefined &&
+      traversal?.outputSummary !== null &&
+      traversal?.outputSummary !== undefined &&
+      cleanup?.outputSummary !== null &&
+      cleanup?.outputSummary !== undefined,
+    "KB-006 structured step evidence is missing",
+  );
+  check(
+    upload.outputSummary.fixtureKind === "large-table" &&
+      upload.outputSummary.uploaded === true &&
+      Number(upload.outputSummary.fixtureSizeBytes) > 0 &&
+      Number(upload.outputSummary.fixtureSizeBytes) <= 1_000_000 &&
+      typeof upload.outputSummary.fixtureSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(upload.outputSummary.fixtureSha256) &&
+      attach.outputSummary.knowledgeBaseId === upload.outputSummary.knowledgeBaseId &&
+      ready.outputSummary.knowledgeDocumentId === attach.outputSummary.knowledgeDocumentId &&
+      ready.outputSummary.fixtureSha256 === upload.outputSummary.fixtureSha256 &&
+      ready.outputSummary.ready === true,
+    "KB-006 fixed XLSX was not linked to one ready exact document version",
+  );
+  check(
+    traversal.outputSummary.knowledgeBaseId === upload.outputSummary.knowledgeBaseId &&
+      traversal.outputSummary.knowledgeDocumentId === attach.outputSummary.knowledgeDocumentId &&
+      traversal.outputSummary.fixtureSha256 === upload.outputSummary.fixtureSha256 &&
+      Number(traversal.outputSummary.pageCount) >= 2 &&
+      Number(traversal.outputSummary.pageCount) <= 64 &&
+      traversal.outputSummary.cursorCount === Number(traversal.outputSummary.pageCount) - 1 &&
+      traversal.outputSummary.tableUnitCount === 1 &&
+      traversal.outputSummary.expectedRowCount === 96 &&
+      traversal.outputSummary.recoveredRowCount === 96 &&
+      traversal.outputSummary.headerDetected === true &&
+      traversal.outputSummary.segmentsContiguous === true &&
+      traversal.outputSummary.cursorChainUnique === true &&
+      traversal.outputSummary.sourceComplete === true &&
+      traversal.outputSummary.documentBindingMatched === true &&
+      traversal.outputSummary.versionBindingMatched === true &&
+      traversal.outputSummary.fixtureMarkerMatched === true &&
+      typeof traversal.outputSummary.parserDocumentIdSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(traversal.outputSummary.parserDocumentIdSha256) &&
+      typeof traversal.outputSummary.parserVersionIdSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(traversal.outputSummary.parserVersionIdSha256) &&
+      typeof traversal.outputSummary.cursorChainSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(traversal.outputSummary.cursorChainSha256) &&
+      typeof traversal.outputSummary.reconstructedTableSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(traversal.outputSummary.reconstructedTableSha256),
+    "KB-006 table header, cursor chain, segment continuity or row closure is incomplete",
+  );
+  check(
+    Object.keys(traversal.outputSummary).sort().join(",") ===
+      [
+        "cursorChainSha256",
+        "cursorChainUnique",
+        "cursorCount",
+        "documentBindingMatched",
+        "expectedRowCount",
+        "fixtureMarkerMatched",
+        "fixtureSha256",
+        "headerDetected",
+        "knowledgeBaseId",
+        "knowledgeDocumentId",
+        "pageCount",
+        "parserDocumentIdSha256",
+        "parserVersionIdSha256",
+        "reconstructedTableSha256",
+        "recoveredRowCount",
+        "segmentsContiguous",
+        "sourceComplete",
+        "tableUnitCount",
+        "versionBindingMatched",
+      ]
+        .sort()
+        .join(","),
+    "KB-006 evidence contains unregistered fields that could expose table contents or cursor data",
+  );
+  check(
+    cleanup.outputSummary.cleaned === true &&
+      cleanup.outputSummary.knowledgeBaseId === upload.outputSummary.knowledgeBaseId &&
+      cleanup.outputSummary.knowledgeDocumentDeleteCount === 1 &&
+      cleanup.outputSummary.parserDeleteReceiptCount === 1 &&
+      cleanup.outputSummary.parserCleanupConfirmed === true &&
+      cleanup.outputSummary.rawDocumentDeleted === true &&
+      cleanup.outputSummary.knowledgeBaseArchived === true,
+    "KB-006 document, parser index, original upload or knowledge base cleanup is incomplete",
+  );
+  const evidence = JSON.stringify({ upload, attach, ready, traversal, cleanup });
+  check(
+    !evidence.includes("KB006-ROW-") &&
+      !evidence.includes("RUN_RESOURCE_ID") &&
+      !evidence.includes("opaque-signed-cursor") &&
+      !evidence.includes("next_cursor") &&
+      !evidence.includes("source_url") &&
+      !evidence.includes("snippet"),
+    "KB-006 table cells, cursor token or signed source leaked into structured evidence",
+  );
+}
+
+async function executeKnowledgeLargeTableSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-knowledge-large-table-p1-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-knowledge-large-table-p1-verification",
+      priority: 90,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent KB-006 run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(run.gateResult === "passed", `Spark X Agent KB-006 gate is ${String(run.gateResult)}`);
+  check(run.summary.passed === 1, "Spark X Agent KB-006 case did not pass");
+  check(run.firstFailure === null, "Spark X Agent KB-006 retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent KB-006 case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/knowledge-base.create",
+        "main:adapter:spark-x-agent/knowledge-base.upload-fixture",
+        "main:adapter:spark-x-agent/knowledge-base.attach-upload",
+        "main:adapter:spark-x-agent/knowledge-base.wait-ready",
+        "main:adapter:spark-x-agent/knowledge-base.assert-large-table-continuation",
+        "finally:adapter:spark-x-agent/knowledge-base.cleanup",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent KB-006 structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 1 &&
+      run.resources[0]?.resourceType === "spark-x-agent-knowledge-base" &&
+      run.resources[0].cleanupStatus === "passed" &&
+      run.resources[0].cleanupDefinition.action === "adapter:spark-x-agent/knowledge-base.cleanup",
+    "Spark X Agent KB-006 resource ledger or cleanup definition is incomplete",
+  );
+  check(run.cleanupJob === null, "normal KB-006 run unexpectedly required compensation");
+  assertKnowledgeLargeTableEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into KB-006 evidence",
+    );
+  }
+  return run;
+}
+
 async function executeSkillSmoke(
   systemId: string,
   environmentId: string,
@@ -5871,6 +6201,14 @@ const knowledgeCleanupCase = await ensureCase(
   knowledgeCleanupDefinition(),
   "新增领域文档、解析索引、版本、检索、原始上传和知识库无残留断言及三次幂等清理 P1 闭环",
 );
+const knowledgeLargeTableCase = await ensureCase(
+  system.id,
+  knowledgeBase.id,
+  environment.id,
+  "KB-006 大型表格分段检索与续查",
+  knowledgeLargeTableDefinition(),
+  "新增固定 96 行 XLSX、精确解析版本、真实签名游标、表头识别、分段连续性和完整清理 P1 闭环",
+);
 const skillPublicationCase = await ensureCase(
   system.id,
   skills.id,
@@ -6040,17 +6378,25 @@ const knowledgeCleanupSuite = await ensureSuite(
   "KB-005 显式永久删除、领域/解析/版本/检索/原始上传无残留、重复清理和 finally 幂等闭环。",
   [knowledgeCleanupCase.testCase.id],
 );
+const knowledgeLargeTableSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-knowledge-large-table-p1",
+  "星火 Agent 大型表格续查 P1 纵向切片",
+  "KB-006 固定 96 行 XLSX 在精确解析版本上通过真实签名游标完整遍历，校验表头、分段连续性、行顺序、文档边界和清理闭环。",
+  [knowledgeLargeTableCase.testCase.id],
+);
 const knowledgeModuleSuite = await ensureSuite(
   system.id,
   "spark-x-agent-knowledge-base",
   "星火 Agent 知识库回归",
-  "知识库模块 KB-001/002/003/004/005 固定夹具解析、不可变范围、真实准确检索、跨知识库隔离、永久删除无残留和完整清理。",
+  "知识库模块 KB-001/002/003/004/005/006 固定夹具解析、不可变范围、真实准确检索、跨知识库隔离、永久删除无残留、大表签名游标续查和完整清理。",
   [
     knowledgeBaseCase.testCase.id,
     knowledgeScopeCase.testCase.id,
     knowledgeRetrievalCase.testCase.id,
     knowledgeIsolationCase.testCase.id,
     knowledgeCleanupCase.testCase.id,
+    knowledgeLargeTableCase.testCase.id,
   ],
 );
 const skillSuite = await ensureSuite(
@@ -6122,8 +6468,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 23/32）",
-  "手动一键完整回归入口；当前已接入 23/32 条案例，覆盖七个模块的当前 P0、CHAT-003、TOOL-004、KB-005、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 24/32）",
+  "手动一键完整回归入口；当前已接入 24/32 条案例，覆盖七个模块的当前 P0、CHAT-003、TOOL-004、KB-005/006、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -6142,6 +6488,7 @@ const fullRegressionSuite = await ensureSuite(
     knowledgeRetrievalCase.testCase.id,
     knowledgeIsolationCase.testCase.id,
     knowledgeCleanupCase.testCase.id,
+    knowledgeLargeTableCase.testCase.id,
     skillPublicationCase.testCase.id,
     mcpConnectorCase.testCase.id,
     automationCase.testCase.id,
@@ -6162,6 +6509,7 @@ check(
     runKnowledgeRetrievalSmoke,
     runKnowledgeIsolationSmoke,
     runKnowledgeCleanupSmoke,
+    runKnowledgeLargeTableSmoke,
     runSkillSmoke,
     runMcpSmoke,
     runAutomationSmoke,
@@ -6223,18 +6571,30 @@ const run = runSmoke
                         knowledgeCleanupSuite.id,
                         password,
                       )
-                    : runSkillSmoke
-                      ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
-                      : runMcpSmoke
-                        ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
-                        : runAutomationSmoke
-                          ? await executeAutomationSmoke(
-                              system.id,
-                              environment.id,
-                              automationSuite.id,
-                              password,
-                            )
-                          : undefined;
+                    : runKnowledgeLargeTableSmoke
+                      ? await executeKnowledgeLargeTableSmoke(
+                          system.id,
+                          environment.id,
+                          knowledgeLargeTableSuite.id,
+                          password,
+                        )
+                      : runSkillSmoke
+                        ? await executeSkillSmoke(
+                            system.id,
+                            environment.id,
+                            skillSuite.id,
+                            password,
+                          )
+                        : runMcpSmoke
+                          ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
+                          : runAutomationSmoke
+                            ? await executeAutomationSmoke(
+                                system.id,
+                                environment.id,
+                                automationSuite.id,
+                                password,
+                              )
+                            : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
   : runCancelSmoke
@@ -6253,13 +6613,15 @@ const scenario = runContextSmoke
                 ? "spark-x-agent-knowledge-isolation-p0"
                 : runKnowledgeCleanupSmoke
                   ? "spark-x-agent-knowledge-cleanup-p1"
-                  : runSkillSmoke
-                    ? "spark-x-agent-skills-p0"
-                    : runMcpSmoke
-                      ? "spark-x-agent-mcp-p0"
-                      : runAutomationSmoke
-                        ? "spark-x-agent-automations-p0"
-                        : "spark-x-agent-core-smoke";
+                  : runKnowledgeLargeTableSmoke
+                    ? "spark-x-agent-knowledge-large-table-p1"
+                    : runSkillSmoke
+                      ? "spark-x-agent-skills-p0"
+                      : runMcpSmoke
+                        ? "spark-x-agent-mcp-p0"
+                        : runAutomationSmoke
+                          ? "spark-x-agent-automations-p0"
+                          : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -6286,16 +6648,18 @@ console.info(
                         ? 36
                         : runKnowledgeCleanupSmoke
                           ? 34
-                          : runSkillSmoke
-                            ? 12
-                            : runMcpSmoke
-                              ? expectMcpUnavailable
-                                ? 10
-                                : 12
-                              : runAutomationSmoke
-                                ? 20
-                                : 161,
-    caseCount: 23,
+                          : runKnowledgeLargeTableSmoke
+                            ? 30
+                            : runSkillSmoke
+                              ? 12
+                              : runMcpSmoke
+                                ? expectMcpUnavailable
+                                  ? 10
+                                  : 12
+                                : runAutomationSmoke
+                                  ? 20
+                                  : 161,
+    caseCount: 24,
     coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -6335,6 +6699,8 @@ console.info(
     knowledgeIsolationCaseVersionId: knowledgeIsolationCase.version.id,
     knowledgeCleanupCaseId: knowledgeCleanupCase.testCase.id,
     knowledgeCleanupCaseVersionId: knowledgeCleanupCase.version.id,
+    knowledgeLargeTableCaseId: knowledgeLargeTableCase.testCase.id,
+    knowledgeLargeTableCaseVersionId: knowledgeLargeTableCase.version.id,
     skillPublicationCaseId: skillPublicationCase.testCase.id,
     skillPublicationCaseVersionId: skillPublicationCase.version.id,
     mcpConnectorCaseId: mcpConnectorCase.testCase.id,
@@ -6362,6 +6728,7 @@ console.info(
     knowledgeRetrievalSuiteId: knowledgeRetrievalSuite.id,
     knowledgeIsolationSuiteId: knowledgeIsolationSuite.id,
     knowledgeCleanupSuiteId: knowledgeCleanupSuite.id,
+    knowledgeLargeTableSuiteId: knowledgeLargeTableSuite.id,
     knowledgeModuleSuiteId: knowledgeModuleSuite.id,
     skillSuiteId: skillSuite.id,
     mcpSuiteId: mcpSuite.id,

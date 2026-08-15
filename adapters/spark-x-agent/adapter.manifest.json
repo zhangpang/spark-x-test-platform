@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -932,7 +932,7 @@
             "username": { "type": "string", "minLength": 1, "maxLength": 200 },
             "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
             "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "fixtureKind": { "type": "string", "enum": ["order", "account-chart"] }
+            "fixtureKind": { "type": "string", "enum": ["order", "account-chart", "large-table"] }
           }
         },
         "outputSchema": {
@@ -951,7 +951,7 @@
             "knowledgeBaseId": { "type": "string", "format": "uuid" },
             "uploadedDocumentId": { "type": "string", "format": "uuid" },
             "uploaded": { "const": true },
-            "fixtureKind": { "type": "string", "enum": ["order", "account-chart"] },
+            "fixtureKind": { "type": "string", "enum": ["order", "account-chart", "large-table"] },
             "fixtureSizeBytes": { "type": "integer", "minimum": 1, "maximum": 1000000 },
             "fixtureSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
             "fileNameSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
@@ -1066,6 +1066,78 @@
             "titleMatched": { "const": true },
             "fixtureSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
             "pollAttempts": { "type": "integer", "minimum": 1, "maximum": 120 }
+          }
+        }
+      },
+      {
+        "key": "knowledge-base.assert-large-table-continuation",
+        "name": "校验大表分段与续查游标",
+        "description": "在已授权知识文档的精确解析版本上执行完整表格遍历，校验表头、签名游标、分段连续性、行基数和文档边界。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 120000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "knowledgeBaseId",
+            "knowledgeDocumentId",
+            "expectedFixtureSha256"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "knowledgeBaseId": { "type": "string", "format": "uuid" },
+            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
+            "expectedFixtureSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "knowledgeBaseId",
+            "knowledgeDocumentId",
+            "fixtureSha256",
+            "parserDocumentIdSha256",
+            "parserVersionIdSha256",
+            "pageCount",
+            "cursorCount",
+            "tableUnitCount",
+            "expectedRowCount",
+            "recoveredRowCount",
+            "headerDetected",
+            "segmentsContiguous",
+            "cursorChainUnique",
+            "sourceComplete",
+            "documentBindingMatched",
+            "versionBindingMatched",
+            "fixtureMarkerMatched",
+            "cursorChainSha256",
+            "reconstructedTableSha256"
+          ],
+          "properties": {
+            "knowledgeBaseId": { "type": "string", "format": "uuid" },
+            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
+            "fixtureSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "parserDocumentIdSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "parserVersionIdSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "pageCount": { "type": "integer", "minimum": 2, "maximum": 64 },
+            "cursorCount": { "type": "integer", "minimum": 1, "maximum": 63 },
+            "tableUnitCount": { "const": 1 },
+            "expectedRowCount": { "const": 96 },
+            "recoveredRowCount": { "const": 96 },
+            "headerDetected": { "const": true },
+            "segmentsContiguous": { "const": true },
+            "cursorChainUnique": { "const": true },
+            "sourceComplete": { "const": true },
+            "documentBindingMatched": { "const": true },
+            "versionBindingMatched": { "const": true },
+            "fixtureMarkerMatched": { "const": true },
+            "cursorChainSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "reconstructedTableSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
           }
         }
       },

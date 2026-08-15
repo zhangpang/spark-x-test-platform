@@ -20,6 +20,12 @@ const environment: HttpExecutionEnvironment = {
       ports: [80],
       pathPrefixes: ["/trade/", "/trade-domain-api/"],
     },
+    {
+      protocol: "http",
+      host: "192.168.110.136",
+      ports: [18121],
+      pathPrefixes: ["/mcp/document"],
+    },
   ],
 };
 
@@ -143,11 +149,77 @@ function hashCanonical(value: unknown): string {
   return createHash("sha256").update(canonical(value)).digest("hex");
 }
 
+function kb006TableText(resourceId = knowledgeBaseId): string {
+  return [
+    "ROW_ID | RUN_RESOURCE_ID | ACCOUNT_CODE | AMOUNT_CNY",
+    ...Array.from({ length: 96 }, (_, index) =>
+      [
+        `KB006-ROW-${String(index + 1).padStart(3, "0")}`,
+        resourceId,
+        `ACCT-${String(1001 + index)}`,
+        String(10_000 + index * 37),
+      ].join(" | "),
+    ),
+  ].join("\n");
+}
+
+function kb006ContinuationResponse(
+  parserDocumentId: string,
+  parserVersionId: string,
+  fullText: string,
+  pageNumber: number,
+  start: number,
+  end: number,
+  final: boolean,
+  nextCursor: string | null,
+  overrides: Readonly<Record<string, unknown>> = {},
+): Response {
+  const text = fullText.slice(start, end);
+  return jsonResponse({
+    jsonrpc: "2.0",
+    id: `spark-x-kb006-page-${pageNumber}`,
+    result: {
+      content: [],
+      isError: false,
+      structuredContent: {
+        items: [
+          {
+            unit_id: `tables:${parserDocumentId}:${parserVersionId}:1`,
+            kind: "table",
+            document_id: parserDocumentId,
+            version_id: parserVersionId,
+            version_number: 1,
+            text,
+            text_segment: { start, end, unit_complete: final },
+            table_index: 0,
+            ...overrides,
+          },
+        ],
+        coverage: {
+          requested: "complete",
+          source_complete: final,
+          total_units: 1,
+          completed_units: final ? 1 : 0,
+          delivered_chars: end,
+        },
+        return_budget: {
+          max_chars: 1_000,
+          used_chars: text.length,
+          max_units: 1,
+          returned_items: 1,
+        },
+        has_more: !final,
+        next_cursor: nextCursor,
+      },
+    },
+  });
+}
+
 describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.19.0",
+      version: "0.20.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -214,6 +286,10 @@ describe("spark-x-agent adapter", () => {
           }),
           expect.objectContaining({
             key: "knowledge-base.wait-ready",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "knowledge-base.assert-large-table-continuation",
             actionLevel: "write",
           }),
           expect.objectContaining({
@@ -2799,6 +2875,75 @@ describe("spark-x-agent adapter", () => {
     expect(serialized).not.toContain("memory-only-access-token-value");
   });
 
+  it("uploads a deterministic built-in XLSX large table without accepting arbitrary cells", async () => {
+    let uploadedBytes: Uint8Array | undefined;
+    let uploadedName: string | undefined;
+    let uploadedType: string | undefined;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockImplementationOnce(async (_input, init) => {
+        const form = init?.body;
+        if (!(form instanceof FormData)) throw new Error("expected multipart form");
+        const rawMetadata = form.get("metadata");
+        const file = form.get("file");
+        if (typeof rawMetadata !== "string" || !(file instanceof Blob)) {
+          throw new Error("expected fixed large-table fixture");
+        }
+        uploadedBytes = new Uint8Array(await file.arrayBuffer());
+        uploadedName = (file as Blob & { readonly name?: string }).name;
+        uploadedType = file.type;
+        const contentSha256 = createHash("sha256").update(uploadedBytes).digest("hex");
+        expect(JSON.parse(rawMetadata)).toEqual({
+          filename: uploadedName,
+          mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          size_bytes: uploadedBytes.byteLength,
+          sha256: contentSha256,
+          conversation_id: null,
+          folder_id: null,
+        });
+        return jsonResponse({
+          success: true,
+          data: {
+            id: uploadedDocumentId,
+            name: uploadedName,
+            size_bytes: uploadedBytes.byteLength,
+            content_sha256: contentSha256,
+          },
+        });
+      });
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/knowledge-base.upload-fixture",
+      environment,
+      { ...credentials, knowledgeBaseId, fixtureKind: "large-table" },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(uploadedName).toBe(`spark-x-large-table-${knowledgeBaseId}.xlsx`);
+    expect(uploadedType).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    expect(uploadedBytes?.slice(0, 4)).toEqual(new Uint8Array([0x50, 0x4b, 0x03, 0x04]));
+    const storedWorkbook = new TextDecoder().decode(uploadedBytes);
+    expect(storedWorkbook).toContain("KB006_LARGE_TABLE");
+    expect(storedWorkbook).toContain("KB006-ROW-001");
+    expect(storedWorkbook).toContain("KB006-ROW-096");
+    expect(output).toMatchObject({
+      knowledgeBaseId,
+      uploadedDocumentId,
+      uploaded: true,
+      fixtureKind: "large-table",
+      fixtureSizeBytes: uploadedBytes?.byteLength,
+    });
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain("KB006-ROW-001");
+    expect(serialized).not.toContain("RUN_RESOURCE_ID");
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
   it("revalidates a fixture upload redirect before resending credentials", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
@@ -2967,6 +3112,392 @@ describe("spark-x-agent adapter", () => {
       titleMatched: true,
       fixtureSha256,
       pollAttempts: 1,
+    });
+  });
+
+  it("traverses the fixed large table with exact-version signed cursors and bounded evidence", async () => {
+    const fixtureSha256 = "a".repeat(64);
+    const parserDocumentId = "parser-document-kb006";
+    const parserVersionId = "parser-version-kb006";
+    const fullText = kb006TableText();
+    const chunks = Array.from({ length: Math.ceil(fullText.length / 1_000) }, (_, index) => ({
+      start: index * 1_000,
+      end: Math.min(fullText.length, (index + 1) * 1_000),
+    }));
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            id: knowledgeDocumentId,
+            knowledge_base_id: knowledgeBaseId,
+            status: "completed",
+            current_version_number: 1,
+            parser_document_id: parserDocumentId,
+            current_version_id: parserVersionId,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                knowledge_document_id: knowledgeDocumentId,
+                version_number: 1,
+                status: "completed",
+                content_hash: fixtureSha256,
+                parser_version_id: parserVersionId,
+              },
+            ],
+          },
+        }),
+      );
+    chunks.forEach((chunk, index) => {
+      const final = index === chunks.length - 1;
+      fetcher.mockResolvedValueOnce(
+        kb006ContinuationResponse(
+          parserDocumentId,
+          parserVersionId,
+          fullText,
+          index + 1,
+          chunk.start,
+          chunk.end,
+          final,
+          final ? null : `opaque-signed-cursor-${index + 1}`,
+        ),
+      );
+    });
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/knowledge-base.assert-large-table-continuation",
+      environment,
+      {
+        ...credentials,
+        knowledgeBaseId,
+        knowledgeDocumentId,
+        expectedFixtureSha256: fixtureSha256,
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(urlOf(fetcher.mock.calls[3]?.[0] as URL | RequestInfo)).toBe(
+      "http://192.168.110.136:18121/mcp/document",
+    );
+    const firstBody = fetcher.mock.calls[3]?.[1]?.body;
+    if (typeof firstBody !== "string") throw new Error("expected first MCP JSON body");
+    expect(JSON.parse(firstBody)).toMatchObject({
+      jsonrpc: "2.0",
+      id: "spark-x-kb006-page-1",
+      method: "tools/call",
+      params: {
+        name: "retrieve_parsed_documents",
+        arguments: {
+          coverage: "complete",
+          targets: ["tables"],
+          filters: {
+            document_ids: [parserDocumentId],
+            version_scope: "exact",
+            version_id: parserVersionId,
+          },
+          max_return_chars: 1_000,
+          max_units: 1,
+        },
+      },
+    });
+    const secondBody = fetcher.mock.calls[4]?.[1]?.body;
+    if (typeof secondBody !== "string") throw new Error("expected continuation MCP JSON body");
+    const secondArguments = (
+      JSON.parse(secondBody) as Readonly<{
+        params: Readonly<{ arguments: Readonly<Record<string, unknown>> }>;
+      }>
+    ).params.arguments;
+    expect(secondArguments).toMatchObject({
+      coverage: "complete",
+      cursor: "opaque-signed-cursor-1",
+      max_return_chars: 1_000,
+      max_units: 1,
+    });
+    expect(secondArguments).not.toHaveProperty("filters");
+    expect(output).toMatchObject({
+      knowledgeBaseId,
+      knowledgeDocumentId,
+      fixtureSha256,
+      pageCount: chunks.length,
+      cursorCount: chunks.length - 1,
+      tableUnitCount: 1,
+      expectedRowCount: 96,
+      recoveredRowCount: 96,
+      headerDetected: true,
+      segmentsContiguous: true,
+      cursorChainUnique: true,
+      sourceComplete: true,
+      documentBindingMatched: true,
+      versionBindingMatched: true,
+      fixtureMarkerMatched: true,
+    });
+    expect(output.parserDocumentIdSha256).toBe(
+      createHash("sha256").update(parserDocumentId).digest("hex"),
+    );
+    expect(output.parserVersionIdSha256).toBe(
+      createHash("sha256").update(parserVersionId).digest("hex"),
+    );
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain("KB006-ROW-001");
+    expect(serialized).not.toContain("opaque-signed-cursor");
+    expect(serialized).not.toContain(parserDocumentId);
+    expect(serialized).not.toContain(parserVersionId);
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("fails at the exact root cause when a large-table cursor skips a text boundary", async () => {
+    const fixtureSha256 = "a".repeat(64);
+    const parserDocumentId = "parser-document-kb006";
+    const parserVersionId = "parser-version-kb006";
+    const fullText = kb006TableText();
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            id: knowledgeDocumentId,
+            knowledge_base_id: knowledgeBaseId,
+            status: "completed",
+            current_version_number: 1,
+            parser_document_id: parserDocumentId,
+            current_version_id: parserVersionId,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                knowledge_document_id: knowledgeDocumentId,
+                version_number: 1,
+                status: "completed",
+                content_hash: fixtureSha256,
+                parser_version_id: parserVersionId,
+              },
+            ],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        kb006ContinuationResponse(
+          parserDocumentId,
+          parserVersionId,
+          fullText,
+          1,
+          0,
+          1_000,
+          false,
+          "opaque-signed-cursor-1",
+        ),
+      )
+      .mockResolvedValueOnce(
+        kb006ContinuationResponse(
+          parserDocumentId,
+          parserVersionId,
+          fullText,
+          2,
+          1_001,
+          2_000,
+          false,
+          "opaque-signed-cursor-2",
+        ),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.assert-large-table-continuation",
+        environment,
+        {
+          ...credentials,
+          knowledgeBaseId,
+          knowledgeDocumentId,
+          expectedFixtureSha256: fixtureSha256,
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_KNOWLEDGE_TABLE_SEGMENT_DISCONTINUITY",
+        classification: "test_failed",
+      },
+    });
+  });
+
+  it("fails closed when a large-table continuation returns another parser document", async () => {
+    const fixtureSha256 = "a".repeat(64);
+    const parserDocumentId = "parser-document-kb006";
+    const parserVersionId = "parser-version-kb006";
+    const fullText = kb006TableText();
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            id: knowledgeDocumentId,
+            knowledge_base_id: knowledgeBaseId,
+            status: "completed",
+            current_version_number: 1,
+            parser_document_id: parserDocumentId,
+            current_version_id: parserVersionId,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                knowledge_document_id: knowledgeDocumentId,
+                version_number: 1,
+                status: "completed",
+                content_hash: fixtureSha256,
+                parser_version_id: parserVersionId,
+              },
+            ],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        kb006ContinuationResponse(
+          parserDocumentId,
+          parserVersionId,
+          fullText,
+          1,
+          0,
+          1_000,
+          false,
+          "opaque-signed-cursor-1",
+          { document_id: "different-parser-document" },
+        ),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.assert-large-table-continuation",
+        environment,
+        {
+          ...credentials,
+          knowledgeBaseId,
+          knowledgeDocumentId,
+          expectedFixtureSha256: fixtureSha256,
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_KNOWLEDGE_TABLE_DOCUMENT_BOUNDARY_FAILED",
+        classification: "test_failed",
+      },
+    });
+  });
+
+  it("rejects a repeated signed continuation cursor before content assertions", async () => {
+    const fixtureSha256 = "a".repeat(64);
+    const parserDocumentId = "parser-document-kb006";
+    const parserVersionId = "parser-version-kb006";
+    const fullText = kb006TableText();
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            id: knowledgeDocumentId,
+            knowledge_base_id: knowledgeBaseId,
+            status: "completed",
+            current_version_number: 1,
+            parser_document_id: parserDocumentId,
+            current_version_id: parserVersionId,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                knowledge_document_id: knowledgeDocumentId,
+                version_number: 1,
+                status: "completed",
+                content_hash: fixtureSha256,
+                parser_version_id: parserVersionId,
+              },
+            ],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        kb006ContinuationResponse(
+          parserDocumentId,
+          parserVersionId,
+          fullText,
+          1,
+          0,
+          1_000,
+          false,
+          "repeated-signed-cursor",
+        ),
+      )
+      .mockResolvedValueOnce(
+        kb006ContinuationResponse(
+          parserDocumentId,
+          parserVersionId,
+          fullText,
+          2,
+          1_000,
+          2_000,
+          false,
+          "repeated-signed-cursor",
+        ),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.assert-large-table-continuation",
+        environment,
+        {
+          ...credentials,
+          knowledgeBaseId,
+          knowledgeDocumentId,
+          expectedFixtureSha256: fixtureSha256,
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_KNOWLEDGE_TABLE_CURSOR_REPEATED",
+        classification: "test_failed",
+      },
     });
   });
 
