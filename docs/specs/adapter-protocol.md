@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -32,6 +32,7 @@
       { "key": "conversation.create" },
       { "key": "conversation.assert-recent" },
       { "key": "conversation.rename-and-assert-pagination" },
+      { "key": "conversation.assert-deleted-state" },
       { "key": "chat.ask" },
       { "key": "chat.assert-history" },
       { "key": "chat.assert-context-history" },
@@ -189,8 +190,8 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.9.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
-`conversation.rename-and-assert-pagination`、`chat.ask`、
+当前 `0.10.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+`conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
 `chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-conversation-scope`、`knowledge-base.cleanup` 和
@@ -207,6 +208,12 @@ telemetry.*
 扫描的页内位置一致；重复、遗漏、标题未持久化或顺序漂移分别保留稳定首错。活动会话超过 200 条时以测试
 环境数据超限返回 `environment_failed`，不无限扫描。结构化输出只保留会话 ID、页数、计数、布尔判定和
 标题 SHA-256，不返回列表标题或登录 Token。
+`conversation.assert-recent` 同时要求目标 UUID 在首个活动分页中恰好出现一次；重复投影在读取历史前保留为
+产品首错。`conversation.assert-deleted-state` 兼容被测系统软删除和未来硬删除：详情只允许返回
+`status=deleted` 或 404，活动列表中目标 UUID 必须为零，删除列表中必须恰好为一。状态列表完整扫描限制为
+1000 条/10 页，超限作为测试环境数据治理问题返回 `environment_failed`；输出仅含 ID、状态枚举、页数和计数。
+CONV-004 在首次删除后执行该断言，再次调用同一幂等删除动作，最后仍由 `finally` 和资源台账进行第三次清理，
+任何断言失败都不会跳过清理或覆盖首次失败。
 `chat.ask` 只向此前已创建并登记的测试会话发送消息，将 SSE 限制在 1 MB 内，要求流中会话
 ID 与登记 ID 一致、存在内容事件和唯一终态 `done`，并只输出事件计数、长度与最终回答 SHA-256；
 `chat.assert-history` 使用该哈希确认单轮落库回答与流式终态一致；`chat.assert-context-history` 同时核对两轮

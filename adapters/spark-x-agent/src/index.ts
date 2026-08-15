@@ -14,6 +14,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/conversation.create",
   "adapter:spark-x-agent/conversation.assert-recent",
   "adapter:spark-x-agent/conversation.rename-and-assert-pagination",
+  "adapter:spark-x-agent/conversation.assert-deleted-state",
   "adapter:spark-x-agent/conversation.delete",
   "adapter:spark-x-agent/chat.ask",
   "adapter:spark-x-agent/chat.assert-history",
@@ -95,6 +96,7 @@ export const sparkXAgentActionCapabilities = [
       required: [
         "conversationId",
         "listed",
+        "occurrenceCount",
         "recentPosition",
         "messageCount",
         "messageCountSource",
@@ -102,6 +104,7 @@ export const sparkXAgentActionCapabilities = [
       properties: {
         conversationId: { type: "string", format: "uuid" },
         listed: { const: true },
+        occurrenceCount: { const: 1 },
         recentPosition: { type: "integer", minimum: 0 },
         messageCount: { type: "integer", minimum: 0 },
         messageCountSource: { const: "conversation-history" },
@@ -166,6 +169,47 @@ export const sparkXAgentActionCapabilities = [
         missingCount: { const: 0 },
         crossPage: { const: true },
         orderStable: { const: true },
+      },
+    },
+  },
+  {
+    key: "conversation.assert-deleted-state",
+    name: "校验会话删除状态",
+    description:
+      "验证已删除会话不再出现在活动列表、删除列表中恰好保留一条，并只暴露删除态结构化证据。",
+    actionLevel: "read",
+    defaultTimeoutMs: 20_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "conversationId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "detailState",
+        "activeOccurrences",
+        "deletedOccurrences",
+        "activePagesScanned",
+        "deletedPagesScanned",
+        "uniqueDeletedRecord",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        detailState: { enum: ["deleted", "missing"] },
+        activeOccurrences: { const: 0 },
+        deletedOccurrences: { const: 1 },
+        activePagesScanned: { type: "integer", minimum: 1, maximum: 10 },
+        deletedPagesScanned: { type: "integer", minimum: 1, maximum: 10 },
+        uniqueDeletedRecord: { const: true },
       },
     },
   },
@@ -1101,7 +1145,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.9.0",
+  version: "0.10.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1118,7 +1162,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "full-regression-conversation-pagination" as const;
+export const sparkXAgentAdapterPhase = "full-regression-conversation-delete" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -2196,6 +2240,93 @@ async function scanConversationPagination(
     expectedLocations,
     distinctExpectedPages: expectedPages.size,
   };
+}
+
+interface ConversationOccurrenceScan {
+  readonly occurrences: number;
+  readonly pagesScanned: number;
+}
+
+async function scanConversationOccurrences(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  conversationId: string,
+  status: "active" | "deleted",
+  remainingOptions: () => SparkXAgentExecutionOptions,
+): Promise<ConversationOccurrenceScan> {
+  const pageSize = 100;
+  const maxStatusConversations = 1_000;
+  let occurrences = 0;
+  let pagesScanned = 0;
+  let page = 1;
+  let pageCount = 1;
+
+  for (;;) {
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations?page=${page}&per_page=${pageSize}&status=${encodeURIComponent(status)}`,
+        ),
+      },
+      remainingOptions(),
+    );
+    accepted(response, "SPARK_X_AGENT_CONVERSATION_DELETED_LIST_FAILED");
+    const data = dataEnvelope(
+      response.body,
+      "SPARK_X_AGENT_CONVERSATION_DELETED_LIST_RESPONSE_INVALID",
+    );
+    const items = Array.isArray(data.items) ? data.items.map(objectValue) : null;
+    if (
+      items === null ||
+      items.some((item) => item === null) ||
+      typeof data.total !== "number" ||
+      !Number.isSafeInteger(data.total) ||
+      data.total < 0 ||
+      data.total > maxStatusConversations ||
+      data.page !== page ||
+      data.per_page !== pageSize ||
+      items.length > pageSize
+    ) {
+      if (
+        typeof data.total === "number" &&
+        Number.isSafeInteger(data.total) &&
+        data.total > maxStatusConversations
+      ) {
+        throw environmentFailure(
+          "SPARK_X_AGENT_CONVERSATION_STATUS_LIST_BOUND_EXCEEDED",
+          "星火 Agent 测试账号的会话状态列表超过删除回归安全上限，请先归档测试数据。",
+        );
+      }
+      throw apiFailure(
+        "SPARK_X_AGENT_CONVERSATION_DELETED_LIST_RESPONSE_INVALID",
+        "星火 Agent 会话状态列表缺少受限分页字段。",
+      );
+    }
+    pagesScanned += 1;
+    if (page === 1) pageCount = Math.max(1, Math.ceil(data.total / pageSize));
+    for (const item of items as readonly Readonly<Record<string, unknown>>[]) {
+      if (typeof item.id !== "string" || !uuidPattern.test(item.id)) {
+        throw apiFailure(
+          "SPARK_X_AGENT_CONVERSATION_DELETED_LIST_RESPONSE_INVALID",
+          "星火 Agent 会话状态列表包含无效会话标识。",
+        );
+      }
+      if (item.id === conversationId) occurrences += 1;
+    }
+    if (page >= pageCount || items.length < pageSize) break;
+    page += 1;
+    if (page > 10) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_CONVERSATION_STATUS_LIST_BOUND_EXCEEDED",
+        "星火 Agent 会话状态列表扫描超过安全页数上限。",
+      );
+    }
+  }
+
+  return { occurrences, pagesScanned };
 }
 
 interface UploadedFixtureProjection {
@@ -4189,6 +4320,72 @@ export async function executeSparkXAgentAction(
     };
   }
 
+  if (action === "adapter:spark-x-agent/conversation.assert-deleted-state") {
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const detailResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(`/conversations/${encodeURIComponent(conversationId)}`),
+      },
+      remainingOptions(),
+    );
+    let detailState: "deleted" | "missing";
+    if (detailResponse.status === 404) {
+      detailState = "missing";
+    } else {
+      accepted(detailResponse, "SPARK_X_AGENT_CONVERSATION_DELETED_DETAIL_FAILED");
+      const detail = dataEnvelope(
+        detailResponse.body,
+        "SPARK_X_AGENT_CONVERSATION_DELETED_DETAIL_RESPONSE_INVALID",
+      );
+      const conversation = objectValue(detail.conversation);
+      if (conversation?.id !== conversationId || conversation.status !== "deleted") {
+        throw apiFailure(
+          "SPARK_X_AGENT_CONVERSATION_DELETED_DETAIL_RESPONSE_INVALID",
+          "星火 Agent 已删除会话详情没有返回目标删除状态。",
+        );
+      }
+      detailState = "deleted";
+    }
+    const active = await scanConversationOccurrences(
+      environment,
+      token,
+      conversationId,
+      "active",
+      remainingOptions,
+    );
+    if (active.occurrences !== 0) {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONVERSATION_DELETE_ACTIVE_FAILED",
+        "星火 Agent 已删除会话仍出现在活动会话列表。",
+      );
+    }
+    const deleted = await scanConversationOccurrences(
+      environment,
+      token,
+      conversationId,
+      "deleted",
+      remainingOptions,
+    );
+    if (deleted.occurrences !== 1) {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONVERSATION_DELETE_CARDINALITY_FAILED",
+        "星火 Agent 删除列表没有且仅有一条目标会话记录。",
+      );
+    }
+    return {
+      conversationId,
+      detailState,
+      activeOccurrences: active.occurrences,
+      deletedOccurrences: deleted.occurrences,
+      activePagesScanned: active.pagesScanned,
+      deletedPagesScanned: deleted.pagesScanned,
+      uniqueDeletedRecord: true,
+    };
+  }
+
   const conversationId = requiredString(params, "conversationId", variables, 100);
   if (action === "adapter:spark-x-agent/tool.assert-history") {
     const expectedUserText = requiredString(params, "expectedUserText", variables, 20_000);
@@ -4602,11 +4799,13 @@ export async function executeSparkXAgentAction(
           .map(objectValue)
           .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
       : [];
-    const position = items.findIndex((item) => item?.id === conversationId);
+    const occurrenceCount = items.filter((item) => item.id === conversationId).length;
+    const position = items.findIndex((item) => item.id === conversationId);
     const firstUnpinned = items.findIndex((item) => item?.is_pinned !== true);
     const found = position < 0 ? null : items[position];
     if (
       position < 0 ||
+      occurrenceCount !== 1 ||
       firstUnpinned < 0 ||
       position !== firstUnpinned ||
       found?.title !== expectedTitle
@@ -4654,6 +4853,7 @@ export async function executeSparkXAgentAction(
     return {
       conversationId,
       listed: true,
+      occurrenceCount,
       recentPosition: position,
       messageCount,
       messageCountSource: "conversation-history",

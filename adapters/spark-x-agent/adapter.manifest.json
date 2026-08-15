@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -71,6 +71,7 @@
           "required": [
             "conversationId",
             "listed",
+            "occurrenceCount",
             "recentPosition",
             "messageCount",
             "messageCountSource"
@@ -78,6 +79,7 @@
           "properties": {
             "conversationId": { "type": "string", "format": "uuid" },
             "listed": { "const": true },
+            "occurrenceCount": { "const": 1 },
             "recentPosition": { "type": "integer", "minimum": 0 },
             "messageCount": { "type": "integer", "minimum": 0 },
             "messageCountSource": { "const": "conversation-history" }
@@ -141,6 +143,46 @@
             "missingCount": { "const": 0 },
             "crossPage": { "const": true },
             "orderStable": { "const": true }
+          }
+        }
+      },
+      {
+        "key": "conversation.assert-deleted-state",
+        "name": "校验会话删除状态",
+        "description": "验证已删除会话不再出现在活动列表、删除列表中恰好保留一条，并只暴露删除态结构化证据。",
+        "actionLevel": "read",
+        "defaultTimeoutMs": 20000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "conversationId"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "detailState",
+            "activeOccurrences",
+            "deletedOccurrences",
+            "activePagesScanned",
+            "deletedPagesScanned",
+            "uniqueDeletedRecord"
+          ],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "detailState": { "enum": ["deleted", "missing"] },
+            "activeOccurrences": { "const": 0 },
+            "deletedOccurrences": { "const": 1 },
+            "activePagesScanned": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "deletedPagesScanned": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "uniqueDeletedRecord": { "const": true }
           }
         }
       },

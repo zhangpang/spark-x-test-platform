@@ -68,6 +68,8 @@ const runConversationReopenSmoke =
   process.env.SPARK_X_AGENT_RUN_CONVERSATION_REOPEN_SMOKE === "true";
 const runConversationPaginationSmoke =
   process.env.SPARK_X_AGENT_RUN_CONVERSATION_PAGINATION_SMOKE === "true";
+const runConversationDeleteSmoke =
+  process.env.SPARK_X_AGENT_RUN_CONVERSATION_DELETE_SMOKE === "true";
 const runKnowledgeSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_SMOKE === "true";
 const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
 const runMcpSmoke = process.env.SPARK_X_AGENT_RUN_MCP_SMOKE === "true";
@@ -506,6 +508,132 @@ function conversationPaginationDefinition(): Readonly<Record<string, unknown>> {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
           conversationId: "${step.pagination-oldest-id}",
+        },
+      },
+    ],
+  };
+}
+
+function conversationDeleteDefinition(): Readonly<Record<string, unknown>> {
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "CONV-004 会话删除与重复记录防护",
+      description:
+        "创建并唯一定位运行会话，执行软删除后验证活动列表零记录、删除列表唯一记录，再次删除并由 finally 完成幂等清理。",
+      systemKey: "spark-x-agent",
+      moduleKey: "recent-conversations",
+      priority: "P1",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "conversation", "p1", "full-regression", "delete", "idempotency"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 20_000,
+      caseTimeoutMs: 120_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:recent-conversations"],
+    steps: [
+      {
+        id: "create-delete-conversation",
+        name: "创建并登记待删除会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: "spark-x-delete-${run.id}",
+        },
+        capture: { "delete-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.delete-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "assert-delete-conversation-unique",
+        name: "确认活动列表只有一条目标会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.assert-recent",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.delete-conversation-id}",
+          title: "spark-x-delete-${run.id}",
+          expectedMessageCount: 0,
+        },
+      },
+      {
+        id: "delete-conversation-main",
+        name: "首次删除目标会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.delete-conversation-id}",
+        },
+      },
+      {
+        id: "assert-conversation-deleted-state",
+        name: "校验活动列表缺失和删除列表唯一记录",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.assert-deleted-state",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.delete-conversation-id}",
+        },
+      },
+      {
+        id: "delete-conversation-again",
+        name: "再次删除验证幂等结果",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.delete-conversation-id}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "delete-conversation-finally",
+        name: "由 finally 再次执行资源清理",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.delete-conversation-id}",
         },
       },
     ],
@@ -2272,6 +2400,116 @@ async function executeConversationPaginationSmoke(
   return run;
 }
 
+function assertConversationDeleteEvidence(run: RunDetail): void {
+  const create = run.steps.find((step) => step.stepId === "create-delete-conversation");
+  const recent = run.steps.find((step) => step.stepId === "assert-delete-conversation-unique");
+  const deletedState = run.steps.find(
+    (step) => step.stepId === "assert-conversation-deleted-state",
+  );
+  const deleteSteps = run.steps.filter(
+    (step) => step.action === "adapter:spark-x-agent/conversation.delete",
+  );
+  const conversationId = create?.outputSummary?.conversationId;
+  check(
+    typeof conversationId === "string" &&
+      recent?.outputSummary?.conversationId === conversationId &&
+      recent.outputSummary.listed === true &&
+      recent.outputSummary.occurrenceCount === 1 &&
+      recent.outputSummary.messageCount === 0 &&
+      recent.outputSummary.messageCountSource === "conversation-history",
+    "CONV-004 did not prove a unique active conversation before deletion",
+  );
+  check(
+    deletedState?.outputSummary?.conversationId === conversationId &&
+      ["deleted", "missing"].includes(String(deletedState.outputSummary.detailState)) &&
+      deletedState.outputSummary.activeOccurrences === 0 &&
+      deletedState.outputSummary.deletedOccurrences === 1 &&
+      typeof deletedState.outputSummary.activePagesScanned === "number" &&
+      deletedState.outputSummary.activePagesScanned >= 1 &&
+      typeof deletedState.outputSummary.deletedPagesScanned === "number" &&
+      deletedState.outputSummary.deletedPagesScanned >= 1 &&
+      deletedState.outputSummary.uniqueDeletedRecord === true,
+    "CONV-004 deleted-state projection is incomplete or duplicated",
+  );
+  check(
+    deleteSteps.length === 3 &&
+      deleteSteps.every(
+        (step) =>
+          step.outputSummary?.conversationId === conversationId &&
+          step.outputSummary.deleted === true,
+      ),
+    "CONV-004 first delete, repeated delete or finally cleanup was not idempotently successful",
+  );
+  check(
+    !JSON.stringify({ recent, deletedState, deleteSteps }).includes(`spark-x-delete-${run.id}`) &&
+      !JSON.stringify(deletedState).includes("memory-only-access-token"),
+    "CONV-004 title or in-memory token leaked into deletion evidence",
+  );
+}
+
+async function executeConversationDeleteSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-conversation-delete-p1-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-conversation-delete-p1-verification",
+      priority: 90,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent conversation deletion run was not accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(
+    run.gateResult === "passed",
+    `Spark X Agent conversation deletion gate is ${String(run.gateResult)}`,
+  );
+  check(run.summary.passed === 1, "Spark X Agent conversation deletion case did not pass");
+  check(run.firstFailure === null, "Spark X Agent conversation deletion retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent conversation deletion case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/conversation.assert-recent",
+        "main:adapter:spark-x-agent/conversation.delete",
+        "main:adapter:spark-x-agent/conversation.assert-deleted-state",
+        "main:adapter:spark-x-agent/conversation.delete",
+        "finally:adapter:spark-x-agent/conversation.delete",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent conversation deletion structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 1 &&
+      run.resources[0]?.resourceType === "spark-x-agent-conversation" &&
+      run.resources[0].cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete" &&
+      run.resources[0].cleanupStatus === "passed",
+    "Spark X Agent conversation deletion resource ledger or cleanup is incomplete",
+  );
+  check(run.cleanupJob === null, "normal conversation deletion run required compensation");
+  assertConversationDeleteEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into CONV-004 evidence",
+    );
+  }
+  return run;
+}
+
 function assertConversationReopenEvidence(run: RunDetail): void {
   const firstAsk = run.steps.find((step) => step.stepId === "ask-reopen-first-turn");
   const recent = run.steps.find((step) => step.stepId === "reopen-from-recent-list");
@@ -2293,6 +2531,7 @@ function assertConversationReopenEvidence(run: RunDetail): void {
   );
   check(
     recent?.outputSummary?.listed === true &&
+      recent.outputSummary.occurrenceCount === 1 &&
       typeof recent.outputSummary.recentPosition === "number" &&
       recent.outputSummary.recentPosition >= 0 &&
       recent.outputSummary.messageCount === 2 &&
@@ -2993,6 +3232,14 @@ const conversationPaginationCase = await ensureCase(
   conversationPaginationDefinition(),
   "新增三个运行隔离会话、手工重命名、每页两条双重扫描和逆序清理 P1 闭环",
 );
+const conversationDeleteCase = await ensureCase(
+  system.id,
+  recentConversations.id,
+  environment.id,
+  "CONV-004 会话删除与重复记录防护",
+  conversationDeleteDefinition(),
+  "新增活动列表唯一性、软删除状态投影、重复删除和 finally 幂等清理 P1 闭环",
+);
 const chatCase = await ensureCase(
   system.id,
   chat.id,
@@ -3086,15 +3333,23 @@ const conversationPaginationSuite = await ensureSuite(
   "CONV-003 三个运行隔离会话、手工重命名、每页两条连续双重扫描和逆序清理闭环。",
   [conversationPaginationCase.testCase.id],
 );
+const conversationDeleteSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-conversation-delete-p1",
+  "星火 Agent 会话删除与幂等 P1 纵向切片",
+  "CONV-004 活动列表唯一性、软删除状态投影、重复删除和 finally 幂等清理闭环。",
+  [conversationDeleteCase.testCase.id],
+);
 const recentConversationSuite = await ensureSuite(
   system.id,
   "spark-x-agent-recent-conversations",
   "星火 Agent 最近会话回归",
-  "最近会话模块已实现的 CONV-001/002/003 创建排序、重新打开续接、重命名分页和完整清理。",
+  "最近会话模块 CONV-001/002/003/004 创建排序、重新打开续接、重命名分页、删除幂等和完整清理。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
     conversationPaginationCase.testCase.id,
+    conversationDeleteCase.testCase.id,
   ],
 );
 const chatContextSuite = await ensureSuite(
@@ -3161,12 +3416,13 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 12/32）",
-  "手动一键完整回归入口；当前已接入 12/32 条案例，覆盖七个模块的全部 P0 与 CONV-003 重命名分页 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 13/32）",
+  "手动一键完整回归入口；当前已接入 13/32 条案例，覆盖七个模块的全部 P0 与 CONV-003/004 最近会话 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
     conversationPaginationCase.testCase.id,
+    conversationDeleteCase.testCase.id,
     chatCase.testCase.id,
     chatContextCase.testCase.id,
     toolCatalogCase.testCase.id,
@@ -3184,6 +3440,7 @@ check(
     runContextSmoke,
     runConversationReopenSmoke,
     runConversationPaginationSmoke,
+    runConversationDeleteSmoke,
     runKnowledgeSmoke,
     runSkillSmoke,
     runMcpSmoke,
@@ -3209,35 +3466,49 @@ const run = runSmoke
             conversationPaginationSuite.id,
             password,
           )
-        : runKnowledgeSmoke
-          ? await executeKnowledgeSmoke(system.id, environment.id, knowledgeBaseSuite.id, password)
-          : runSkillSmoke
-            ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
-            : runMcpSmoke
-              ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
-              : runAutomationSmoke
-                ? await executeAutomationSmoke(
-                    system.id,
-                    environment.id,
-                    automationSuite.id,
-                    password,
-                  )
-                : undefined;
+        : runConversationDeleteSmoke
+          ? await executeConversationDeleteSmoke(
+              system.id,
+              environment.id,
+              conversationDeleteSuite.id,
+              password,
+            )
+          : runKnowledgeSmoke
+            ? await executeKnowledgeSmoke(
+                system.id,
+                environment.id,
+                knowledgeBaseSuite.id,
+                password,
+              )
+            : runSkillSmoke
+              ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
+              : runMcpSmoke
+                ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
+                : runAutomationSmoke
+                  ? await executeAutomationSmoke(
+                      system.id,
+                      environment.id,
+                      automationSuite.id,
+                      password,
+                    )
+                  : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
   : runConversationReopenSmoke
     ? "spark-x-agent-conversation-reopen-p0"
     : runConversationPaginationSmoke
       ? "spark-x-agent-conversation-pagination-p1"
-      : runKnowledgeSmoke
-        ? "spark-x-agent-knowledge-base-p0"
-        : runSkillSmoke
-          ? "spark-x-agent-skills-p0"
-          : runMcpSmoke
-            ? "spark-x-agent-mcp-p0"
-            : runAutomationSmoke
-              ? "spark-x-agent-automations-p0"
-              : "spark-x-agent-core-smoke";
+      : runConversationDeleteSmoke
+        ? "spark-x-agent-conversation-delete-p1"
+        : runKnowledgeSmoke
+          ? "spark-x-agent-knowledge-base-p0"
+          : runSkillSmoke
+            ? "spark-x-agent-skills-p0"
+            : runMcpSmoke
+              ? "spark-x-agent-mcp-p0"
+              : runAutomationSmoke
+                ? "spark-x-agent-automations-p0"
+                : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -3252,18 +3523,20 @@ console.info(
             ? 23
             : runConversationPaginationSmoke
               ? 24
-              : runKnowledgeSmoke
-                ? 32
-                : runSkillSmoke
-                  ? 12
-                  : runMcpSmoke
-                    ? expectMcpUnavailable
-                      ? 10
-                      : 12
-                    : runAutomationSmoke
-                      ? 20
-                      : 161,
-    caseCount: 12,
+              : runConversationDeleteSmoke
+                ? 24
+                : runKnowledgeSmoke
+                  ? 32
+                  : runSkillSmoke
+                    ? 12
+                    : runMcpSmoke
+                      ? expectMcpUnavailable
+                        ? 10
+                        : 12
+                      : runAutomationSmoke
+                        ? 20
+                        : 161,
+    caseCount: 13,
     coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -3275,6 +3548,8 @@ console.info(
     conversationReopenCaseVersionId: conversationReopenCase.version.id,
     conversationPaginationCaseId: conversationPaginationCase.testCase.id,
     conversationPaginationCaseVersionId: conversationPaginationCase.version.id,
+    conversationDeleteCaseId: conversationDeleteCase.testCase.id,
+    conversationDeleteCaseVersionId: conversationDeleteCase.version.id,
     chatCaseId: chatCase.testCase.id,
     chatCaseVersionId: chatCase.version.id,
     chatContextCaseId: chatContextCase.testCase.id,
@@ -3296,6 +3571,7 @@ console.info(
     conversationSuiteId: conversationSuite.id,
     conversationReopenSuiteId: conversationReopenSuite.id,
     conversationPaginationSuiteId: conversationPaginationSuite.id,
+    conversationDeleteSuiteId: conversationDeleteSuite.id,
     recentConversationSuiteId: recentConversationSuite.id,
     chatContextSuiteId: chatContextSuite.id,
     toolSuiteId: toolSuite.id,

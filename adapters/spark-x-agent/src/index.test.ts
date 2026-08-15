@@ -136,7 +136,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.9.0",
+      version: "0.10.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -150,6 +150,10 @@ describe("spark-x-agent adapter", () => {
           expect.objectContaining({
             key: "conversation.rename-and-assert-pagination",
             actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "conversation.assert-deleted-state",
+            actionLevel: "read",
           }),
           expect.objectContaining({ key: "chat.ask", producesResource: false }),
           expect.objectContaining({
@@ -317,6 +321,7 @@ describe("spark-x-agent adapter", () => {
     ).resolves.toEqual({
       conversationId,
       listed: true,
+      occurrenceCount: 1,
       recentPosition: 1,
       messageCount: 0,
       messageCountSource: "conversation-history",
@@ -370,6 +375,42 @@ describe("spark-x-agent adapter", () => {
         classification: "product_failed",
       },
     });
+  });
+
+  it("rejects a duplicate recent-list projection before reading history", async () => {
+    const title = `regression-${variables["run.id"]}`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { id: conversationId, title, is_pinned: false },
+              { id: conversationId, title, is_pinned: false },
+            ],
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/conversation.assert-recent",
+        environment,
+        { ...credentials, conversationId, title: "regression-${run.id}" },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_RECENT_CONVERSATION_ASSERTION_FAILED",
+        classification: "product_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("renames one run conversation and proves two stable cross-page scans without leaking titles", async () => {
@@ -698,6 +739,142 @@ describe("spark-x-agent adapter", () => {
     ).rejects.toMatchObject({
       failure: {
         code: "SPARK_X_AGENT_CONVERSATION_PAGINATION_BOUND_EXCEEDED",
+        classification: "environment_failed",
+      },
+    });
+  });
+
+  it("proves a soft-deleted conversation is absent from active and unique in deleted", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            conversation: { id: conversationId, status: "deleted" },
+            messages: [],
+            message_count: 0,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { items: [], total: 0, page: 1, per_page: 100 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [{ id: conversationId, status: "deleted" }],
+            total: 1,
+            page: 1,
+            per_page: 100,
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/conversation.assert-deleted-state",
+        environment,
+        { ...credentials, conversationId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).resolves.toEqual({
+      conversationId,
+      detailState: "deleted",
+      activeOccurrences: 0,
+      deletedOccurrences: 1,
+      activePagesScanned: 1,
+      deletedPagesScanned: 1,
+      uniqueDeletedRecord: true,
+    });
+    expect(urlOf(fetcher.mock.calls[2]?.[0] as URL | RequestInfo)).toContain(
+      "/conversations?page=1&per_page=100&status=active",
+    );
+    expect(urlOf(fetcher.mock.calls[3]?.[0] as URL | RequestInfo)).toContain(
+      "/conversations?page=1&per_page=100&status=deleted",
+    );
+  });
+
+  it("preserves the deleted-list cardinality failure and accepts a missing detail", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: false }, 404))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { items: [], total: 0, page: 1, per_page: 100 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [{ id: conversationId }, { id: conversationId }],
+            total: 2,
+            page: 1,
+            per_page: 100,
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/conversation.assert-deleted-state",
+        environment,
+        { ...credentials, conversationId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_CONVERSATION_DELETE_CARDINALITY_FAILED",
+        classification: "product_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
+  it("classifies an overfull conversation status list as an environment failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: false }, 404))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [],
+            total: 1_001,
+            page: 1,
+            per_page: 100,
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/conversation.assert-deleted-state",
+        environment,
+        { ...credentials, conversationId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_CONVERSATION_STATUS_LIST_BOUND_EXCEEDED",
         classification: "environment_failed",
       },
     });
