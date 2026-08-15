@@ -36,7 +36,10 @@ const environment: HttpExecutionEnvironment = {
       protocol: "http",
       host: "192.168.110.136",
       ports: [4173],
-      pathPrefixes: ["/api/v1/fixtures/openai/context-compaction"],
+      pathPrefixes: [
+        "/api/v1/fixtures/openai/context-compaction",
+        "/api/v1/fixtures/openai/skill-injection",
+      ],
     },
   ],
 };
@@ -256,7 +259,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.22.0",
+      version: "0.23.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -286,6 +289,11 @@ describe("spark-x-agent adapter", () => {
           }),
           expect.objectContaining({
             key: "provider.create-context-compaction-fixture",
+            producesResource: true,
+            cleanupAction: "provider.cleanup-transient-failure-fixture",
+          }),
+          expect.objectContaining({
+            key: "provider.create-skill-injection-fixture",
             producesResource: true,
             cleanupAction: "provider.cleanup-transient-failure-fixture",
           }),
@@ -393,6 +401,11 @@ describe("spark-x-agent adapter", () => {
           expect.objectContaining({
             key: "skill.assert-trusted-publication",
             actionLevel: "read",
+            producesResource: false,
+          }),
+          expect.objectContaining({
+            key: "skill.assert-selected-injection",
+            actionLevel: "dangerous",
             producesResource: false,
           }),
           expect.objectContaining({
@@ -567,6 +580,65 @@ describe("spark-x-agent adapter", () => {
       "spark-x-test-platform-noncredential-context-compaction-fixture",
     );
     expect(serialized).not.toContain("/api/v1/fixtures/openai/context-compaction");
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("registers the fixed Skill-injection Provider fixture without exposing its sentinel", async () => {
+    const name = `spark-x-skill-injection-${variables["run.id"]}`;
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      true,
+    );
+    const fixtureBaseUrl = "http://192.168.110.136:4173/api/v1/fixtures/openai/skill-injection";
+    const fixture = providerProjection(
+      fixtureProviderId,
+      name,
+      fixtureBaseUrl,
+      false,
+      "spark-x-test-platform-skill-injection-model",
+    );
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [original] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: fixture }));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/provider.create-skill-injection-fixture",
+      environment,
+      { ...credentials, name: "spark-x-skill-injection-${run.id}" },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      providerFixtureResourceId: `${fixtureProviderId}:${originalProviderId}`,
+      fixtureProviderId,
+      originalProviderId,
+      fixtureCreated: true,
+      originalProviderActive: true,
+      skillFixtureTargetAllowed: true,
+      skillBaseUrlSha256: createHash("sha256").update(fixtureBaseUrl).digest("hex"),
+      nameSha256: createHash("sha256").update(name).digest("hex"),
+    });
+    const createBody = fetcher.mock.calls[2]?.[1]?.body;
+    expect(typeof createBody).toBe("string");
+    if (typeof createBody !== "string") throw new Error("expected Skill Provider fixture body");
+    expect(JSON.parse(createBody)).toEqual({
+      name,
+      base_url: fixtureBaseUrl,
+      api_key: "spark-x-test-platform-noncredential-skill-injection-fixture",
+      model: "spark-x-test-platform-skill-injection-model",
+      protocol: "openai",
+    });
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain("spark-x-test-platform-noncredential-skill-injection-fixture");
+    expect(serialized).not.toContain("/api/v1/fixtures/openai/skill-injection");
     expect(serialized).not.toContain("memory-only-access-token-value");
     expect(serialized).not.toContain(variables["case.admin-password"]);
   });
@@ -6019,6 +6091,146 @@ describe("spark-x-agent adapter", () => {
     ]);
     const serialized = JSON.stringify(output);
     expect(serialized).not.toContain(skillPrompt);
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("proves the one selected Skill reaches the Provider, stream, active state and public history", async () => {
+    const runId = variables["run.id"];
+    const fixtureBaseUrl = "http://192.168.110.136:4173/api/v1/fixtures/openai/skill-injection";
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      true,
+    );
+    const fixture = providerProjection(
+      fixtureProviderId,
+      `spark-x-skill-injection-${runId}`,
+      fixtureBaseUrl,
+      false,
+      "spark-x-test-platform-skill-injection-model",
+    );
+    const message = `SKILL002_USE:${runId}`;
+    const finalContent = `SKILL002_APPLIED:${runId}`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [original, fixture] }))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: trustedSkillProjection(skillPrompt, false) }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "activated" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: [
+            { ...original, is_active: false },
+            { ...fixture, is_active: true },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          { event: "conversation_id", data: { conversation_id: conversationId } },
+          {
+            event: "skill",
+            data: { kind: "skill", name: "trade-port-daily-brief", args: "" },
+          },
+          { event: "content", data: { content: finalContent } },
+          {
+            event: "done",
+            data: { final_content: finalContent, truncated: false, stop_reason: "stop" },
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            conversation: {
+              id: conversationId,
+              active_skill_name: "trade-port-daily-brief",
+              active_skill_activated_at: "2026-08-15T10:00:00.000Z",
+            },
+            messages: [],
+            message_count: 2,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { role: "user", content: message, payload_truncated: false },
+              {
+                role: "assistant",
+                content: finalContent,
+                finish_reason: "stop",
+                payload_truncated: false,
+                public_execution_trace: [
+                  { kind: "skill", name: "trade-port-daily-brief", args: "" },
+                ],
+              },
+            ],
+            total: 2,
+          },
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/skill.assert-selected-injection",
+      environment,
+      {
+        ...credentials,
+        conversationId,
+        providerFixtureResourceId: `${fixtureProviderId}:${originalProviderId}`,
+        expectedPublicationSha256: skillPromptSha256,
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      conversationId,
+      skillId,
+      skillName: "trade-port-daily-brief",
+      selected: true,
+      publicationHashMatched: true,
+      providerInjectionMatched: true,
+      unselectedSkillBodyAbsent: true,
+      activeSkillPersisted: true,
+      skillActivatedAtPresent: true,
+      skillEventCount: 1,
+      historySkillEventCount: 1,
+      toolCallCount: 0,
+      toolResultCount: 0,
+      reviewEventCount: 0,
+      messageCount: 2,
+      userMessageCount: 1,
+      assistantMessageCount: 1,
+      skillNameSha256: createHash("sha256").update("trade-port-daily-brief").digest("hex"),
+      skillArgsSha256: createHash("sha256").update("").digest("hex"),
+      promptSha256: skillPromptSha256,
+      finalContentSha256: createHash("sha256").update(finalContent).digest("hex"),
+    });
+    const chatBody = fetcher.mock.calls[5]?.[1]?.body;
+    expect(typeof chatBody).toBe("string");
+    if (typeof chatBody !== "string") throw new Error("expected selected Skill chat body");
+    expect(JSON.parse(chatBody)).toEqual({
+      message,
+      conversation_id: conversationId,
+      skill_names: ["trade-port-daily-brief"],
+      active_skill_name: "trade-port-daily-brief",
+    });
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain(message);
+    expect(serialized).not.toContain(finalContent);
+    expect(serialized).not.toContain(skillPrompt);
+    expect(serialized).not.toContain(fixtureBaseUrl);
     expect(serialized).not.toContain("memory-only-access-token-value");
     expect(serialized).not.toContain(variables["case.admin-password"]);
   });

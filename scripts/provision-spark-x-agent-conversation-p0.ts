@@ -82,6 +82,7 @@ const runKnowledgeCleanupSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_CLEANUP
 const runKnowledgeLargeTableSmoke =
   process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_LARGE_TABLE_SMOKE === "true";
 const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
+const runSkillInjectionSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_INJECTION_SMOKE === "true";
 const runMcpSmoke = process.env.SPARK_X_AGENT_RUN_MCP_SMOKE === "true";
 const expectMcpUnavailable = process.env.SPARK_X_AGENT_EXPECT_MCP_UNAVAILABLE === "true";
 const runAutomationSmoke = process.env.SPARK_X_AGENT_RUN_AUTOMATION_SMOKE === "true";
@@ -230,7 +231,10 @@ async function ensureEnvironment(systemId: string): Promise<EnvironmentRecord> {
         protocol: "http",
         host: "192.168.110.136",
         ports: [4173],
-        pathPrefixes: ["/api/v1/fixtures/openai/context-compaction"],
+        pathPrefixes: [
+          "/api/v1/fixtures/openai/context-compaction",
+          "/api/v1/fixtures/openai/skill-injection",
+        ],
       },
     ],
     timezone: "Asia/Shanghai",
@@ -3418,6 +3422,149 @@ function skillPublicationDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function skillInjectionDefinition(): Readonly<Record<string, unknown>> {
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "SKILL-002 Skill 注入与实际使用",
+      description:
+        "使用固定受限 Provider 验证唯一选中的受信任 Skill 正文与 active 上下文真实进入模型请求，并关联流式事件、会话状态、公开历史轨迹和完整清理。",
+      systemKey: "spark-x-agent",
+      moduleKey: "skills",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: [
+        "adapter",
+        "skill",
+        "p0",
+        "core-smoke",
+        "selected-injection",
+        "fixed-fixture",
+        "public-trace",
+      ],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 120_000,
+      caseTimeoutMs: 240_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:provider-config", "spark-x-agent:admin:chat"],
+    steps: [
+      {
+        id: "create-skill-injection-provider-fixture",
+        name: "创建并登记 Skill 注入 Provider 夹具",
+        kind: "action",
+        action: "adapter:spark-x-agent/provider.create-skill-injection-fixture",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          name: "spark-x-skill-injection-${run.id}",
+        },
+        capture: {
+          "skill-provider-fixture-resource-id": "$.providerFixtureResourceId",
+        },
+        resource: {
+          type: "spark-x-agent-provider-fixture",
+          id: "${step.skill-provider-fixture-resource-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              providerFixtureResourceId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "create-skill-injection-conversation",
+        name: "创建并登记 Skill 注入回归会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: "spark-x-skill-injection-${run.id}",
+        },
+        capture: { "skill-injection-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.skill-injection-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "assert-selected-skill-injection",
+        name: "校验唯一选中 Skill 注入、实际回复、状态与公开轨迹",
+        kind: "action",
+        action: "adapter:spark-x-agent/skill.assert-selected-injection",
+        timeoutMs: 120_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.skill-injection-conversation-id}",
+          providerFixtureResourceId: "${step.skill-provider-fixture-resource-id}",
+          expectedPublicationSha256: trustedSkillPublicationSha256,
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "cleanup-skill-injection-provider-fixture",
+        name: "恢复原 Provider 并删除 Skill 注入夹具",
+        kind: "action",
+        action: "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          providerFixtureResourceId: "${step.skill-provider-fixture-resource-id}",
+        },
+      },
+      {
+        id: "delete-skill-injection-conversation",
+        name: "删除 Skill 注入回归会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.skill-injection-conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
 function automationDefinition(): Readonly<Record<string, unknown>> {
   const name = "spark-x-auto-${run.id}";
   const goal =
@@ -4143,9 +4290,9 @@ async function executeSmoke(
   check(accepted.status === 202, "Spark X Agent core smoke run was not newly accepted");
   const run = await waitForRun(accepted.body.id);
   check(run.gateResult === "passed", `Spark X Agent core smoke gate is ${String(run.gateResult)}`);
-  check(run.summary.passed === 11, "Spark X Agent core smoke cases did not all pass");
+  check(run.summary.passed === 12, "Spark X Agent core smoke cases did not all pass");
   check(run.firstFailure === null, "Spark X Agent core smoke retained an unexpected first failure");
-  check(run.cases.length === 11, "Spark X Agent core smoke run case linkage is incomplete");
+  check(run.cases.length === 12, "Spark X Agent core smoke run case linkage is incomplete");
   check(
     run.cases.every((item) => item.result === "passed"),
     "Spark X Agent core smoke case failed",
@@ -4155,8 +4302,8 @@ async function executeSmoke(
     "Spark X Agent core smoke cleanup status is invalid",
   );
   check(
-    run.steps.length === 47,
-    "Spark X Agent core smoke did not record thirty-six main steps and eleven finally steps",
+    run.steps.length === 52,
+    "Spark X Agent core smoke did not record thirty-nine main steps and thirteen finally steps",
   );
   check(
     run.steps.every((step) => step.status === "passed"),
@@ -4206,6 +4353,11 @@ async function executeSmoke(
         "finally:adapter:spark-x-agent/conversation.delete",
         "finally:adapter:spark-x-agent/knowledge-base.cleanup",
         "main:adapter:spark-x-agent/skill.assert-trusted-publication",
+        "main:adapter:spark-x-agent/provider.create-skill-injection-fixture",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/skill.assert-selected-injection",
+        "finally:adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+        "finally:adapter:spark-x-agent/conversation.delete",
         "main:adapter:spark-x-agent/tool.assert-safe-catalog",
         "main:adapter:spark-x-agent/conversation.create",
         "main:adapter:spark-x-agent/automation.create",
@@ -4215,13 +4367,15 @@ async function executeSmoke(
       ].join(","),
     "Spark X Agent core smoke structured step sequence is incorrect",
   );
-  check(run.resources.length === 11, "Spark X Agent core smoke resource ledger linkage is missing");
+  check(run.resources.length === 13, "Spark X Agent core smoke resource ledger linkage is missing");
   check(
     run.resources.filter((resource) => resource.resourceType === "spark-x-agent-conversation")
-      .length === 8 &&
+      .length === 9 &&
       run.resources.filter((resource) => resource.resourceType === "spark-x-agent-knowledge-base")
         .length === 2 &&
       run.resources.filter((resource) => resource.resourceType === "spark-x-agent-automation")
+        .length === 1 &&
+      run.resources.filter((resource) => resource.resourceType === "spark-x-agent-provider-fixture")
         .length === 1,
     "Spark X Agent core smoke resource type is incorrect",
   );
@@ -4310,6 +4464,7 @@ async function executeSmoke(
   assertKnowledgeEvidence(run);
   assertKnowledgeScopeEvidence(run);
   assertSkillEvidence(run);
+  assertSkillInjectionEvidence(run);
   assertMcpEvidence(run);
   assertAutomationEvidence(run);
   const evidence = JSON.stringify(run);
@@ -5300,6 +5455,125 @@ function assertSkillEvidence(run: RunDetail): void {
         .sort()
         .join(","),
     "SKILL-001 evidence contains unregistered fields that could expose Skill content",
+  );
+}
+
+function assertSkillInjectionEvidence(run: RunDetail): void {
+  const createFixture = run.steps.find(
+    (step) => step.stepId === "create-skill-injection-provider-fixture",
+  );
+  const createConversation = run.steps.find(
+    (step) => step.stepId === "create-skill-injection-conversation",
+  );
+  const assertion = run.steps.find((step) => step.stepId === "assert-selected-skill-injection");
+  const cleanupFixture = run.steps.find(
+    (step) => step.stepId === "cleanup-skill-injection-provider-fixture",
+  );
+  const deleteConversation = run.steps.find(
+    (step) => step.stepId === "delete-skill-injection-conversation",
+  );
+  check(
+    createFixture?.outputSummary !== null &&
+      createFixture?.outputSummary !== undefined &&
+      createConversation?.outputSummary !== null &&
+      createConversation?.outputSummary !== undefined &&
+      assertion?.outputSummary !== null &&
+      assertion?.outputSummary !== undefined &&
+      cleanupFixture?.outputSummary !== null &&
+      cleanupFixture?.outputSummary !== undefined &&
+      deleteConversation?.outputSummary !== null &&
+      deleteConversation?.outputSummary !== undefined,
+    "SKILL-002 structured evidence is missing",
+  );
+  const fixture = createFixture.outputSummary;
+  const conversation = createConversation.outputSummary;
+  const result = assertion.outputSummary;
+  check(
+    fixture.fixtureCreated === true &&
+      fixture.originalProviderActive === true &&
+      fixture.skillFixtureTargetAllowed === true &&
+      typeof fixture.providerFixtureResourceId === "string" &&
+      typeof fixture.fixtureProviderId === "string" &&
+      typeof fixture.originalProviderId === "string" &&
+      typeof fixture.skillBaseUrlSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(fixture.skillBaseUrlSha256) &&
+      typeof fixture.nameSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(fixture.nameSha256),
+    "SKILL-002 Provider fixture evidence is incomplete",
+  );
+  check(
+    result.conversationId === conversation.conversationId &&
+      result.skillName === "trade-port-daily-brief" &&
+      typeof result.skillId === "string" &&
+      result.selected === true &&
+      result.publicationHashMatched === true &&
+      result.providerInjectionMatched === true &&
+      result.unselectedSkillBodyAbsent === true &&
+      result.activeSkillPersisted === true &&
+      result.skillActivatedAtPresent === true &&
+      result.skillEventCount === 1 &&
+      result.historySkillEventCount === 1 &&
+      result.toolCallCount === 0 &&
+      result.toolResultCount === 0 &&
+      result.reviewEventCount === 0 &&
+      result.messageCount === 2 &&
+      result.userMessageCount === 1 &&
+      result.assistantMessageCount === 1 &&
+      result.promptSha256 === trustedSkillPublicationSha256 &&
+      [
+        result.skillNameSha256,
+        result.skillArgsSha256,
+        result.promptSha256,
+        result.finalContentSha256,
+      ].every((hash) => typeof hash === "string" && /^[0-9a-f]{64}$/u.test(hash)),
+    "SKILL-002 selected injection, active state, stream or public history evidence is incomplete",
+  );
+  check(
+    Object.keys(result).sort().join(",") ===
+      [
+        "activeSkillPersisted",
+        "assistantMessageCount",
+        "conversationId",
+        "finalContentSha256",
+        "historySkillEventCount",
+        "messageCount",
+        "promptSha256",
+        "providerInjectionMatched",
+        "publicationHashMatched",
+        "reviewEventCount",
+        "selected",
+        "skillActivatedAtPresent",
+        "skillArgsSha256",
+        "skillEventCount",
+        "skillId",
+        "skillName",
+        "skillNameSha256",
+        "toolCallCount",
+        "toolResultCount",
+        "unselectedSkillBodyAbsent",
+        "userMessageCount",
+      ]
+        .sort()
+        .join(","),
+    "SKILL-002 evidence contains unregistered fields that could expose injected prompt content",
+  );
+  check(
+    cleanupFixture.outputSummary.originalProviderActive === true &&
+      cleanupFixture.outputSummary.fixtureDeleted === true &&
+      cleanupFixture.outputSummary.activeProviderCount === 1 &&
+      deleteConversation.outputSummary.conversationId === conversation.conversationId &&
+      deleteConversation.outputSummary.deleted === true,
+    "SKILL-002 Provider or conversation cleanup evidence is incomplete",
+  );
+  const evidence = JSON.stringify({ createFixture, assertion, cleanupFixture });
+  check(
+    !evidence.includes("SKILL002_USE") &&
+      !evidence.includes("SKILL002_APPLIED") &&
+      !evidence.includes("海关知识检索-快速") &&
+      !evidence.includes("spark-x-test-platform-noncredential-skill-injection-fixture") &&
+      !evidence.includes("/api/v1/fixtures/openai/skill-injection") &&
+      !evidence.includes("memory-only-access-token"),
+    "SKILL-002 request, response, prompt, fixture target or in-memory token leaked into evidence",
   );
 }
 
@@ -6431,28 +6705,123 @@ async function executeSkillSmoke(
   check(accepted.status === 202, "Spark X Agent Skill run was not newly accepted");
   const run = await waitForRun(accepted.body.id);
   check(run.gateResult === "passed", `Spark X Agent Skill gate is ${String(run.gateResult)}`);
-  check(run.summary.passed === 1, "Spark X Agent Skill case did not pass");
+  check(run.summary.passed === 2, "Spark X Agent Skill cases did not pass");
   check(run.firstFailure === null, "Spark X Agent Skill run retained a first failure");
   check(
-    run.cases.length === 1 &&
-      run.cases[0]?.result === "passed" &&
-      run.cases[0].cleanupStatus === "not_required",
-    "Spark X Agent Skill case failed",
+    run.cases.length === 2 &&
+      run.cases.every((item) => item.result === "passed") &&
+      run.cases
+        .map((item) => item.cleanupStatus)
+        .sort()
+        .join(",") === "not_required,passed",
+    "Spark X Agent Skill cases or injection cleanup failed",
   );
   check(
-    run.steps.length === 1 &&
-      run.steps[0]?.phase === "main" &&
-      run.steps[0].action === "adapter:spark-x-agent/skill.assert-trusted-publication" &&
-      run.steps[0].status === "passed",
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/skill.assert-trusted-publication",
+        "main:adapter:spark-x-agent/provider.create-skill-injection-fixture",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/skill.assert-selected-injection",
+        "finally:adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+        "finally:adapter:spark-x-agent/conversation.delete",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
     "Spark X Agent Skill structured step sequence is incomplete",
   );
-  check(run.resources.length === 0, "read-only Skill assertion unexpectedly registered a resource");
-  check(run.cleanupJob === null, "read-only Skill assertion unexpectedly required compensation");
+  check(
+    run.resources.length === 2 &&
+      run.resources.every((resource) => resource.cleanupStatus === "passed") &&
+      run.resources.some(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-provider-fixture" &&
+          resource.cleanupDefinition.action ===
+            "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+      ) &&
+      run.resources.some(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-conversation" &&
+          resource.cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete",
+      ),
+    "Spark X Agent Skill injection resources or cleanup definitions are incomplete",
+  );
+  check(run.cleanupJob === null, "normal Skill run unexpectedly required compensation");
   assertSkillEvidence(run);
+  assertSkillInjectionEvidence(run);
   if (password !== undefined) {
     check(
       !JSON.stringify(run).includes(password),
       "administrator password leaked into Skill evidence",
+    );
+  }
+  return run;
+}
+
+async function executeSkillInjectionSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-skill-injection-p0-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-skill-injection-p0-verification",
+      priority: 95,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent Skill injection run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(
+    run.gateResult === "passed",
+    `Spark X Agent Skill injection gate is ${String(run.gateResult)}`,
+  );
+  check(run.summary.passed === 1, "Spark X Agent Skill injection case did not pass");
+  check(run.firstFailure === null, "Spark X Agent Skill injection retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent Skill injection case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/provider.create-skill-injection-fixture",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/skill.assert-selected-injection",
+        "finally:adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+        "finally:adapter:spark-x-agent/conversation.delete",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent Skill injection structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 2 &&
+      run.resources.every((resource) => resource.cleanupStatus === "passed") &&
+      run.resources.some(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-provider-fixture" &&
+          resource.cleanupDefinition.action ===
+            "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+      ) &&
+      run.resources.some(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-conversation" &&
+          resource.cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete",
+      ),
+    "Spark X Agent Skill injection resource ledger or cleanup order is incomplete",
+  );
+  check(run.cleanupJob === null, "normal Skill injection run unexpectedly required compensation");
+  assertSkillInjectionEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into SKILL-002 evidence",
     );
   }
   return run;
@@ -6837,6 +7206,14 @@ const skillPublicationCase = await ensureCase(
   skillPublicationDefinition(),
   "新增受信任 Skill 用户/管理员投影、有效能力、主资产和精确哈希 P0 校验",
 );
+const skillInjectionCase = await ensureCase(
+  system.id,
+  skills.id,
+  environment.id,
+  "SKILL-002 Skill 注入与实际使用",
+  skillInjectionDefinition(),
+  "新增唯一选中 Skill 正文与 active 上下文真实进入 Provider、流式事件、持久化状态、公开轨迹和完整清理 P0 闭环",
+);
 const mcpConnectorCase = await ensureCase(
   system.id,
   mcp.id,
@@ -7039,12 +7416,19 @@ const knowledgeModuleSuite = await ensureSuite(
     knowledgeLargeTableCase.testCase.id,
   ],
 );
+const skillInjectionSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-skill-injection-p0",
+  "星火 Agent Skill 选择注入 P0 纵向切片",
+  "SKILL-002 固定受限 Provider、唯一选中 Skill 正文、active 状态、流式事件、公开轨迹和完整清理闭环。",
+  [skillInjectionCase.testCase.id],
+);
 const skillSuite = await ensureSuite(
   system.id,
   "spark-x-agent-skills-p0",
   "星火 Agent Skill P0 纵向切片",
-  "SKILL-001 受信任 Skill 发布清单、有效能力、主资产和精确内容哈希只读证据闭环。",
-  [skillPublicationCase.testCase.id],
+  "SKILL-001/002 受信任发布清单、唯一选择注入、实际能力回复、active 状态、公开轨迹和完整清理闭环。",
+  [skillPublicationCase.testCase.id, skillInjectionCase.testCase.id],
 );
 const mcpSuite = await ensureSuite(
   system.id,
@@ -7090,7 +7474,7 @@ const suite = await ensureSuite(
   system.id,
   "spark-x-agent-core-smoke",
   "星火 Agent 核心冒烟",
-  "发布后核心冒烟套件；当前包含 CONV-001/002、CHAT-001/002、TOOL-001/002、KB-001/002、SKILL-001、MCP-001 与 AUTO-001，共 11 条 P0 覆盖七个核心模块。",
+  "发布后核心冒烟套件；当前包含 CONV-001/002、CHAT-001/002、TOOL-001/002、KB-001/002、SKILL-001/002、MCP-001 与 AUTO-001，共 12 条 P0 覆盖七个核心模块。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -7101,6 +7485,7 @@ const suite = await ensureSuite(
     knowledgeBaseCase.testCase.id,
     knowledgeScopeCase.testCase.id,
     skillPublicationCase.testCase.id,
+    skillInjectionCase.testCase.id,
     mcpConnectorCase.testCase.id,
     automationCase.testCase.id,
   ],
@@ -7108,8 +7493,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 26/32）",
-  "手动一键完整回归入口；当前已接入 26/32 条案例，覆盖七个模块的当前 P0、CHAT-003/004/005、TOOL-004、KB-005/006、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 27/32）",
+  "手动一键完整回归入口；当前已接入 27/32 条案例，覆盖七个模块的当前 P0、CHAT-003/004/005、TOOL-004、KB-005/006、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -7132,6 +7517,7 @@ const fullRegressionSuite = await ensureSuite(
     knowledgeCleanupCase.testCase.id,
     knowledgeLargeTableCase.testCase.id,
     skillPublicationCase.testCase.id,
+    skillInjectionCase.testCase.id,
     mcpConnectorCase.testCase.id,
     automationCase.testCase.id,
     automationTimezoneCase.testCase.id,
@@ -7155,6 +7541,7 @@ check(
     runKnowledgeCleanupSmoke,
     runKnowledgeLargeTableSmoke,
     runSkillSmoke,
+    runSkillInjectionSmoke,
     runMcpSmoke,
     runAutomationSmoke,
   ].filter(Boolean).length <= 1,
@@ -7236,28 +7623,35 @@ const run = runSmoke
                               knowledgeLargeTableSuite.id,
                               password,
                             )
-                          : runSkillSmoke
-                            ? await executeSkillSmoke(
+                          : runSkillInjectionSmoke
+                            ? await executeSkillInjectionSmoke(
                                 system.id,
                                 environment.id,
-                                skillSuite.id,
+                                skillInjectionSuite.id,
                                 password,
                               )
-                            : runMcpSmoke
-                              ? await executeMcpSmoke(
+                            : runSkillSmoke
+                              ? await executeSkillSmoke(
                                   system.id,
                                   environment.id,
-                                  mcpSuite.id,
+                                  skillSuite.id,
                                   password,
                                 )
-                              : runAutomationSmoke
-                                ? await executeAutomationSmoke(
+                              : runMcpSmoke
+                                ? await executeMcpSmoke(
                                     system.id,
                                     environment.id,
-                                    automationSuite.id,
+                                    mcpSuite.id,
                                     password,
                                   )
-                                : undefined;
+                                : runAutomationSmoke
+                                  ? await executeAutomationSmoke(
+                                      system.id,
+                                      environment.id,
+                                      automationSuite.id,
+                                      password,
+                                    )
+                                  : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
   : runCancelSmoke
@@ -7282,13 +7676,15 @@ const scenario = runContextSmoke
                       ? "spark-x-agent-knowledge-cleanup-p1"
                       : runKnowledgeLargeTableSmoke
                         ? "spark-x-agent-knowledge-large-table-p1"
-                        : runSkillSmoke
-                          ? "spark-x-agent-skills-p0"
-                          : runMcpSmoke
-                            ? "spark-x-agent-mcp-p0"
-                            : runAutomationSmoke
-                              ? "spark-x-agent-automations-p0"
-                              : "spark-x-agent-core-smoke";
+                        : runSkillInjectionSmoke
+                          ? "spark-x-agent-skill-injection-p0"
+                          : runSkillSmoke
+                            ? "spark-x-agent-skills-p0"
+                            : runMcpSmoke
+                              ? "spark-x-agent-mcp-p0"
+                              : runAutomationSmoke
+                                ? "spark-x-agent-automations-p0"
+                                : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -7321,17 +7717,19 @@ console.info(
                               ? 34
                               : runKnowledgeLargeTableSmoke
                                 ? 30
-                                : runSkillSmoke
-                                  ? 12
-                                  : runMcpSmoke
-                                    ? expectMcpUnavailable
-                                      ? 10
-                                      : 12
-                                    : runAutomationSmoke
-                                      ? 20
-                                      : 161,
-    caseCount: 26,
-    coreSmokeCaseCount: 11,
+                                : runSkillInjectionSmoke
+                                  ? 30
+                                  : runSkillSmoke
+                                    ? 42
+                                    : runMcpSmoke
+                                      ? expectMcpUnavailable
+                                        ? 10
+                                        : 12
+                                      : runAutomationSmoke
+                                        ? 20
+                                        : 191,
+    caseCount: 27,
+    coreSmokeCaseCount: 12,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
     systemId: system.id,
@@ -7378,6 +7776,8 @@ console.info(
     knowledgeLargeTableCaseVersionId: knowledgeLargeTableCase.version.id,
     skillPublicationCaseId: skillPublicationCase.testCase.id,
     skillPublicationCaseVersionId: skillPublicationCase.version.id,
+    skillInjectionCaseId: skillInjectionCase.testCase.id,
+    skillInjectionCaseVersionId: skillInjectionCase.version.id,
     mcpConnectorCaseId: mcpConnectorCase.testCase.id,
     mcpConnectorCaseVersionId: mcpConnectorCase.version.id,
     automationCaseId: automationCase.testCase.id,
@@ -7407,6 +7807,7 @@ console.info(
     knowledgeCleanupSuiteId: knowledgeCleanupSuite.id,
     knowledgeLargeTableSuiteId: knowledgeLargeTableSuite.id,
     knowledgeModuleSuiteId: knowledgeModuleSuite.id,
+    skillInjectionSuiteId: skillInjectionSuite.id,
     skillSuiteId: skillSuite.id,
     mcpSuiteId: mcpSuite.id,
     automationSuiteId: automationSuite.id,

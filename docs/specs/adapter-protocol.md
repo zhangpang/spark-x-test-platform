@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -188,17 +188,17 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.22.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+当前 `0.23.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
 `conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
 `chat.cancel-and-resume`、`chat.assert-provider-failure-retry`、`chat.assert-context-compaction-continuity`、`chat.assert-history`、`chat.assert-context-history`、
-`provider.create-transient-failure-fixture`、`provider.create-context-compaction-fixture`、`provider.cleanup-transient-failure-fixture`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
+`provider.create-transient-failure-fixture`、`provider.create-context-compaction-fixture`、`provider.create-skill-injection-fixture`、`provider.cleanup-transient-failure-fixture`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
 `tool.invoke-failure-recovery`、`tool.assert-history`、`tool.assert-failure-recovery-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-large-table-continuation`、`knowledge-base.assert-conversation-scope`、
 `knowledge-base.query-and-assert-evidence`、`knowledge-base.assert-cleaned-state`、`knowledge-base.cleanup` 和
-`skill.assert-trusted-publication`，以及 `automation.create`、`automation.wait-fired`、`automation.assert-no-duplicate-delivery`、`automation.assert-lifecycle` 和
+`skill.assert-trusted-publication`、`skill.assert-selected-injection`，以及 `automation.create`、`automation.wait-fired`、`automation.assert-no-duplicate-delivery`、`automation.assert-lifecycle` 和
 `automation.cleanup`。动作只调用适配器内固定的 `/trade/api`、`/trade-domain-api` 路径、KB-006 所需且与被测环境同主机的固定
-`http://<environment-host>:18121/mcp/document` 解析检索端点、CHAT-004 固定的同主机不可达 Provider 故障端点，以及 CHAT-005 固定的同主机端口 4173 上下文压缩夹具；所有目标必须先命中
+`http://<environment-host>:18121/mcp/document` 解析检索端点、CHAT-004 固定的同主机不可达 Provider 故障端点，以及同主机端口 4173 上 CHAT-005 上下文压缩和 SKILL-002 选择注入夹具；所有目标必须先命中
 环境 allowlist，所有实际请求与
 重定向执行环境 allowlist 校验；登录 Token、用户密码和模型回答正文都不进入输出、日志、资源台账或
 结构化证据。`conversation.assert-recent` 不把列表响应缺失的 `message_count` 当作零，而是通过会话历史接口
@@ -322,8 +322,13 @@ Worker 内存中按被测系统 frontmatter 解析后的 `trim()` 语义计算 S
 判定和哈希。本地资产摘要是 legacy 容器文件兼容层，V12 不可变发布重启后允许为空，但三个 API 投影必须一致，
 并如实输出 `assetRootPresent` 与 `mainAssetPresent`，不得把缺失伪装为存在。受信任发布缺失归为 `environment_failed`，投影
 不一致归为 `product_failed`，精确发布哈希不匹配保留为 `test_failed`。当前被测系统的删除接口尚不能完整撤销
-不可变发布目录、授权和对象存储内容，因此适配器不会创建临时 Skill；实际注入用例将在依赖工具上线且被测系统
-具备完整回收语义后单独实现，避免产生无法补偿的残留资源。
+不可变发布目录、授权和对象存储内容，因此适配器不创建临时 Skill。`provider.create-skill-injection-fixture` 只创建平台可完整补偿的临时 Provider，
+固定到同主机端口 4173 的受限夹具路径、模型和非凭据 Bearer，不接受 URL、host、模型、API Key 或脚本参数。夹具 API 只在
+`PLATFORM_SKILL_INJECTION_FIXTURE_ENABLED=true` 时注册，限制 64 条消息、500,000 字节文本和 750,000 字节请求体，拒绝额外顶层字段，不转发请求且不回显 Prompt。
+`skill.assert-selected-injection` 仅允许选择已发布的 `trade-port-daily-brief`，先校验受信任正文的精确 SHA-256，再激活夹具并发出一次运行隔离请求。夹具只有在唯一
+active Skill 上下文、唯一选中 Skill 正文和未选中 Skill 正文缺失同时成立时才返回固定成功标识。动作还要求流式 `skill` 事件、会话
+`active_skill_name/active_skill_activated_at`、两条消息和助手消息 `public_execution_trace` 互相一致，且不得出现工具或复核事件。普通 `finally` 和独立补偿都先恢复原 Provider，
+再删除夹具和会话；输出只保留 UUID、计数、布尔判定和 SHA-256，首次失败不被清理结果或重试覆盖。
 
 AUTOMATION 动作固定创建 `selected_skill_id=null`、300 秒周期且首次执行时间为当前时刻的无工具任务，不接受
 任意 Skill、周期或执行脚本参数。等待动作把所有者任务定义中的 `state_version`、`last_fire_at`、`next_fire_at`

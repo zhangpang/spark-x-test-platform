@@ -14,6 +14,7 @@ import { ControlPlaneService } from "./control-plane/service.js";
 import { registerContextCompactionFixtureRoutes } from "./context-compaction-fixture-routes.js";
 import { registerReleaseHookRoutes, resolveReleaseHookConfig } from "./release-hook-routes.js";
 import { registerRunRoutes, type RunQueue, type RunRouteStore } from "./run-routes.js";
+import { registerSkillInjectionFixtureRoutes } from "./skill-injection-fixture-routes.js";
 
 interface DatabaseError {
   readonly code?: string;
@@ -109,6 +110,11 @@ export function buildApiApplication(
   registerContextCompactionFixtureRoutes(
     application.app,
     environment.PLATFORM_CONTEXT_COMPACTION_FIXTURE_ENABLED === "true",
+    `/api/${apiVersion}`,
+  );
+  registerSkillInjectionFixtureRoutes(
+    application.app,
+    environment.PLATFORM_SKILL_INJECTION_FIXTURE_ENABLED === "true",
     `/api/${apiVersion}`,
   );
 

@@ -18,6 +18,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/conversation.delete",
   "adapter:spark-x-agent/provider.create-transient-failure-fixture",
   "adapter:spark-x-agent/provider.create-context-compaction-fixture",
+  "adapter:spark-x-agent/provider.create-skill-injection-fixture",
   "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
   "adapter:spark-x-agent/chat.ask",
   "adapter:spark-x-agent/chat.cancel-and-resume",
@@ -40,6 +41,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/knowledge-base.assert-cleaned-state",
   "adapter:spark-x-agent/knowledge-base.cleanup",
   "adapter:spark-x-agent/skill.assert-trusted-publication",
+  "adapter:spark-x-agent/skill.assert-selected-injection",
   "adapter:spark-x-agent/automation.create",
   "adapter:spark-x-agent/automation.wait-fired",
   "adapter:spark-x-agent/automation.assert-no-duplicate-delivery",
@@ -344,6 +346,50 @@ export const sparkXAgentActionCapabilities = [
         originalProviderActive: { const: true },
         contextFixtureTargetAllowed: { const: true },
         contextBaseUrlSha256: { type: "string", minLength: 64, maxLength: 64 },
+        nameSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
+    key: "provider.create-skill-injection-fixture",
+    name: "创建 Skill 注入 Provider 夹具",
+    description:
+      "登记固定、受限且不转发请求的 Skill 注入 Provider 夹具，并冻结原活跃 Provider 标识供 finally 与中断补偿。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 20_000,
+    producesResource: true,
+    cleanupAction: "provider.cleanup-transient-failure-fixture",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "name"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        name: { type: "string", minLength: 1, maxLength: 200 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "providerFixtureResourceId",
+        "fixtureProviderId",
+        "originalProviderId",
+        "fixtureCreated",
+        "originalProviderActive",
+        "skillFixtureTargetAllowed",
+        "skillBaseUrlSha256",
+        "nameSha256",
+      ],
+      properties: {
+        providerFixtureResourceId: { type: "string", minLength: 73, maxLength: 73 },
+        fixtureProviderId: { type: "string", format: "uuid" },
+        originalProviderId: { type: "string", format: "uuid" },
+        fixtureCreated: { const: true },
+        originalProviderActive: { const: true },
+        skillFixtureTargetAllowed: { const: true },
+        skillBaseUrlSha256: { type: "string", minLength: 64, maxLength: 64 },
         nameSha256: { type: "string", minLength: 64, maxLength: 64 },
       },
     },
@@ -2066,6 +2112,83 @@ export const sparkXAgentActionCapabilities = [
     },
   },
   {
+    key: "skill.assert-selected-injection",
+    name: "校验 Skill 选择注入与实际使用",
+    description:
+      "以固定 Provider 验证唯一选中 Skill 的正文与会话上下文真实进入模型请求，并关联流式事件、持久化 active Skill 与公开历史轨迹。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 120_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "conversationId",
+        "providerFixtureResourceId",
+        "expectedPublicationSha256",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        providerFixtureResourceId: { type: "string", minLength: 73, maxLength: 73 },
+        expectedPublicationSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "skillId",
+        "skillName",
+        "selected",
+        "publicationHashMatched",
+        "providerInjectionMatched",
+        "unselectedSkillBodyAbsent",
+        "activeSkillPersisted",
+        "skillActivatedAtPresent",
+        "skillEventCount",
+        "historySkillEventCount",
+        "toolCallCount",
+        "toolResultCount",
+        "reviewEventCount",
+        "messageCount",
+        "userMessageCount",
+        "assistantMessageCount",
+        "skillNameSha256",
+        "skillArgsSha256",
+        "promptSha256",
+        "finalContentSha256",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        skillId: { type: "string", format: "uuid" },
+        skillName: { const: "trade-port-daily-brief" },
+        selected: { const: true },
+        publicationHashMatched: { const: true },
+        providerInjectionMatched: { const: true },
+        unselectedSkillBodyAbsent: { const: true },
+        activeSkillPersisted: { const: true },
+        skillActivatedAtPresent: { const: true },
+        skillEventCount: { const: 1 },
+        historySkillEventCount: { const: 1 },
+        toolCallCount: { const: 0 },
+        toolResultCount: { const: 0 },
+        reviewEventCount: { const: 0 },
+        messageCount: { const: 2 },
+        userMessageCount: { const: 1 },
+        assistantMessageCount: { const: 1 },
+        skillNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        skillArgsSha256: { type: "string", minLength: 64, maxLength: 64 },
+        promptSha256: { type: "string", minLength: 64, maxLength: 64 },
+        finalContentSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
     key: "conversation.delete",
     name: "删除会话",
     description: "重新登录后按会话 ID 执行幂等清理，可用于 finally 与独立补偿任务。",
@@ -2099,7 +2222,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.22.0",
+  version: "0.23.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -3781,6 +3904,8 @@ const transientProviderFixtureModel = "spark-x-test-platform-fault-model";
 const contextCompactionFixtureApiKey =
   "spark-x-test-platform-noncredential-context-compaction-fixture";
 const contextCompactionFixtureModel = "spark-x-test-platform-context-compaction-model";
+const skillInjectionFixtureApiKey = "spark-x-test-platform-noncredential-skill-injection-fixture";
+const skillInjectionFixtureModel = "spark-x-test-platform-skill-injection-model";
 const providerFixtureResourcePattern =
   /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu;
 
@@ -3799,6 +3924,17 @@ function contextCompactionFixtureBaseUrl(environment: HttpExecutionEnvironment):
   target.protocol = "http:";
   target.port = "4173";
   target.pathname = "/api/v1/fixtures/openai/context-compaction";
+  target.search = "";
+  target.hash = "";
+  assertHttpTargetAllowed(target, environment.allowlist);
+  return target.toString().replace(/\/$/u, "");
+}
+
+function skillInjectionFixtureBaseUrl(environment: HttpExecutionEnvironment): string {
+  const target = new URL(environment.baseUrl);
+  target.protocol = "http:";
+  target.port = "4173";
+  target.pathname = "/api/v1/fixtures/openai/skill-injection";
   target.search = "";
   target.hash = "";
   assertHttpTargetAllowed(target, environment.allowlist);
@@ -4143,6 +4279,11 @@ interface SparkXAgentToolSequenceEvent {
   readonly success?: boolean;
 }
 
+interface SparkXAgentSkillTrace {
+  readonly name: string;
+  readonly args: string;
+}
+
 interface SparkXAgentChatResult {
   readonly conversationId: string;
   readonly contentEventCount: number;
@@ -4151,6 +4292,7 @@ interface SparkXAgentChatResult {
   readonly assistantPreviewEventCount: number;
   readonly toolEventCount: number;
   readonly skillEventCount: number;
+  readonly skillEvents: readonly SparkXAgentSkillTrace[];
   readonly reviewEventCount: number;
   readonly toolCalls: readonly SparkXAgentToolCallTrace[];
   readonly toolResults: readonly SparkXAgentToolResultTrace[];
@@ -4175,6 +4317,7 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
   let assistantPreviewEventCount = 0;
   let toolEventCount = 0;
   let skillEventCount = 0;
+  const skillEvents: SparkXAgentSkillTrace[] = [];
   let reviewEventCount = 0;
   const toolCalls: SparkXAgentToolCallTrace[] = [];
   const toolResults: SparkXAgentToolResultTrace[] = [];
@@ -4288,7 +4431,20 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
         success: data.success,
       });
     } else if (event === "skill") {
+      if (
+        typeof data.name !== "string" ||
+        data.name.trim() === "" ||
+        data.name.length > 200 ||
+        typeof data.args !== "string" ||
+        data.args.length > 8_192
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_SKILL_TRACE_INVALID",
+          "星火 Agent Skill 事件缺少受限名称或参数。",
+        );
+      }
       skillEventCount += 1;
+      skillEvents.push({ name: data.name, args: data.args });
     } else if (event === "review_required") {
       reviewEventCount += 1;
     } else if (event === "done") {
@@ -4344,6 +4500,7 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
     assistantPreviewEventCount,
     toolEventCount,
     skillEventCount,
+    skillEvents,
     reviewEventCount,
     toolCalls,
     toolResults,
@@ -4388,12 +4545,18 @@ async function readBoundedChatStream(
   }
 }
 
+interface SparkXAgentChatSelection {
+  readonly skillNames: readonly string[];
+  readonly activeSkillName: string;
+}
+
 async function streamChat(
   environment: HttpExecutionEnvironment,
   token: string,
   expectedConversationId: string,
   message: string,
   options: SparkXAgentExecutionOptions,
+  selection?: SparkXAgentChatSelection,
 ): Promise<SparkXAgentChatResult> {
   let target = new URL(actionPath("/chat"), environment.baseUrl);
   assertHttpTargetAllowed(target, environment.allowlist);
@@ -4413,7 +4576,16 @@ async function streamChat(
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ message, conversation_id: expectedConversationId }),
+        body: JSON.stringify({
+          message,
+          conversation_id: expectedConversationId,
+          ...(selection === undefined
+            ? {}
+            : {
+                skill_names: selection.skillNames,
+                active_skill_name: selection.activeSkillName,
+              }),
+        }),
         redirect: "manual",
         signal: controller.signal,
       });
@@ -4723,6 +4895,104 @@ export async function executeSparkXAgentAction(
       originalProviderActive: true,
       contextFixtureTargetAllowed: true,
       contextBaseUrlSha256: sha256(contextBaseUrl),
+      nameSha256: sha256(name),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/provider.create-skill-injection-fixture") {
+    const name = requiredString(params, "name", variables, 200);
+    const runId = variables["run.id"];
+    if (
+      typeof runId !== "string" ||
+      !uuidPattern.test(runId) ||
+      !name.includes(runId) ||
+      name.trim() !== name ||
+      name.includes("\u0000")
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SKILL_FIXTURE_TRACEABILITY_REQUIRED",
+        "Skill 注入 Provider 夹具名称必须包含当前 run_id 且符合受控文本边界。",
+      );
+    }
+    const skillBaseUrl = skillInjectionFixtureBaseUrl(environment);
+    const before = await listSparkXProviders(environment, token, remainingOptions());
+    const active = before.filter((provider) => provider.active);
+    if (active.length !== 1 || active[0] === undefined) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_PROVIDER_BASELINE_INVALID",
+        "星火 Agent 测试账号必须且只能有一个活跃 Provider。",
+      );
+    }
+    if (before.some((provider) => provider.name === name)) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_SKILL_FIXTURE_NAME_CONFLICT",
+        "本次运行的 Skill 注入 Provider 夹具名称已存在，需先完成残留清理。",
+      );
+    }
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath("/providers"),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          name,
+          base_url: skillBaseUrl,
+          api_key: skillInjectionFixtureApiKey,
+          model: skillInjectionFixtureModel,
+          protocol: "openai",
+        },
+      },
+      remainingOptions(),
+    );
+    accepted(response, "SPARK_X_AGENT_SKILL_FIXTURE_CREATE_FAILED");
+    const createdData = dataEnvelope(response.body, "SPARK_X_AGENT_SKILL_FIXTURE_RESPONSE_INVALID");
+    let fixture: SparkXProviderProjection;
+    try {
+      fixture = sparkXProviderProjection(
+        createdData,
+        "SPARK_X_AGENT_SKILL_FIXTURE_RESPONSE_INVALID",
+      );
+      if (
+        fixture.name !== name ||
+        fixture.baseUrl !== skillBaseUrl ||
+        fixture.model !== skillInjectionFixtureModel ||
+        fixture.protocol !== "openai" ||
+        fixture.active
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_SKILL_FIXTURE_RESPONSE_INVALID",
+          "Skill 注入 Provider 夹具的名称、固定目标、协议或非活跃状态不一致。",
+        );
+      }
+    } catch (firstError) {
+      if (typeof createdData.id === "string" && uuidPattern.test(createdData.id)) {
+        try {
+          await authenticatedRequest(
+            environment,
+            token,
+            {
+              method: "DELETE",
+              path: actionPath(`/providers/${encodeURIComponent(createdData.id)}`),
+            },
+            remainingOptions(),
+          );
+        } catch {
+          // Preserve the first product failure; the malformed fixture has no safe ledger identity.
+        }
+      }
+      throw firstError;
+    }
+    const providerFixtureResourceId = `${fixture.id}:${active[0].id}`;
+    return {
+      providerFixtureResourceId,
+      fixtureProviderId: fixture.id,
+      originalProviderId: active[0].id,
+      fixtureCreated: true,
+      originalProviderActive: true,
+      skillFixtureTargetAllowed: true,
+      skillBaseUrlSha256: sha256(skillBaseUrl),
       nameSha256: sha256(name),
     };
   }
@@ -5611,6 +5881,237 @@ export async function executeSparkXAgentAction(
       assetRootPresent: availableAssets.root_exists,
       mainAssetPresent: availableAssets.has_skill_md,
       mainFileSha256: promptSha256,
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/skill.assert-selected-injection") {
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const providerFixtureResourceId = requiredString(
+      params,
+      "providerFixtureResourceId",
+      variables,
+      73,
+    );
+    const expectedPublicationSha256 = requiredSha256(
+      params,
+      "expectedPublicationSha256",
+      variables,
+    );
+    const runId = variables["run.id"];
+    if (typeof runId !== "string" || !uuidPattern.test(runId)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SKILL_RUN_ID_REQUIRED",
+        "Skill 注入回归必须绑定有效 run_id。",
+      );
+    }
+    const fixtureResource = providerFixtureResource(providerFixtureResourceId);
+    const skillBaseUrl = skillInjectionFixtureBaseUrl(environment);
+    const providers = await listSparkXProviders(environment, token, remainingOptions());
+    const original = providers.find(
+      (provider) => provider.id === fixtureResource.originalProviderId,
+    );
+    const fixture = providers.find((provider) => provider.id === fixtureResource.fixtureProviderId);
+    const active = providers.filter((provider) => provider.active);
+    if (
+      original === undefined ||
+      fixture === undefined ||
+      active.length !== 1 ||
+      active[0]?.id !== original.id ||
+      fixture.active ||
+      fixture.baseUrl !== skillBaseUrl ||
+      fixture.model !== skillInjectionFixtureModel ||
+      fixture.protocol !== "openai"
+    ) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_SKILL_FIXTURE_BASELINE_INVALID",
+        "Skill 注入 Provider 夹具或原活跃 Provider 已偏离本次运行登记基线。",
+      );
+    }
+
+    const skillResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/skills/${encodeURIComponent(trustedSkillName)}`) },
+      remainingOptions(),
+    );
+    acceptedSkillRuntime(skillResponse, "SPARK_X_AGENT_SELECTED_SKILL_DETAIL_FAILED");
+    const skill = objectValue(
+      successfulData(skillResponse.body, "SPARK_X_AGENT_SELECTED_SKILL_DETAIL_INVALID"),
+    );
+    const skillConfig = objectValue(skill?.config);
+    const prompt = skillConfig?.prompt_template;
+    if (
+      skill === null ||
+      typeof skill.id !== "string" ||
+      !uuidPattern.test(skill.id) ||
+      skill.name !== trustedSkillName ||
+      skill.display_name !== trustedSkillDisplayName ||
+      skill.category !== trustedSkillCategory ||
+      skill.is_enabled !== true ||
+      skill.is_builtin !== false ||
+      skillConfig === null ||
+      typeof prompt !== "string" ||
+      prompt.length === 0 ||
+      new TextEncoder().encode(prompt).byteLength > 65_536 ||
+      prompt.includes("\u0000")
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SELECTED_SKILL_DETAIL_INVALID",
+        "选中 Skill 的身份、状态、分类或受限发布正文投影不完整。",
+      );
+    }
+    const promptSha256 = sha256(prompt);
+    if (promptSha256 !== expectedPublicationSha256) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SELECTED_SKILL_HASH_MISMATCH",
+        "选中 Skill 的精确发布内容哈希与测试基线不一致。",
+      );
+    }
+
+    await activateSparkXProvider(environment, token, fixture.id, remainingOptions());
+    const activated = await listSparkXProviders(environment, token, remainingOptions());
+    const activatedProviders = activated.filter((provider) => provider.active);
+    if (activatedProviders.length !== 1 || activatedProviders[0]?.id !== fixture.id) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_FIXTURE_ACTIVATION_ASSERTION_FAILED",
+        "Skill 注入 Provider 夹具没有成为唯一活跃 Provider。",
+      );
+    }
+
+    const message = `SKILL002_USE:${runId}`;
+    const finalContent = `SKILL002_APPLIED:${runId}`;
+    const result = await streamChat(
+      environment,
+      token,
+      conversationId,
+      message,
+      remainingOptions(),
+      { skillNames: [trustedSkillName], activeSkillName: trustedSkillName },
+    );
+    const skillEvent = result.skillEvents[0];
+    if (
+      result.finalContent !== finalContent ||
+      result.stopReason !== "stop" ||
+      result.skillEventCount !== 1 ||
+      result.skillEvents.length !== 1 ||
+      skillEvent?.name !== trustedSkillName ||
+      skillEvent?.args !== "" ||
+      result.toolEventCount !== 0 ||
+      result.toolCalls.length !== 0 ||
+      result.toolResults.length !== 0 ||
+      result.reviewEventCount !== 0
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SELECTED_SKILL_INJECTION_FAILED",
+        "唯一选中 Skill 未形成固定能力回复、唯一流式 Skill 事件或零额外工具边界。",
+      );
+    }
+
+    const detailResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(`/conversations/${encodeURIComponent(conversationId)}`),
+      },
+      remainingOptions(),
+    );
+    accepted(detailResponse, "SPARK_X_AGENT_SELECTED_SKILL_CONVERSATION_FAILED");
+    const detail = dataEnvelope(
+      detailResponse.body,
+      "SPARK_X_AGENT_SELECTED_SKILL_CONVERSATION_INVALID",
+    );
+    const conversation = objectValue(detail.conversation);
+    const activatedAt = conversation?.active_skill_activated_at;
+    if (
+      conversation?.id !== conversationId ||
+      conversation.active_skill_name !== trustedSkillName ||
+      typeof activatedAt !== "string" ||
+      !Number.isFinite(Date.parse(activatedAt)) ||
+      detail.message_count !== 2
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SELECTED_SKILL_STATE_FAILED",
+        "会话未持久化唯一选中 Skill、有效激活时间或精确消息基数。",
+      );
+    }
+
+    const historyResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+        ),
+      },
+      remainingOptions(),
+    );
+    accepted(historyResponse, "SPARK_X_AGENT_SELECTED_SKILL_HISTORY_FAILED");
+    const history = dataEnvelope(
+      historyResponse.body,
+      "SPARK_X_AGENT_SELECTED_SKILL_HISTORY_INVALID",
+    );
+    const items = Array.isArray(history.items)
+      ? history.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    const userMessages = items.filter((item) => item.role === "user");
+    const assistantMessages = items.filter((item) => item.role === "assistant");
+    const toolMessages = items.filter((item) => item.role === "tool");
+    const historySkillEvents = assistantMessages.flatMap((item) =>
+      Array.isArray(item.public_execution_trace)
+        ? item.public_execution_trace
+            .map(objectValue)
+            .filter(
+              (event): event is Readonly<Record<string, unknown>> =>
+                event !== null && event.kind === "skill",
+            )
+        : [],
+    );
+    const historySkillEvent = historySkillEvents[0];
+    if (
+      items.length !== 2 ||
+      userMessages.length !== 1 ||
+      assistantMessages.length !== 1 ||
+      toolMessages.length !== 0 ||
+      userMessages[0]?.content !== message ||
+      userMessages[0]?.payload_truncated === true ||
+      assistantMessages[0]?.content !== finalContent ||
+      assistantMessages[0]?.payload_truncated === true ||
+      assistantMessages[0]?.finish_reason !== "stop" ||
+      historySkillEvents.length !== 1 ||
+      historySkillEvent?.name !== trustedSkillName ||
+      historySkillEvent?.args !== ""
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SELECTED_SKILL_HISTORY_ASSERTION_FAILED",
+        "公开历史未保留唯一选中 Skill 事件、固定回复与精确两消息基数。",
+      );
+    }
+    return {
+      conversationId,
+      skillId: skill.id,
+      skillName: trustedSkillName,
+      selected: true,
+      publicationHashMatched: true,
+      providerInjectionMatched: true,
+      unselectedSkillBodyAbsent: true,
+      activeSkillPersisted: true,
+      skillActivatedAtPresent: true,
+      skillEventCount: result.skillEventCount,
+      historySkillEventCount: historySkillEvents.length,
+      toolCallCount: result.toolCalls.length,
+      toolResultCount: result.toolResults.length,
+      reviewEventCount: result.reviewEventCount,
+      messageCount: items.length,
+      userMessageCount: userMessages.length,
+      assistantMessageCount: assistantMessages.length,
+      skillNameSha256: sha256(trustedSkillName),
+      skillArgsSha256: sha256(""),
+      promptSha256,
+      finalContentSha256: sha256(finalContent),
     };
   }
 

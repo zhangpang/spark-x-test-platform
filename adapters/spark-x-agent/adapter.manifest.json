@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -522,6 +522,85 @@
               "const": true
             },
             "contextBaseUrlSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "nameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          }
+        }
+      },
+      {
+        "key": "provider.create-skill-injection-fixture",
+        "name": "创建 Skill 注入 Provider 夹具",
+        "description": "登记固定、受限且不转发请求的 Skill 注入 Provider 夹具，并冻结原活跃 Provider 标识供 finally 与中断补偿。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 20000,
+        "producesResource": true,
+        "cleanupAction": "provider.cleanup-transient-failure-fixture",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "name"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "providerFixtureResourceId",
+            "fixtureProviderId",
+            "originalProviderId",
+            "fixtureCreated",
+            "originalProviderActive",
+            "skillFixtureTargetAllowed",
+            "skillBaseUrlSha256",
+            "nameSha256"
+          ],
+          "properties": {
+            "providerFixtureResourceId": {
+              "type": "string",
+              "minLength": 73,
+              "maxLength": 73
+            },
+            "fixtureProviderId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "originalProviderId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "fixtureCreated": {
+              "const": true
+            },
+            "originalProviderActive": {
+              "const": true
+            },
+            "skillFixtureTargetAllowed": {
+              "const": true
+            },
+            "skillBaseUrlSha256": {
               "type": "string",
               "minLength": 64,
               "maxLength": 64
@@ -3893,6 +3972,153 @@
               "type": "boolean"
             },
             "mainFileSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          }
+        }
+      },
+      {
+        "key": "skill.assert-selected-injection",
+        "name": "校验 Skill 选择注入与实际使用",
+        "description": "以固定 Provider 验证唯一选中 Skill 的正文与会话上下文真实进入模型请求，并关联流式事件、持久化 active Skill 与公开历史轨迹。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 120000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "conversationId",
+            "providerFixtureResourceId",
+            "expectedPublicationSha256"
+          ],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "providerFixtureResourceId": {
+              "type": "string",
+              "minLength": 73,
+              "maxLength": 73
+            },
+            "expectedPublicationSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "skillId",
+            "skillName",
+            "selected",
+            "publicationHashMatched",
+            "providerInjectionMatched",
+            "unselectedSkillBodyAbsent",
+            "activeSkillPersisted",
+            "skillActivatedAtPresent",
+            "skillEventCount",
+            "historySkillEventCount",
+            "toolCallCount",
+            "toolResultCount",
+            "reviewEventCount",
+            "messageCount",
+            "userMessageCount",
+            "assistantMessageCount",
+            "skillNameSha256",
+            "skillArgsSha256",
+            "promptSha256",
+            "finalContentSha256"
+          ],
+          "properties": {
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "skillId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "skillName": {
+              "const": "trade-port-daily-brief"
+            },
+            "selected": {
+              "const": true
+            },
+            "publicationHashMatched": {
+              "const": true
+            },
+            "providerInjectionMatched": {
+              "const": true
+            },
+            "unselectedSkillBodyAbsent": {
+              "const": true
+            },
+            "activeSkillPersisted": {
+              "const": true
+            },
+            "skillActivatedAtPresent": {
+              "const": true
+            },
+            "skillEventCount": {
+              "const": 1
+            },
+            "historySkillEventCount": {
+              "const": 1
+            },
+            "toolCallCount": {
+              "const": 0
+            },
+            "toolResultCount": {
+              "const": 0
+            },
+            "reviewEventCount": {
+              "const": 0
+            },
+            "messageCount": {
+              "const": 2
+            },
+            "userMessageCount": {
+              "const": 1
+            },
+            "assistantMessageCount": {
+              "const": 1
+            },
+            "skillNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "skillArgsSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "promptSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "finalContentSha256": {
               "type": "string",
               "minLength": 64,
               "maxLength": 64

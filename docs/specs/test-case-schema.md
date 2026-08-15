@@ -80,6 +80,8 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/chat.assert-provider-failure-retry`：用已登记夹具产生 `provider_unavailable` 可见首错，恢复原 Provider 后以新幂等键提交独立 Turn，严格校验三条消息基数且不输出正文或 Provider 配置；
 - `adapter:spark-x-agent/provider.create-context-compaction-fixture`：固定创建同环境主机、白名单端口 4173 的受限 OpenAI 兼容 Provider 夹具，只输出夹具/原 Provider 标识及哈希；必须同步登记专用资源和恢复补偿；
 - `adapter:spark-x-agent/chat.assert-context-compaction-continuity`：用已登记夹具产生一组真实内置只读 `document_search` 调用/结果，在 24 轮有界消息内按序观察唯一压缩阶段，再以独立请求验证关键事实、工具状态和持久化游标连续；只输出计数、判定和 SHA-256；
+- `adapter:spark-x-agent/provider.create-skill-injection-fixture`：固定创建同环境主机、白名单端口 4173 的受限 Skill 注入 Provider 夹具，不接受 URL、模型或 API Key 输入，只登记资源标识、判定和哈希；必须同步登记恢复原 Provider 的补偿；
+- `adapter:spark-x-agent/skill.assert-selected-injection`：仅选择固定受信任 `trade-port-daily-brief`，校验精确发布哈希后证明 Skill 正文和 active 上下文进入 Provider，并关联唯一流式 Skill 事件、会话状态、公开历史轨迹和精确消息基数；不输出 Prompt、消息正文、Provider 目标或密钥；
 - `adapter:spark-x-agent/provider.cleanup-transient-failure-fixture`：先恢复资源标识中的原 Provider，再幂等删除夹具并验证唯一活跃 Provider，用于普通 `finally` 与独立补偿；
 - `adapter:spark-x-agent/chat.assert-history`：重新登录并校验唯一用户消息、唯一助手回复、`stop` 终止原因，以及落库回答 SHA-256 与流式最终回答一致；
 - `adapter:spark-x-agent/chat.assert-context-history`：校验同一主会话两轮用户/助手消息顺序、两次流式哈希、`stop` 终态、零工具消息，并拒绝独立干扰会话标识串入；
