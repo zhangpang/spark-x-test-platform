@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -214,6 +214,94 @@
             },
             "assistantFinishReason": { "const": "stop" },
             "assistantTurnStatus": { "type": "string" }
+          }
+        }
+      },
+      {
+        "key": "chat.assert-context-history",
+        "name": "校验两轮上下文历史",
+        "description": "重新登录并校验同一会话两轮消息的顺序、流式哈希、上下文命中和跨会话隔离。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 20000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "conversationId",
+            "firstUserText",
+            "firstAssistantSha256",
+            "secondUserText",
+            "secondExpectedText",
+            "secondAssistantSha256",
+            "forbiddenText"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "firstUserText": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "firstAssistantSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "secondUserText": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "secondExpectedText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "secondAssistantSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "forbiddenText": { "type": "string", "minLength": 1, "maxLength": 5000 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "messageCount",
+            "userMessageCount",
+            "assistantMessageCount",
+            "toolMessageCount",
+            "expectedOrderMatched",
+            "firstAssistantHashMatched",
+            "secondAssistantHashMatched",
+            "secondExpectedTextMatched",
+            "forbiddenTextAbsent",
+            "firstAssistantContentSha256",
+            "secondAssistantContentSha256",
+            "assistantFinishReasonsMatched"
+          ],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "messageCount": { "const": 4 },
+            "userMessageCount": { "const": 2 },
+            "assistantMessageCount": { "const": 2 },
+            "toolMessageCount": { "const": 0 },
+            "expectedOrderMatched": { "const": true },
+            "firstAssistantHashMatched": { "const": true },
+            "secondAssistantHashMatched": { "const": true },
+            "secondExpectedTextMatched": { "const": true },
+            "forbiddenTextAbsent": { "const": true },
+            "firstAssistantContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "secondAssistantContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "assistantFinishReasonsMatched": { "const": true }
           }
         }
       },

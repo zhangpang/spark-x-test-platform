@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.3.0",
+  "version": "0.8.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -33,6 +33,7 @@
       { "key": "conversation.assert-recent" },
       { "key": "chat.ask" },
       { "key": "chat.assert-history" },
+      { "key": "chat.assert-context-history" },
       { "key": "conversation.delete" }
     ],
     "assertions": [],
@@ -187,8 +188,8 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.7.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
-`chat.assert-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
+当前 `0.8.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
+`chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.cleanup` 和
 `skill.assert-trusted-publication`，以及 `automation.create`、`automation.wait-fired` 和
@@ -197,7 +198,8 @@ telemetry.*
 重定向执行环境 allowlist 校验；登录 Token、用户密码和模型回答正文都不进入输出、日志、资源台账或
 结构化证据。`chat.ask` 只向此前已创建并登记的测试会话发送消息，将 SSE 限制在 1 MB 内，要求流中会话
 ID 与登记 ID 一致、存在内容事件和唯一终态 `done`，并只输出事件计数、长度与最终回答 SHA-256；
-`chat.assert-history` 使用该哈希确认落库回答与流式终态一致。CHAT 用例必须先用 `conversation.create` 登记
+`chat.assert-history` 使用该哈希确认单轮落库回答与流式终态一致；`chat.assert-context-history` 同时核对两轮
+`user/assistant` 顺序、两次流式 SHA-256、`stop` 终态、无工具消息和独立干扰会话标识完全缺失。CHAT 用例必须先用 `conversation.create` 登记
 `spark-x-agent-conversation` 资源再执行 `chat.ask`，因此聊天取消、超时或失败时，普通 `finally` 和独立
 补偿 Worker 都已持有清理 ID。删除动作重新登录；HTTP 404 作为已经清理成功处理，不触发掩盖根因的重试。
 

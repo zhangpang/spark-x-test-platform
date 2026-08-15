@@ -126,7 +126,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.7.0",
+      version: "0.8.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -140,6 +140,10 @@ describe("spark-x-agent adapter", () => {
           expect.objectContaining({ key: "chat.ask", producesResource: false }),
           expect.objectContaining({
             key: "chat.assert-history",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "chat.assert-context-history",
             actionLevel: "write",
           }),
           expect.objectContaining({
@@ -580,6 +584,141 @@ describe("spark-x-agent adapter", () => {
       assistantContentSha256: assistantHash,
       assistantFinishReason: "stop",
       assistantTurnStatus: "completed",
+    });
+  });
+
+  it("matches two streamed turns to persisted context history and rejects cross-conversation text", async () => {
+    const marker = `spark-x-context-${variables["run.id"]}`;
+    const forbidden = `spark-x-decoy-${variables["run.id"]}`;
+    const firstUser = `请记住上下文标识 ${marker}，并只回复这个标识。`;
+    const firstAssistant = marker;
+    const secondUser = `请只回复上一轮的上下文标识；本轮校验号 ${variables["run.id"]}。`;
+    const secondAssistant = marker;
+    const firstHash = createHash("sha256").update(firstAssistant).digest("hex");
+    const secondHash = createHash("sha256").update(secondAssistant).digest("hex");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                role: "assistant",
+                content: secondAssistant,
+                payload_truncated: false,
+                finish_reason: "stop",
+              },
+              { role: "user", content: secondUser, payload_truncated: false },
+              {
+                role: "assistant",
+                content: firstAssistant,
+                payload_truncated: false,
+                finish_reason: "stop",
+              },
+              { role: "user", content: firstUser, payload_truncated: false },
+            ],
+          },
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/chat.assert-context-history",
+      environment,
+      {
+        ...credentials,
+        conversationId,
+        firstUserText: "请记住上下文标识 spark-x-context-${run.id}，并只回复这个标识。",
+        firstAssistantSha256: firstHash,
+        secondUserText: "请只回复上一轮的上下文标识；本轮校验号 ${run.id}。",
+        secondExpectedText: "spark-x-context-${run.id}",
+        secondAssistantSha256: secondHash,
+        forbiddenText: "spark-x-decoy-${run.id}",
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      conversationId,
+      messageCount: 4,
+      userMessageCount: 2,
+      assistantMessageCount: 2,
+      toolMessageCount: 0,
+      expectedOrderMatched: true,
+      firstAssistantHashMatched: true,
+      secondAssistantHashMatched: true,
+      secondExpectedTextMatched: true,
+      forbiddenTextAbsent: true,
+      firstAssistantContentSha256: firstHash,
+      secondAssistantContentSha256: secondHash,
+      assistantFinishReasonsMatched: true,
+    });
+    expect(JSON.stringify(output)).not.toContain(marker);
+    expect(JSON.stringify(output)).not.toContain(forbidden);
+    expect(JSON.stringify(output)).not.toContain("memory-only-access-token-value");
+  });
+
+  it("fails two-turn context history when the main conversation contains the decoy marker", async () => {
+    const marker = `spark-x-context-${variables["run.id"]}`;
+    const forbidden = `spark-x-decoy-${variables["run.id"]}`;
+    const firstUser = `请记住上下文标识 ${marker}，并只回复这个标识。`;
+    const secondUser = `请只回复上一轮的上下文标识；本轮校验号 ${variables["run.id"]}。`;
+    const contaminated = `${marker} ${forbidden}`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { role: "user", content: firstUser, payload_truncated: false },
+              {
+                role: "assistant",
+                content: marker,
+                payload_truncated: false,
+                finish_reason: "stop",
+              },
+              { role: "user", content: secondUser, payload_truncated: false },
+              {
+                role: "assistant",
+                content: contaminated,
+                payload_truncated: false,
+                finish_reason: "stop",
+              },
+            ],
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/chat.assert-context-history",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          firstUserText: "请记住上下文标识 spark-x-context-${run.id}，并只回复这个标识。",
+          firstAssistantSha256: createHash("sha256").update(marker).digest("hex"),
+          secondUserText: "请只回复上一轮的上下文标识；本轮校验号 ${run.id}。",
+          secondExpectedText: "spark-x-context-${run.id}",
+          secondAssistantSha256: createHash("sha256").update(contaminated).digest("hex"),
+          forbiddenText: "spark-x-decoy-${run.id}",
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_CONTEXT_CROSS_TALK_FAILED",
+        classification: "product_failed",
+      },
     });
   });
 

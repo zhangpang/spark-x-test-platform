@@ -44,6 +44,7 @@ const workerRegistration = {
     "adapter:spark-x-agent/conversation.delete",
     "adapter:spark-x-agent/chat.ask",
     "adapter:spark-x-agent/chat.assert-history",
+    "adapter:spark-x-agent/chat.assert-context-history",
     "adapter:spark-x-agent/tool.assert-safe-catalog",
     "adapter:spark-x-agent/tool.invoke-safe",
     "adapter:spark-x-agent/tool.assert-history",

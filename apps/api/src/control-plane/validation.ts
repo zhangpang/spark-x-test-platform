@@ -40,6 +40,7 @@ const availableActions = new Set([
   "adapter:spark-x-agent/conversation.delete",
   "adapter:spark-x-agent/chat.ask",
   "adapter:spark-x-agent/chat.assert-history",
+  "adapter:spark-x-agent/chat.assert-context-history",
   "adapter:spark-x-agent/tool.assert-safe-catalog",
   "adapter:spark-x-agent/tool.invoke-safe",
   "adapter:spark-x-agent/tool.assert-history",
@@ -66,6 +67,7 @@ const sparkXAgentActionLevels = new Map<string, ActionLevel>([
   ["adapter:spark-x-agent/conversation.delete", "dangerous"],
   ["adapter:spark-x-agent/chat.ask", "write"],
   ["adapter:spark-x-agent/chat.assert-history", "write"],
+  ["adapter:spark-x-agent/chat.assert-context-history", "write"],
   ["adapter:spark-x-agent/tool.assert-safe-catalog", "read"],
   ["adapter:spark-x-agent/tool.invoke-safe", "write"],
   ["adapter:spark-x-agent/tool.assert-history", "write"],
@@ -102,6 +104,20 @@ const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
       "expectedUserText",
       "expectedAssistantText",
       "expectedAssistantSha256",
+    ]),
+  ],
+  [
+    "adapter:spark-x-agent/chat.assert-context-history",
+    new Set([
+      "username",
+      "password",
+      "conversationId",
+      "firstUserText",
+      "firstAssistantSha256",
+      "secondUserText",
+      "secondExpectedText",
+      "secondAssistantSha256",
+      "forbiddenText",
     ]),
   ],
   ["adapter:spark-x-agent/tool.assert-safe-catalog", new Set(["username", "password"])],
@@ -524,6 +540,19 @@ function validateSparkXAgentAction(
       code: "RUN_TRACEABILITY_REQUIRED",
       path: `${path}.params.message`,
       message: "测试对话消息必须包含 ${run.id}，以便追踪和残留数据审计。",
+    });
+  }
+  if (
+    action === "adapter:spark-x-agent/chat.assert-context-history" &&
+    ["firstUserText", "secondUserText", "secondExpectedText", "forbiddenText"].some(
+      (name) => typeof params[name] === "string" && !params[name].includes("${run.id}"),
+    )
+  ) {
+    issues.push({
+      severity: "error",
+      code: "RUN_TRACEABILITY_REQUIRED",
+      path: `${path}.params`,
+      message: "两轮上下文及隔离标识必须包含 ${run.id}，以便追踪和残留数据审计。",
     });
   }
   return issues;

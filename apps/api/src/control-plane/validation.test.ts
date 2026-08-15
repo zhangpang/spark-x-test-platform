@@ -836,6 +836,107 @@ describe("M2 asset validation", () => {
       }),
     ).toEqual({ valid: true, issues: [] });
 
+    const contextDefinition = definition({
+      metadata: {
+        name: "CHAT-002 two-turn context history",
+        systemKey: "spark-x-agent",
+        moduleKey: "chat",
+        priority: "P0",
+        classification: "blackbox",
+        actionLevel: "dangerous",
+        tags: ["adapter", "core-smoke", "context"],
+      },
+      inputs,
+      steps: [
+        {
+          id: "create-context-conversation",
+          name: "create context conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.create",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            title: "spark-x-context-${run.id}",
+          },
+          capture: { "conversation-id": "$.conversationId" },
+          resource: {
+            type: "spark-x-agent-conversation",
+            id: "${step.conversation-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/conversation.delete",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                conversationId: "${resource.id}",
+              },
+            },
+          },
+        },
+        {
+          id: "assert-context-history",
+          name: "assert context history",
+          kind: "action",
+          action: "adapter:spark-x-agent/chat.assert-context-history",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            firstUserText: "请记住上下文标识 spark-x-context-${run.id}，并只回复这个标识。",
+            firstAssistantSha256:
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            secondUserText: "请只回复上一轮的上下文标识；本轮校验号 ${run.id}。",
+            secondExpectedText: "spark-x-context-${run.id}",
+            secondAssistantSha256:
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            forbiddenText: "spark-x-decoy-${run.id}",
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "delete-context-conversation",
+          name: "delete context conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.delete",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+          },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(contextDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "chat",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const unsafeContext = {
+      ...contextDefinition,
+      steps: [
+        {
+          ...(contextDefinition.steps as readonly JsonObject[])[1],
+          params: {
+            ...((contextDefinition.steps as readonly JsonObject[])[1]?.params as JsonObject),
+            forbiddenText: "untraceable",
+            script: "return process.env",
+          },
+        },
+      ],
+    } as JsonObject;
+    expect(
+      validateDefinition(unsafeContext, {
+        systemKey: "spark-x-agent",
+        moduleKey: "chat",
+        environment: sparkEnvironment,
+      }).issues.map((issue) => issue.code),
+    ).toEqual(
+      expect.arrayContaining(["ARBITRARY_ADAPTER_INPUT_FORBIDDEN", "RUN_TRACEABILITY_REQUIRED"]),
+    );
+
     const unsafe = definition({
       metadata: chatDefinition.metadata,
       inputs,

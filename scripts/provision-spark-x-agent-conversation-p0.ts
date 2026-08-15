@@ -47,6 +47,7 @@ interface RunDetail extends IdentifiedRecord {
     cleanupStatus: string;
   }>[];
   readonly steps: readonly Readonly<{
+    stepId: string;
     action: string;
     phase: string;
     status: string;
@@ -62,6 +63,7 @@ interface RunDetail extends IdentifiedRecord {
 
 const apiBase = process.env.SPARK_X_TEST_PLATFORM_API_URL ?? "http://127.0.0.1:4100/api/v1";
 const runSmoke = process.env.SPARK_X_AGENT_RUN_SMOKE === "true";
+const runContextSmoke = process.env.SPARK_X_AGENT_RUN_CONTEXT_SMOKE === "true";
 const runKnowledgeSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_SMOKE === "true";
 const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
 const runAutomationSmoke = process.env.SPARK_X_AGENT_RUN_AUTOMATION_SMOKE === "true";
@@ -439,6 +441,192 @@ function chatDefinition(): Readonly<Record<string, unknown>> {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
           conversationId: "${step.conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
+function chatContextDefinition(): Readonly<Record<string, unknown>> {
+  const contextMarker = "spark-x-context-${run.id}";
+  const decoyMarker = "spark-x-decoy-${run.id}";
+  const decoyMessage = `独立干扰会话标识 ${decoyMarker}。请只回复这个标识，不要调用任何工具。`;
+  const firstMessage = `请记住上下文标识 ${contextMarker}，并只回复这个标识，不要调用任何工具。`;
+  const secondMessage = "请只回复上一轮的上下文标识；本轮校验号 ${run.id}。不要调用任何工具。";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "CHAT-002 同一会话上下文续接与跨会话隔离",
+      description:
+        "建立独立干扰会话后，在主会话连续执行两轮真实模型对话，校验上下文续接、四条历史顺序、流式哈希和干扰标识完全隔离。",
+      systemKey: "spark-x-agent",
+      moduleKey: "chat",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "chat", "p0", "core-smoke", "real-model", "context-isolation"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 120_000,
+      caseTimeoutMs: 480_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:chat-context"],
+    steps: [
+      {
+        id: "create-decoy-conversation",
+        name: "创建并登记独立干扰会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: decoyMarker,
+        },
+        capture: { "decoy-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.decoy-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "seed-decoy-conversation",
+        name: "写入仅属于干扰会话的标识",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.ask",
+        timeoutMs: 120_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.decoy-conversation-id}",
+          message: decoyMessage,
+          expectedText: decoyMarker,
+        },
+      },
+      {
+        id: "create-context-conversation",
+        name: "创建并登记两轮上下文主会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: contextMarker,
+        },
+        capture: { "context-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.context-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "ask-context-first-turn",
+        name: "写入主会话上下文标识",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.ask",
+        timeoutMs: 120_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.context-conversation-id}",
+          message: firstMessage,
+          expectedText: contextMarker,
+        },
+        capture: { "context-first-assistant-sha256": "$.finalContentSha256" },
+      },
+      {
+        id: "ask-context-second-turn",
+        name: "重新使用同一会话并仅凭上下文取回标识",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.ask",
+        timeoutMs: 120_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.context-conversation-id}",
+          message: secondMessage,
+          expectedText: contextMarker,
+        },
+        capture: { "context-second-assistant-sha256": "$.finalContentSha256" },
+      },
+      {
+        id: "assert-context-history",
+        name: "校验两轮历史、流式哈希和跨会话隔离",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.assert-context-history",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.context-conversation-id}",
+          firstUserText: firstMessage,
+          firstAssistantSha256: "${step.context-first-assistant-sha256}",
+          secondUserText: secondMessage,
+          secondExpectedText: contextMarker,
+          secondAssistantSha256: "${step.context-second-assistant-sha256}",
+          forbiddenText: decoyMarker,
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "delete-context-conversation",
+        name: "删除两轮上下文主会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.context-conversation-id}",
+        },
+      },
+      {
+        id: "delete-decoy-conversation",
+        name: "删除独立干扰会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.decoy-conversation-id}",
         },
       },
     ],
@@ -1090,9 +1278,9 @@ async function executeSmoke(
   check(accepted.status === 202, "Spark X Agent core smoke run was not newly accepted");
   const run = await waitForRun(accepted.body.id);
   check(run.gateResult === "passed", `Spark X Agent core smoke gate is ${String(run.gateResult)}`);
-  check(run.summary.passed === 7, "Spark X Agent core smoke cases did not all pass");
+  check(run.summary.passed === 8, "Spark X Agent core smoke cases did not all pass");
   check(run.firstFailure === null, "Spark X Agent core smoke retained an unexpected first failure");
-  check(run.cases.length === 7, "Spark X Agent core smoke run case linkage is incomplete");
+  check(run.cases.length === 8, "Spark X Agent core smoke run case linkage is incomplete");
   check(
     run.cases.every((item) => item.result === "passed"),
     "Spark X Agent core smoke case failed",
@@ -1102,8 +1290,8 @@ async function executeSmoke(
     "Spark X Agent core smoke cleanup status is invalid",
   );
   check(
-    run.steps.length === 24,
-    "Spark X Agent core smoke did not record eighteen main steps and six finally steps",
+    run.steps.length === 32,
+    "Spark X Agent core smoke did not record twenty-four main steps and eight finally steps",
   );
   check(
     run.steps.every((step) => step.status === "passed"),
@@ -1118,6 +1306,14 @@ async function executeSmoke(
         "main:adapter:spark-x-agent/conversation.create",
         "main:adapter:spark-x-agent/chat.ask",
         "main:adapter:spark-x-agent/chat.assert-history",
+        "finally:adapter:spark-x-agent/conversation.delete",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/chat.ask",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/chat.ask",
+        "main:adapter:spark-x-agent/chat.ask",
+        "main:adapter:spark-x-agent/chat.assert-context-history",
+        "finally:adapter:spark-x-agent/conversation.delete",
         "finally:adapter:spark-x-agent/conversation.delete",
         "main:adapter:spark-x-agent/tool.assert-safe-catalog",
         "main:adapter:spark-x-agent/conversation.create",
@@ -1139,10 +1335,10 @@ async function executeSmoke(
       ].join(","),
     "Spark X Agent core smoke structured step sequence is incorrect",
   );
-  check(run.resources.length === 6, "Spark X Agent core smoke resource ledger linkage is missing");
+  check(run.resources.length === 8, "Spark X Agent core smoke resource ledger linkage is missing");
   check(
     run.resources.filter((resource) => resource.resourceType === "spark-x-agent-conversation")
-      .length === 4 &&
+      .length === 6 &&
       run.resources.filter((resource) => resource.resourceType === "spark-x-agent-knowledge-base")
         .length === 1 &&
       run.resources.filter((resource) => resource.resourceType === "spark-x-agent-automation")
@@ -1175,6 +1371,7 @@ async function executeSmoke(
       chatHistory.outputSummary.assistantContentSha256 === chatAsk.outputSummary.finalContentSha256,
     "CHAT-001 persisted history is not linked to the streamed answer",
   );
+  assertContextEvidence(run);
   const toolCatalog = run.steps.find(
     (step) => step.action === "adapter:spark-x-agent/tool.assert-safe-catalog",
   );
@@ -1243,6 +1440,130 @@ async function executeSmoke(
       !evidence.includes('{"success":true,"operation":"multiply","a":6,"b":7,"result":42}'),
     "Spark X Agent tool arguments or result leaked into structured evidence",
   );
+  return run;
+}
+
+function assertContextEvidence(run: RunDetail): void {
+  const contextAskIds = new Set([
+    "seed-decoy-conversation",
+    "ask-context-first-turn",
+    "ask-context-second-turn",
+  ]);
+  const asks = run.steps.filter(
+    (step) => step.action === "adapter:spark-x-agent/chat.ask" && contextAskIds.has(step.stepId),
+  );
+  const history = run.steps.find(
+    (step) => step.action === "adapter:spark-x-agent/chat.assert-context-history",
+  );
+  check(asks.length === 3, "CHAT-002 did not record three isolated streamed turns");
+  const [decoyAsk, firstAsk, secondAsk] = asks;
+  check(
+    [decoyAsk, firstAsk, secondAsk].every(
+      (step) =>
+        step?.outputSummary?.done === true &&
+        step.outputSummary.expectedTextMatched === true &&
+        step.outputSummary.toolEventCount === 0 &&
+        step.outputSummary.skillEventCount === 0 &&
+        step.outputSummary.reviewEventCount === 0 &&
+        step.outputSummary.truncated === false &&
+        typeof step.outputSummary.finalContentSha256 === "string" &&
+        /^[0-9a-f]{64}$/u.test(step.outputSummary.finalContentSha256),
+    ),
+    "CHAT-002 streamed turn evidence is incomplete or unexpectedly invoked an extension",
+  );
+  check(
+    decoyAsk?.outputSummary?.finalContentSha256 !== firstAsk?.outputSummary?.finalContentSha256 &&
+      decoyAsk?.outputSummary?.finalContentSha256 !== secondAsk?.outputSummary?.finalContentSha256,
+    "CHAT-002 decoy response is not isolated from the main conversation",
+  );
+  check(
+    history?.outputSummary?.messageCount === 4 &&
+      history.outputSummary.userMessageCount === 2 &&
+      history.outputSummary.assistantMessageCount === 2 &&
+      history.outputSummary.toolMessageCount === 0 &&
+      history.outputSummary.expectedOrderMatched === true &&
+      history.outputSummary.firstAssistantHashMatched === true &&
+      history.outputSummary.secondAssistantHashMatched === true &&
+      history.outputSummary.secondExpectedTextMatched === true &&
+      history.outputSummary.forbiddenTextAbsent === true &&
+      history.outputSummary.assistantFinishReasonsMatched === true &&
+      history.outputSummary.firstAssistantContentSha256 ===
+        firstAsk?.outputSummary?.finalContentSha256 &&
+      history.outputSummary.secondAssistantContentSha256 ===
+        secondAsk?.outputSummary?.finalContentSha256,
+    "CHAT-002 persisted history, context continuation or cross-conversation isolation is incomplete",
+  );
+  const evidence = JSON.stringify({ asks, history });
+  check(
+    !evidence.includes("请记住上下文标识") &&
+      !evidence.includes("独立干扰会话标识") &&
+      !evidence.includes("memory-only-access-token"),
+    "CHAT-002 message content or in-memory token leaked into structured evidence",
+  );
+}
+
+async function executeContextSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-chat-context-p0-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-chat-context-p0-verification",
+      priority: 95,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent context run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(run.gateResult === "passed", `Spark X Agent context gate is ${String(run.gateResult)}`);
+  check(run.summary.passed === 1, "Spark X Agent context case did not pass");
+  check(run.firstFailure === null, "Spark X Agent context run retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent context case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/chat.ask",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/chat.ask",
+        "main:adapter:spark-x-agent/chat.ask",
+        "main:adapter:spark-x-agent/chat.assert-context-history",
+        "finally:adapter:spark-x-agent/conversation.delete",
+        "finally:adapter:spark-x-agent/conversation.delete",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent context structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 2 &&
+      run.resources.every(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-conversation" &&
+          resource.cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete" &&
+          resource.cleanupStatus === "passed",
+      ),
+    "Spark X Agent context resource ledger or cleanup order is incomplete",
+  );
+  check(run.cleanupJob === null, "normal context run unexpectedly required compensation");
+  assertContextEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into CHAT-002 evidence",
+    );
+  }
   return run;
 }
 
@@ -1620,6 +1941,14 @@ const chatCase = await ensureCase(
   chatDefinition(),
   "新增星火 Agent 真实流式对话与历史证据闭环",
 );
+const chatContextCase = await ensureCase(
+  system.id,
+  chat.id,
+  environment.id,
+  "CHAT-002 同一会话上下文续接与跨会话隔离",
+  chatContextDefinition(),
+  "新增两轮上下文续接、跨会话隔离、流式哈希和四消息历史 P0 闭环",
+);
 const toolCatalogCase = await ensureCase(
   system.id,
   tools.id,
@@ -1667,6 +1996,13 @@ const conversationSuite = await ensureSuite(
   "CONV-001 真实会话创建、最近排序、资源登记与清理闭环。",
   [conversation.testCase.id],
 );
+const chatContextSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-chat-context-p0",
+  "星火 Agent 两轮上下文 P0 纵向切片",
+  "CHAT-002 独立干扰会话、同会话两轮续接、流式哈希、四消息历史和完整清理闭环。",
+  [chatContextCase.testCase.id],
+);
 const toolSuite = await ensureSuite(
   system.id,
   "spark-x-agent-tools-p0",
@@ -1699,10 +2035,11 @@ const suite = await ensureSuite(
   system.id,
   "spark-x-agent-core-smoke",
   "星火 Agent 核心冒烟",
-  "发布后核心冒烟套件；当前包含 CONV-001、CHAT-001、TOOL-001/002、KB-001、SKILL-001 与 AUTO-001，后续按模块扩充到 10～12 条 P0。",
+  "发布后核心冒烟套件；当前包含 CONV-001、CHAT-001/002、TOOL-001/002、KB-001、SKILL-001 与 AUTO-001，后续按模块扩充到 10～12 条 P0。",
   [
     conversation.testCase.id,
     chatCase.testCase.id,
+    chatContextCase.testCase.id,
     toolCatalogCase.testCase.id,
     toolInvocationCase.testCase.id,
     knowledgeBaseCase.testCase.id,
@@ -1711,25 +2048,30 @@ const suite = await ensureSuite(
   ],
 );
 check(
-  [runSmoke, runKnowledgeSmoke, runSkillSmoke, runAutomationSmoke].filter(Boolean).length <= 1,
+  [runSmoke, runContextSmoke, runKnowledgeSmoke, runSkillSmoke, runAutomationSmoke].filter(Boolean)
+    .length <= 1,
   "only one Spark X Agent smoke mode can be true",
 );
 const run = runSmoke
   ? await executeSmoke(system.id, environment.id, suite.id, password)
+  : runContextSmoke
+    ? await executeContextSmoke(system.id, environment.id, chatContextSuite.id, password)
+    : runKnowledgeSmoke
+      ? await executeKnowledgeSmoke(system.id, environment.id, knowledgeBaseSuite.id, password)
+      : runSkillSmoke
+        ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
+        : runAutomationSmoke
+          ? await executeAutomationSmoke(system.id, environment.id, automationSuite.id, password)
+          : undefined;
+const scenario = runContextSmoke
+  ? "spark-x-agent-chat-context-p0"
   : runKnowledgeSmoke
-    ? await executeKnowledgeSmoke(system.id, environment.id, knowledgeBaseSuite.id, password)
+    ? "spark-x-agent-knowledge-base-p0"
     : runSkillSmoke
-      ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
+      ? "spark-x-agent-skills-p0"
       : runAutomationSmoke
-        ? await executeAutomationSmoke(system.id, environment.id, automationSuite.id, password)
-        : undefined;
-const scenario = runKnowledgeSmoke
-  ? "spark-x-agent-knowledge-base-p0"
-  : runSkillSmoke
-    ? "spark-x-agent-skills-p0"
-    : runAutomationSmoke
-      ? "spark-x-agent-automations-p0"
-      : "spark-x-agent-core-smoke";
+        ? "spark-x-agent-automations-p0"
+        : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -1738,14 +2080,16 @@ console.info(
     assertions:
       run === undefined
         ? 0
-        : runKnowledgeSmoke
-          ? 16
-          : runSkillSmoke
-            ? 12
-            : runAutomationSmoke
-              ? 20
-              : 82,
-    caseCount: 7,
+        : runContextSmoke
+          ? 28
+          : runKnowledgeSmoke
+            ? 16
+            : runSkillSmoke
+              ? 12
+              : runAutomationSmoke
+                ? 20
+                : 110,
+    caseCount: 8,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
     systemId: system.id,
@@ -1754,6 +2098,8 @@ console.info(
     conversationCaseVersionId: conversation.version.id,
     chatCaseId: chatCase.testCase.id,
     chatCaseVersionId: chatCase.version.id,
+    chatContextCaseId: chatContextCase.testCase.id,
+    chatContextCaseVersionId: chatContextCase.version.id,
     toolCatalogCaseId: toolCatalogCase.testCase.id,
     toolCatalogCaseVersionId: toolCatalogCase.version.id,
     toolInvocationCaseId: toolInvocationCase.testCase.id,
@@ -1765,6 +2111,7 @@ console.info(
     automationCaseId: automationCase.testCase.id,
     automationCaseVersionId: automationCase.version.id,
     conversationSuiteId: conversationSuite.id,
+    chatContextSuiteId: chatContextSuite.id,
     toolSuiteId: toolSuite.id,
     knowledgeBaseSuiteId: knowledgeBaseSuite.id,
     skillSuiteId: skillSuite.id,

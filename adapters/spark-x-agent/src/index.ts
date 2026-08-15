@@ -16,6 +16,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/conversation.delete",
   "adapter:spark-x-agent/chat.ask",
   "adapter:spark-x-agent/chat.assert-history",
+  "adapter:spark-x-agent/chat.assert-context-history",
   "adapter:spark-x-agent/tool.assert-safe-catalog",
   "adapter:spark-x-agent/tool.invoke-safe",
   "adapter:spark-x-agent/tool.assert-history",
@@ -219,6 +220,74 @@ const conversationActionCapabilities = [
         },
         assistantFinishReason: { const: "stop" },
         assistantTurnStatus: { type: "string" },
+      },
+    },
+  },
+  {
+    key: "chat.assert-context-history",
+    name: "校验两轮上下文历史",
+    description: "重新登录并校验同一会话两轮消息的顺序、流式哈希、上下文命中和跨会话隔离。",
+    actionLevel: "write",
+    defaultTimeoutMs: 20_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "conversationId",
+        "firstUserText",
+        "firstAssistantSha256",
+        "secondUserText",
+        "secondExpectedText",
+        "secondAssistantSha256",
+        "forbiddenText",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        firstUserText: { type: "string", minLength: 1, maxLength: 20_000 },
+        firstAssistantSha256: { type: "string", minLength: 64, maxLength: 64 },
+        secondUserText: { type: "string", minLength: 1, maxLength: 20_000 },
+        secondExpectedText: { type: "string", minLength: 1, maxLength: 5_000 },
+        secondAssistantSha256: { type: "string", minLength: 64, maxLength: 64 },
+        forbiddenText: { type: "string", minLength: 1, maxLength: 5_000 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "messageCount",
+        "userMessageCount",
+        "assistantMessageCount",
+        "toolMessageCount",
+        "expectedOrderMatched",
+        "firstAssistantHashMatched",
+        "secondAssistantHashMatched",
+        "secondExpectedTextMatched",
+        "forbiddenTextAbsent",
+        "firstAssistantContentSha256",
+        "secondAssistantContentSha256",
+        "assistantFinishReasonsMatched",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        messageCount: { const: 4 },
+        userMessageCount: { const: 2 },
+        assistantMessageCount: { const: 2 },
+        toolMessageCount: { const: 0 },
+        expectedOrderMatched: { const: true },
+        firstAssistantHashMatched: { const: true },
+        secondAssistantHashMatched: { const: true },
+        secondExpectedTextMatched: { const: true },
+        forbiddenTextAbsent: { const: true },
+        firstAssistantContentSha256: { type: "string", minLength: 64, maxLength: 64 },
+        secondAssistantContentSha256: { type: "string", minLength: 64, maxLength: 64 },
+        assistantFinishReasonsMatched: { const: true },
       },
     },
   },
@@ -876,7 +945,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.7.0",
+  version: "0.8.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -893,7 +962,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "core-smoke-automation" as const;
+export const sparkXAgentAdapterPhase = "core-smoke-context" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -3474,6 +3543,135 @@ export async function executeSparkXAgentAction(
       assistantContentLength: finalAssistant.content.length,
       assistantContentSha256,
       assistantFinishReason: "stop",
+    };
+  }
+  if (action === "adapter:spark-x-agent/chat.assert-context-history") {
+    const firstUserText = requiredString(params, "firstUserText", variables, 20_000);
+    const firstAssistantSha256 = requiredSha256(params, "firstAssistantSha256", variables);
+    const secondUserText = requiredString(params, "secondUserText", variables, 20_000);
+    const secondExpectedText = requiredString(params, "secondExpectedText", variables, 5_000);
+    const secondAssistantSha256 = requiredSha256(params, "secondAssistantSha256", variables);
+    const forbiddenText = requiredString(params, "forbiddenText", variables, 5_000);
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+        ),
+      },
+      remainingOptions(),
+    );
+    accepted(response, "SPARK_X_AGENT_CONTEXT_HISTORY_FAILED");
+    const data = dataEnvelope(response.body, "SPARK_X_AGENT_CONTEXT_HISTORY_RESPONSE_INVALID");
+    const items = Array.isArray(data.items)
+      ? data.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    if (items.some((item) => item.payload_truncated === true)) {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONTEXT_HISTORY_TRUNCATED",
+        "星火 Agent 两轮对话历史包含已截断消息。",
+      );
+    }
+    const publicMessages = items.filter(
+      (item) => item.role === "user" || item.role === "assistant",
+    );
+    const userMessages = publicMessages.filter((item) => item.role === "user");
+    const assistantMessages = publicMessages.filter((item) => item.role === "assistant");
+    const toolMessages = items.filter((item) => item.role === "tool");
+    if (
+      publicMessages.length !== 4 ||
+      userMessages.length !== 2 ||
+      assistantMessages.length !== 2 ||
+      toolMessages.length !== 0
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONTEXT_HISTORY_CARDINALITY_FAILED",
+        "两轮上下文回归必须且只能持久化两条用户消息和两条助手回复，且不能产生工具消息。",
+      );
+    }
+    const expectedRoles = "user,assistant,user,assistant";
+    const roles = publicMessages.map((item) => item.role).join(",");
+    const reversedRoles = [...publicMessages]
+      .reverse()
+      .map((item) => item.role)
+      .join(",");
+    const chronological =
+      roles === expectedRoles
+        ? publicMessages
+        : reversedRoles === expectedRoles
+          ? [...publicMessages].reverse()
+          : null;
+    if (chronological === null) {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONTEXT_HISTORY_ORDER_FAILED",
+        "两轮上下文回归消息没有按用户、助手、用户、助手的顺序持久化。",
+      );
+    }
+    const firstUser = chronological[0];
+    const firstAssistant = chronological[1];
+    const secondUser = chronological[2];
+    const secondAssistant = chronological[3];
+    if (
+      firstUser?.role !== "user" ||
+      firstUser.content !== firstUserText ||
+      firstAssistant?.role !== "assistant" ||
+      typeof firstAssistant.content !== "string" ||
+      secondUser?.role !== "user" ||
+      secondUser.content !== secondUserText ||
+      secondAssistant?.role !== "assistant" ||
+      typeof secondAssistant.content !== "string" ||
+      !secondAssistant.content.includes(secondExpectedText)
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONTEXT_HISTORY_IDENTITY_FAILED",
+        "两轮上下文回归的用户消息、助手回复或上下文标识不一致。",
+      );
+    }
+    if (
+      publicMessages.some(
+        (item) => typeof item.content === "string" && item.content.includes(forbiddenText),
+      )
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONTEXT_CROSS_TALK_FAILED",
+        "主会话历史包含独立干扰会话标识。",
+      );
+    }
+    const firstContentSha256 = sha256(firstAssistant.content);
+    const secondContentSha256 = sha256(secondAssistant.content);
+    if (
+      firstContentSha256 !== firstAssistantSha256 ||
+      secondContentSha256 !== secondAssistantSha256
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONTEXT_HISTORY_HASH_MISMATCH",
+        "两轮持久化助手回复与各自流式最终回复哈希不一致。",
+      );
+    }
+    if (firstAssistant.finish_reason !== "stop" || secondAssistant.finish_reason !== "stop") {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONTEXT_FINISH_REASON_FAILED",
+        "两轮助手回复没有全部以 stop 正常结束。",
+      );
+    }
+    return {
+      conversationId,
+      messageCount: publicMessages.length,
+      userMessageCount: userMessages.length,
+      assistantMessageCount: assistantMessages.length,
+      toolMessageCount: toolMessages.length,
+      expectedOrderMatched: true,
+      firstAssistantHashMatched: true,
+      secondAssistantHashMatched: true,
+      secondExpectedTextMatched: true,
+      forbiddenTextAbsent: true,
+      firstAssistantContentSha256: firstContentSha256,
+      secondAssistantContentSha256: secondContentSha256,
+      assistantFinishReasonsMatched: true,
     };
   }
   if (action === "adapter:spark-x-agent/chat.assert-history") {
