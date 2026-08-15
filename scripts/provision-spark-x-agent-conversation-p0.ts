@@ -2151,6 +2151,151 @@ function automationDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function automationTimezoneDefinition(): Readonly<Record<string, unknown>> {
+  const name = "spark-x-auto-timezone-${run.id}";
+  const goal =
+    "自动任务时区回归标识 spark-x-auto-timezone-${run.id}。请只回复这个标识，不要调用任何工具或 Skill。";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "AUTO-002 Asia/Shanghai 首次触发与下次计划",
+      description:
+        "创建五秒后首次触发的无 Skill 任务，校验请求与实际触发时间在 Asia/Shanghai 下误差不超过六十秒，UTC 与本地下一次计划均精确推进五分钟，并完整清理。",
+      systemKey: "spark-x-agent",
+      moduleKey: "automations",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "automation", "p0", "full-regression", "timezone", "real-model"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 180_000,
+      caseTimeoutMs: 300_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:automations"],
+    steps: [
+      {
+        id: "create-timezone-conversation",
+        name: "创建并登记时区调度目标会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: name,
+        },
+        capture: { "timezone-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.timezone-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "create-timezone-automation",
+        name: "创建并登记五秒后首次触发的无 Skill 任务",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.timezone-conversation-id}",
+          name,
+          goal,
+          firstFireDelaySeconds: 5,
+        },
+        capture: {
+          "timezone-automation-id": "$.automationId",
+          "timezone-first-fire-at": "$.nextFireAt",
+        },
+        resource: {
+          type: "spark-x-agent-automation",
+          id: "${step.timezone-automation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/automation.cleanup",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              automationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "wait-timezone-automation-fire",
+        name: "校验上海时区首次触发与五分钟下一次计划",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.wait-fired",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          automationId: "${step.timezone-automation-id}",
+          conversationId: "${step.timezone-conversation-id}",
+          expectedName: name,
+          expectedGoal: goal,
+          expectedAssistantText: "spark-x-auto-timezone-${run.id}",
+          expectedFirstFireAt: "${step.timezone-first-fire-at}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "cleanup-timezone-automation",
+        name: "按最新状态版本删除时区调度任务",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.cleanup",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          automationId: "${step.timezone-automation-id}",
+        },
+      },
+      {
+        id: "delete-timezone-conversation",
+        name: "删除时区调度目标会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.timezone-conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
 function automationLifecycleDefinition(): Readonly<Record<string, unknown>> {
   const name = "spark-x-auto-lifecycle-${run.id}";
   const goal =
@@ -3917,6 +4062,14 @@ const automationCase = await ensureCase(
   automationDefinition(),
   "新增自动任务定义、立即单次调度、无工具结果关联和版本化清理 P0 闭环",
 );
+const automationTimezoneCase = await ensureCase(
+  system.id,
+  automations.id,
+  environment.id,
+  "AUTO-002 Asia/Shanghai 首次触发与下次计划",
+  automationTimezoneDefinition(),
+  "新增五秒延迟真实调度、上海时区首次触发误差、UTC/本地五分钟推进和完整清理 P0 闭环",
+);
 const automationLifecycleCase = await ensureCase(
   system.id,
   automations.id,
@@ -4026,12 +4179,23 @@ const automationSuite = await ensureSuite(
   "AUTO-001 立即触发、单次会话结果、无工具证据、资源登记和版本化清理闭环。",
   [automationCase.testCase.id],
 );
+const automationTimezoneSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-automation-timezone-p0",
+  "星火 Agent 自动任务时区 P0 纵向切片",
+  "AUTO-002 五秒延迟真实调度、Asia/Shanghai 首次触发误差、UTC/本地五分钟下一次计划和完整清理。",
+  [automationTimezoneCase.testCase.id],
+);
 const automationModuleSuite = await ensureSuite(
   system.id,
   "spark-x-agent-automations",
   "星火 Agent 自动任务回归",
-  "自动任务模块当前 AUTO-001/003 单次立即调度、版本化修改、停用、重新启用、删除、无触发残留和完整清理。",
-  [automationCase.testCase.id, automationLifecycleCase.testCase.id],
+  "自动任务模块当前 AUTO-001/002/003 单次立即调度、上海时区计划、版本化修改、停用、重新启用、删除、无触发残留和完整清理。",
+  [
+    automationCase.testCase.id,
+    automationTimezoneCase.testCase.id,
+    automationLifecycleCase.testCase.id,
+  ],
 );
 const suite = await ensureSuite(
   system.id,
@@ -4055,8 +4219,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 17/32）",
-  "手动一键完整回归入口；当前已接入 17/32 条案例，覆盖七个模块的当前 P0、CHAT-003、AUTO-003 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 18/32）",
+  "手动一键完整回归入口；当前已接入 18/32 条案例，覆盖七个模块的当前 P0、CHAT-003、AUTO-003 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -4074,6 +4238,7 @@ const fullRegressionSuite = await ensureSuite(
     skillPublicationCase.testCase.id,
     mcpConnectorCase.testCase.id,
     automationCase.testCase.id,
+    automationTimezoneCase.testCase.id,
     automationLifecycleCase.testCase.id,
   ],
 );
@@ -4186,7 +4351,7 @@ console.info(
                         : runAutomationSmoke
                           ? 20
                           : 161,
-    caseCount: 17,
+    caseCount: 18,
     coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -4224,6 +4389,8 @@ console.info(
     mcpConnectorCaseVersionId: mcpConnectorCase.version.id,
     automationCaseId: automationCase.testCase.id,
     automationCaseVersionId: automationCase.version.id,
+    automationTimezoneCaseId: automationTimezoneCase.testCase.id,
+    automationTimezoneCaseVersionId: automationTimezoneCase.version.id,
     automationLifecycleCaseId: automationLifecycleCase.testCase.id,
     automationLifecycleCaseVersionId: automationLifecycleCase.version.id,
     conversationSuiteId: conversationSuite.id,
@@ -4239,6 +4406,7 @@ console.info(
     skillSuiteId: skillSuite.id,
     mcpSuiteId: mcpSuite.id,
     automationSuiteId: automationSuite.id,
+    automationTimezoneSuiteId: automationTimezoneSuite.id,
     automationModuleSuiteId: automationModuleSuite.id,
     suiteId: suite.id,
     fullRegressionSuiteId: fullRegressionSuite.id,

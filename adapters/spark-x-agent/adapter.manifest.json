@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -1106,7 +1106,8 @@
             "conversationId": { "type": "string", "format": "uuid" },
             "expectedName": { "type": "string", "minLength": 1, "maxLength": 160 },
             "expectedGoal": { "type": "string", "minLength": 1, "maxLength": 65536 },
-            "expectedAssistantText": { "type": "string", "minLength": 1, "maxLength": 5000 }
+            "expectedAssistantText": { "type": "string", "minLength": 1, "maxLength": 5000 },
+            "expectedFirstFireAt": { "type": "string", "minLength": 20, "maxLength": 100 }
           }
         },
         "outputSchema": {
@@ -1156,7 +1157,16 @@
             "assistantContentSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
             "assistantContentLength": { "type": "integer", "minimum": 1 },
             "assistantFinishReason": { "const": "stop" },
-            "pollAttempts": { "type": "integer", "minimum": 1, "maximum": 120 }
+            "pollAttempts": { "type": "integer", "minimum": 1, "maximum": 120 },
+            "timezone": { "const": "Asia/Shanghai" },
+            "utcOffsetMinutes": { "const": 480 },
+            "scheduledFirstFireAt": { "type": "string", "format": "date-time" },
+            "observedFirstFireAt": { "type": "string", "format": "date-time" },
+            "observedFirstFireLocal": { "type": "string", "format": "date-time" },
+            "nextFireLocal": { "type": "string", "format": "date-time" },
+            "firstFireScheduleMatched": { "const": true },
+            "firstFireDriftSeconds": { "type": "number", "minimum": 0, "maximum": 60 },
+            "localScheduleAdvancedBySeconds": { "const": 300 }
           }
         }
       },

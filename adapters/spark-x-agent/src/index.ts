@@ -1065,6 +1065,7 @@ export const sparkXAgentActionCapabilities = [
         expectedName: { type: "string", minLength: 1, maxLength: 160 },
         expectedGoal: { type: "string", minLength: 1, maxLength: 65_536 },
         expectedAssistantText: { type: "string", minLength: 1, maxLength: 5_000 },
+        expectedFirstFireAt: { type: "string", minLength: 20, maxLength: 100 },
       },
     },
     outputSchema: {
@@ -1115,6 +1116,15 @@ export const sparkXAgentActionCapabilities = [
         assistantContentLength: { type: "integer", minimum: 1 },
         assistantFinishReason: { const: "stop" },
         pollAttempts: { type: "integer", minimum: 1, maximum: 120 },
+        timezone: { const: "Asia/Shanghai" },
+        utcOffsetMinutes: { const: 480 },
+        scheduledFirstFireAt: { type: "string", format: "date-time" },
+        observedFirstFireAt: { type: "string", format: "date-time" },
+        observedFirstFireLocal: { type: "string", format: "date-time" },
+        nextFireLocal: { type: "string", format: "date-time" },
+        firstFireScheduleMatched: { const: true },
+        firstFireDriftSeconds: { type: "number", minimum: 0, maximum: 60 },
+        localScheduleAdvancedBySeconds: { const: 300 },
       },
     },
   },
@@ -1314,7 +1324,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.13.0",
+  version: "0.14.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1331,7 +1341,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "full-regression-automation-lifecycle" as const;
+export const sparkXAgentAdapterPhase = "full-regression-automation-timezone" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -1804,6 +1814,10 @@ interface AutomationDefinitionProjection {
 
 function validTimestamp(value: unknown): value is string {
   return typeof value === "string" && value.length <= 100 && Number.isFinite(Date.parse(value));
+}
+
+function asiaShanghaiTimestamp(value: string): string {
+  return `${new Date(Date.parse(value) + 8 * 60 * 60 * 1_000).toISOString().slice(0, -1)}+08:00`;
 }
 
 function automationDefinitionProjection(
@@ -3257,6 +3271,16 @@ export async function executeSparkXAgentAction(
     const expectedName = requiredString(params, "expectedName", variables, 160);
     const expectedGoal = requiredString(params, "expectedGoal", variables, 65_536);
     const expectedAssistantText = requiredString(params, "expectedAssistantText", variables, 5_000);
+    const expectedFirstFireAt =
+      params.expectedFirstFireAt === undefined
+        ? undefined
+        : requiredString(params, "expectedFirstFireAt", variables, 100);
+    if (expectedFirstFireAt !== undefined && !validTimestamp(expectedFirstFireAt)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "自动任务预期首次触发时间不是有效的 ISO 时间戳。",
+      );
+    }
     for (let attempt = 1; attempt <= 120; attempt += 1) {
       const listResponse = await authenticatedRequest(
         environment,
@@ -3308,6 +3332,32 @@ export async function executeSparkXAgentAction(
             "自动任务触发后没有按固定周期推进唯一下一次计划。",
           );
         }
+        const timezoneEvidence = (() => {
+          if (expectedFirstFireAt === undefined) return {};
+          const firstFireDriftSeconds =
+            Math.abs(Date.parse(definition.lastFireAt) - Date.parse(expectedFirstFireAt)) / 1_000;
+          const observedFirstFireLocal = asiaShanghaiTimestamp(definition.lastFireAt);
+          const nextFireLocal = asiaShanghaiTimestamp(definition.nextFireAt);
+          const localScheduleAdvancedBySeconds =
+            (Date.parse(nextFireLocal) - Date.parse(observedFirstFireLocal)) / 1_000;
+          if (firstFireDriftSeconds > 60 || localScheduleAdvancedBySeconds !== 300) {
+            throw apiFailure(
+              "SPARK_X_AGENT_AUTOMATION_TIMEZONE_SCHEDULE_INVALID",
+              "自动任务首次触发或 Asia/Shanghai 下一次计划与请求时间不一致。",
+            );
+          }
+          return {
+            timezone: "Asia/Shanghai" as const,
+            utcOffsetMinutes: 480 as const,
+            scheduledFirstFireAt: expectedFirstFireAt,
+            observedFirstFireAt: definition.lastFireAt,
+            observedFirstFireLocal,
+            nextFireLocal,
+            firstFireScheduleMatched: true as const,
+            firstFireDriftSeconds,
+            localScheduleAdvancedBySeconds: 300 as const,
+          };
+        })();
         const historyResponse = await authenticatedRequest(
           environment,
           token,
@@ -3341,6 +3391,7 @@ export async function executeSparkXAgentAction(
             expectedAssistantTextMatched: true,
             assistantFinishReason: "stop",
             pollAttempts: attempt,
+            ...timezoneEvidence,
           };
         }
       }

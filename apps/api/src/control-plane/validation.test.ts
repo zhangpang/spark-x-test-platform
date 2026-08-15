@@ -1578,8 +1578,18 @@ describe("M2 asset validation", () => {
             ...(steps[1]?.params as JsonObject),
             firstFireDelaySeconds: 600,
           },
+          capture: {
+            ...(steps[1]?.capture as JsonObject),
+            "first-fire-at": "$.nextFireAt",
+          },
         },
-        steps[2],
+        {
+          ...steps[2],
+          params: {
+            ...(steps[2]?.params as JsonObject),
+            expectedFirstFireAt: "${step.first-fire-at}",
+          },
+        },
       ],
     } as JsonObject;
     expect(

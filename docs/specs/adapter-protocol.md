@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -191,7 +191,7 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.13.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+当前 `0.14.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
 `conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
 `chat.cancel-and-resume`、`chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
@@ -239,6 +239,11 @@ SHA-256。参数、结果、最终回答、凭据和 Token 均不进入平台证
 登记会话资源后、模型调用前重复执行该前置检查，既避免把环境缺口误报为模型或产品失败，也保证失败后
 `finally` 已持有可清理的会话 ID。
 
+AUTO-002 通过同一受限延迟参数在五秒后触发真实任务；创建回执的 `next_fire_at` 作为不可变预期传给
+`automation.wait-fired`。动作要求实际 `last_fire_at` 与预期相差不超过 60 秒，并分别在 UTC 和固定
+`Asia/Shanghai (+08:00)` 投影中确认 `next_fire_at - last_fire_at = 300 秒`。结构化证据只保存时间戳、
+时区、偏移、误差、计数和正文哈希；若调度漂移超限则保留
+`SPARK_X_AGENT_AUTOMATION_TIMEZONE_SCHEDULE_INVALID` 首错，不用重试掩盖。
 AUTO-003 通过 `automation.create` 的受限可选延迟创建十分钟后才首次触发的任务，并立即登记自动任务与会话资源。
 `automation.assert-lifecycle` 只接受本次运行登记的 UUID 和受控文本：先确认任务尚未触发且至少保留五分钟安全窗口，
 再按精确乐观版本依次修改名称/目标/周期、停用、重新启用和删除。每个回执版本必须连续递增，修改后的定义必须

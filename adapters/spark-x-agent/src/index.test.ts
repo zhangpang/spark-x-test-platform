@@ -141,7 +141,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.13.0",
+      version: "0.14.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -2915,6 +2915,7 @@ describe("spark-x-agent adapter", () => {
         expectedGoal:
           "自动任务回归标识 spark-x-auto-${run.id}。请只回复这个标识，不要调用任何工具或 Skill。",
         expectedAssistantText: "spark-x-auto-${run.id}",
+        expectedFirstFireAt: "2026-08-15T04:00:00.000Z",
       },
       variables,
       { timeoutMs: 5_000, fetcher },
@@ -2942,6 +2943,15 @@ describe("spark-x-agent adapter", () => {
       expectedAssistantTextMatched: true,
       assistantFinishReason: "stop",
       pollAttempts: 1,
+      timezone: "Asia/Shanghai",
+      utcOffsetMinutes: 480,
+      scheduledFirstFireAt: "2026-08-15T04:00:00.000Z",
+      observedFirstFireAt: "2026-08-15T04:00:00.000Z",
+      observedFirstFireLocal: "2026-08-15T12:00:00.000+08:00",
+      nextFireLocal: "2026-08-15T12:05:00.000+08:00",
+      firstFireScheduleMatched: true,
+      firstFireDriftSeconds: 0,
+      localScheduleAdvancedBySeconds: 300,
     });
     const evidence = JSON.stringify(output);
     expect(evidence).not.toContain(automationGoal);
@@ -2991,6 +3001,48 @@ describe("spark-x-agent adapter", () => {
         classification: "product_failed",
       },
     });
+  });
+
+  it("rejects a scheduler fire outside the bounded Asia/Shanghai trigger window", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            automationProjection({
+              last_fire_at: "2026-08-15T04:02:00.000Z",
+              next_fire_at: "2026-08-15T04:07:00.000Z",
+            }),
+          ],
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/automation.wait-fired",
+        environment,
+        {
+          ...credentials,
+          automationId,
+          conversationId,
+          expectedName: automationName,
+          expectedGoal: automationGoal,
+          expectedAssistantText: automationMarker,
+          expectedFirstFireAt: "2026-08-15T04:00:00.000Z",
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_AUTOMATION_TIMEZONE_SCHEDULE_INVALID",
+        classification: "product_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("updates, disables, enables and deletes an untriggered automation with exact versions", async () => {
