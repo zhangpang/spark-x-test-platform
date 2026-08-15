@@ -40,7 +40,7 @@ export interface SparkXAgentExecutionOptions {
   readonly fetcher?: typeof fetch;
 }
 
-const conversationActionCapabilities = [
+export const sparkXAgentActionCapabilities = [
   {
     key: "conversation.create",
     name: "创建会话",
@@ -1049,7 +1049,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
     properties: { baseUrl: { type: "string", format: "uri" } },
   },
   capabilities: {
-    actions: conversationActionCapabilities,
+    actions: sparkXAgentActionCapabilities,
     assertions: [],
     fixtures: [],
     telemetry: [],

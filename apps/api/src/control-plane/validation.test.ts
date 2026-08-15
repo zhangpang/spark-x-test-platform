@@ -1167,7 +1167,7 @@ describe("M2 asset validation", () => {
     );
   });
 
-  it("accepts a fixed-fixture knowledge-base lifecycle and rejects arbitrary upload or cleanup scope", () => {
+  it("accepts fixed-fixture knowledge snapshots and rejects arbitrary upload or cleanup scope", () => {
     const sparkEnvironment: EnvironmentRecord = {
       ...environment,
       systemId: "00000000-0000-4000-8000-000000000010",
@@ -1287,8 +1287,61 @@ describe("M2 asset validation", () => {
             expectedTitle: "spark-x-kb-${run.id}.pdf",
           },
         },
+        {
+          id: "create-scope-conversation",
+          name: "create scope conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.create",
+          timeoutMs: 20_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            title: "spark-x-kb-scope-${run.id}",
+          },
+          capture: { "conversation-id": "$.conversationId" },
+          resource: {
+            type: "spark-x-agent-conversation",
+            id: "${step.conversation-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/conversation.delete",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                conversationId: "${resource.id}",
+              },
+            },
+          },
+        },
+        {
+          id: "assert-conversation-knowledge-scope",
+          name: "assert immutable snapshot replay",
+          kind: "action",
+          action: "adapter:spark-x-agent/knowledge-base.assert-conversation-scope",
+          timeoutMs: 30_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            knowledgeBaseId: "${step.knowledge-base-id}",
+            knowledgeDocumentId: "${step.knowledge-document-id}",
+            expectedFixtureSha256: "${step.fixture-sha256}",
+            clientRequestId: "${run.id}",
+          },
+        },
       ],
       finally: [
+        {
+          id: "delete-scope-conversation",
+          name: "delete scope conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.delete",
+          timeoutMs: 20_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+          },
+        },
         {
           id: "cleanup-knowledge-base",
           name: "cleanup knowledge base",

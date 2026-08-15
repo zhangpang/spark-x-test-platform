@@ -3,7 +3,12 @@ import { createHash } from "node:crypto";
 import { ExecutorFailure, type HttpExecutionEnvironment } from "@spark-x-test/executors";
 import { describe, expect, it, vi } from "vitest";
 
-import { executeSparkXAgentAction, sparkXAgentAdapterManifest } from "./index.js";
+import {
+  executeSparkXAgentAction,
+  sparkXAgentActionCapabilities,
+  sparkXAgentActions,
+  sparkXAgentAdapterManifest,
+} from "./index.js";
 
 const environment: HttpExecutionEnvironment = {
   baseUrl: "http://192.168.110.136/trade/",
@@ -211,6 +216,11 @@ describe("spark-x-agent adapter", () => {
         ],
       },
     });
+    expect(
+      sparkXAgentActionCapabilities
+        .map((capability) => `adapter:spark-x-agent/${capability.key}`)
+        .sort(),
+    ).toEqual([...sparkXAgentActions].sort());
   });
 
   it("keeps the login token in memory while returning only structured create evidence", async () => {

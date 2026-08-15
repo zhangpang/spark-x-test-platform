@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 
 import { validateTestCaseDefinition } from "@spark-x-test/case-schema";
+import {
+  sparkXAgentActionCapabilities,
+  sparkXAgentActions,
+} from "@spark-x-test/adapter-spark-x-agent";
 
 import type {
   ActionLevel,
@@ -35,24 +39,7 @@ const availableActions = new Set([
   "browser:click",
   "browser:fill",
   "browser:assert-text",
-  "adapter:spark-x-agent/conversation.create",
-  "adapter:spark-x-agent/conversation.assert-recent",
-  "adapter:spark-x-agent/conversation.delete",
-  "adapter:spark-x-agent/chat.ask",
-  "adapter:spark-x-agent/chat.assert-history",
-  "adapter:spark-x-agent/chat.assert-context-history",
-  "adapter:spark-x-agent/tool.assert-safe-catalog",
-  "adapter:spark-x-agent/tool.invoke-safe",
-  "adapter:spark-x-agent/tool.assert-history",
-  "adapter:spark-x-agent/knowledge-base.create",
-  "adapter:spark-x-agent/knowledge-base.upload-fixture",
-  "adapter:spark-x-agent/knowledge-base.attach-upload",
-  "adapter:spark-x-agent/knowledge-base.wait-ready",
-  "adapter:spark-x-agent/knowledge-base.cleanup",
-  "adapter:spark-x-agent/skill.assert-trusted-publication",
-  "adapter:spark-x-agent/automation.create",
-  "adapter:spark-x-agent/automation.wait-fired",
-  "adapter:spark-x-agent/automation.cleanup",
+  ...sparkXAgentActions,
 ]);
 const availableCompensationActions = new Set([
   "http:request",
@@ -61,142 +48,18 @@ const availableCompensationActions = new Set([
   "adapter:spark-x-agent/automation.cleanup",
 ]);
 const availableAssertions = new Set(["status:equals"]);
-const sparkXAgentActionLevels = new Map<string, ActionLevel>([
-  ["adapter:spark-x-agent/conversation.create", "write"],
-  ["adapter:spark-x-agent/conversation.assert-recent", "write"],
-  ["adapter:spark-x-agent/conversation.delete", "dangerous"],
-  ["adapter:spark-x-agent/chat.ask", "write"],
-  ["adapter:spark-x-agent/chat.assert-history", "write"],
-  ["adapter:spark-x-agent/chat.assert-context-history", "write"],
-  ["adapter:spark-x-agent/tool.assert-safe-catalog", "read"],
-  ["adapter:spark-x-agent/tool.invoke-safe", "write"],
-  ["adapter:spark-x-agent/tool.assert-history", "write"],
-  ["adapter:spark-x-agent/knowledge-base.create", "write"],
-  ["adapter:spark-x-agent/knowledge-base.upload-fixture", "write"],
-  ["adapter:spark-x-agent/knowledge-base.attach-upload", "write"],
-  ["adapter:spark-x-agent/knowledge-base.wait-ready", "write"],
-  ["adapter:spark-x-agent/knowledge-base.cleanup", "dangerous"],
-  ["adapter:spark-x-agent/skill.assert-trusted-publication", "read"],
-  ["adapter:spark-x-agent/automation.create", "write"],
-  ["adapter:spark-x-agent/automation.wait-fired", "write"],
-  ["adapter:spark-x-agent/automation.cleanup", "dangerous"],
-]);
-const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
-  ["adapter:spark-x-agent/conversation.create", new Set(["username", "password", "title"])],
-  [
-    "adapter:spark-x-agent/conversation.assert-recent",
-    new Set(["username", "password", "conversationId", "title", "expectedMessageCount"]),
-  ],
-  [
-    "adapter:spark-x-agent/conversation.delete",
-    new Set(["username", "password", "conversationId"]),
-  ],
-  [
-    "adapter:spark-x-agent/chat.ask",
-    new Set(["username", "password", "conversationId", "message", "expectedText"]),
-  ],
-  [
-    "adapter:spark-x-agent/chat.assert-history",
-    new Set([
-      "username",
-      "password",
-      "conversationId",
-      "expectedUserText",
-      "expectedAssistantText",
-      "expectedAssistantSha256",
-    ]),
-  ],
-  [
-    "adapter:spark-x-agent/chat.assert-context-history",
-    new Set([
-      "username",
-      "password",
-      "conversationId",
-      "firstUserText",
-      "firstAssistantSha256",
-      "secondUserText",
-      "secondExpectedText",
-      "secondAssistantSha256",
-      "forbiddenText",
-    ]),
-  ],
-  ["adapter:spark-x-agent/tool.assert-safe-catalog", new Set(["username", "password"])],
-  [
-    "adapter:spark-x-agent/tool.invoke-safe",
-    new Set([
-      "username",
-      "password",
-      "conversationId",
-      "message",
-      "expectedText",
-      "expectedToolName",
-      "expectedArgumentsJson",
-      "expectedResultJson",
-    ]),
-  ],
-  [
-    "adapter:spark-x-agent/tool.assert-history",
-    new Set([
-      "username",
-      "password",
-      "conversationId",
-      "expectedUserText",
-      "expectedAssistantText",
-      "expectedAssistantSha256",
-      "expectedToolName",
-      "expectedArgumentsSha256",
-      "expectedResultSha256",
-    ]),
-  ],
-  [
-    "adapter:spark-x-agent/knowledge-base.create",
-    new Set(["username", "password", "name", "description"]),
-  ],
-  [
-    "adapter:spark-x-agent/knowledge-base.upload-fixture",
-    new Set(["username", "password", "knowledgeBaseId"]),
-  ],
-  [
-    "adapter:spark-x-agent/knowledge-base.attach-upload",
-    new Set(["username", "password", "knowledgeBaseId", "uploadedDocumentId", "title"]),
-  ],
-  [
-    "adapter:spark-x-agent/knowledge-base.wait-ready",
-    new Set([
-      "username",
-      "password",
-      "knowledgeBaseId",
-      "knowledgeDocumentId",
-      "expectedFixtureSha256",
-      "expectedTitle",
-    ]),
-  ],
-  [
-    "adapter:spark-x-agent/knowledge-base.cleanup",
-    new Set(["username", "password", "knowledgeBaseId"]),
-  ],
-  [
-    "adapter:spark-x-agent/skill.assert-trusted-publication",
-    new Set(["username", "password", "expectedPublicationSha256"]),
-  ],
-  [
-    "adapter:spark-x-agent/automation.create",
-    new Set(["username", "password", "conversationId", "name", "goal"]),
-  ],
-  [
-    "adapter:spark-x-agent/automation.wait-fired",
-    new Set([
-      "username",
-      "password",
-      "automationId",
-      "conversationId",
-      "expectedName",
-      "expectedGoal",
-      "expectedAssistantText",
-    ]),
-  ],
-  ["adapter:spark-x-agent/automation.cleanup", new Set(["username", "password", "automationId"])],
-]);
+const sparkXAgentActionLevels = new Map<string, ActionLevel>(
+  sparkXAgentActionCapabilities.map((capability) => [
+    `adapter:spark-x-agent/${capability.key}`,
+    capability.actionLevel,
+  ]),
+);
+const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>(
+  sparkXAgentActionCapabilities.map((capability) => [
+    `adapter:spark-x-agent/${capability.key}`,
+    new Set(Object.keys(capability.inputSchema.properties)),
+  ]),
+);
 const waitJsonPathPattern = /^\$(?:\.[a-zA-Z0-9_-]+){0,20}$/;
 const waitOperators = new Set(["equals", "not-equals", "contains", "exists"]);
 const jsonPathPattern = /^\$(?:(?:\.[a-zA-Z0-9_-]+)|(?:\[(?:0|[1-9][0-9]{0,5})\])){0,20}$/;
