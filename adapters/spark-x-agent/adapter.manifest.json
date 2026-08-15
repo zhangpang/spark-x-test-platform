@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -253,6 +253,88 @@
             "truncated": { "const": false },
             "stopReason": { "type": "string" },
             "durationMs": { "type": "number", "minimum": 0 }
+          }
+        }
+      },
+      {
+        "key": "chat.cancel-and-resume",
+        "name": "取消生成并续接会话",
+        "description": "通过受控 Turn 队列启动长回答，在 active 状态请求取消，确认无幽灵助手消息后用同一会话完成下一轮。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 180000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "conversationId",
+            "requestId",
+            "cancelMessage",
+            "resumeMessage",
+            "expectedText"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "requestId": { "type": "string", "format": "uuid" },
+            "cancelMessage": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "resumeMessage": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "expectedText": { "type": "string", "minLength": 1, "maxLength": 5000 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "cancelledTurnId",
+            "resumedTurnId",
+            "cancelRequested",
+            "cancelActionBoundary",
+            "cancelledStatus",
+            "cancelledAssistantAbsent",
+            "resumeCompleted",
+            "messageCount",
+            "cancelledUserMessageCount",
+            "resumedUserMessageCount",
+            "resumedAssistantMessageCount",
+            "toolMessageCount",
+            "ghostAssistantCount",
+            "expectedTextMatched",
+            "cancelInputSha256",
+            "resumeInputSha256",
+            "resumeAssistantSha256",
+            "resumeAssistantContentLength",
+            "activePollAttempts",
+            "cancelPollAttempts",
+            "resumePollAttempts"
+          ],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "cancelledTurnId": { "type": "string", "format": "uuid" },
+            "resumedTurnId": { "type": "string", "format": "uuid" },
+            "cancelRequested": { "const": true },
+            "cancelActionBoundary": { "const": "none" },
+            "cancelledStatus": { "const": "cancelled" },
+            "cancelledAssistantAbsent": { "const": true },
+            "resumeCompleted": { "const": true },
+            "messageCount": { "const": 3 },
+            "cancelledUserMessageCount": { "const": 1 },
+            "resumedUserMessageCount": { "const": 1 },
+            "resumedAssistantMessageCount": { "const": 1 },
+            "toolMessageCount": { "const": 0 },
+            "ghostAssistantCount": { "const": 0 },
+            "expectedTextMatched": { "const": true },
+            "cancelInputSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "resumeInputSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "resumeAssistantSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "resumeAssistantContentLength": { "type": "integer", "minimum": 1 },
+            "activePollAttempts": { "type": "integer", "minimum": 1, "maximum": 200 },
+            "cancelPollAttempts": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "resumePollAttempts": { "type": "integer", "minimum": 1, "maximum": 600 }
           }
         }
       },

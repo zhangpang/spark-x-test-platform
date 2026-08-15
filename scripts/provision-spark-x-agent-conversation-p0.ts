@@ -64,6 +64,7 @@ interface RunDetail extends IdentifiedRecord {
 const apiBase = process.env.SPARK_X_TEST_PLATFORM_API_URL ?? "http://127.0.0.1:4100/api/v1";
 const runSmoke = process.env.SPARK_X_AGENT_RUN_SMOKE === "true";
 const runContextSmoke = process.env.SPARK_X_AGENT_RUN_CONTEXT_SMOKE === "true";
+const runCancelSmoke = process.env.SPARK_X_AGENT_RUN_CANCEL_SMOKE === "true";
 const runConversationReopenSmoke =
   process.env.SPARK_X_AGENT_RUN_CONVERSATION_REOPEN_SMOKE === "true";
 const runConversationPaginationSmoke =
@@ -1077,6 +1078,122 @@ function chatContextDefinition(): Readonly<Record<string, unknown>> {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
           conversationId: "${step.decoy-conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
+function chatCancelDefinition(): Readonly<Record<string, unknown>> {
+  const marker = "spark-x-cancel-resume-${run.id}";
+  const cancelMessage =
+    "请生成一篇不少于五千字的长回答，用于用户停止生成回归。不要调用工具或 Skill。取消标识 ${run.id}。";
+  const resumeMessage = `上一轮已经由用户停止，不要继续上一轮内容。请只回复恢复标识 ${marker}，不要调用工具或 Skill。`;
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "CHAT-003 用户停止生成与同会话续接",
+      description:
+        "用 V5 Turn 队列启动长回答，进入 active 后请求取消，确认取消输入无幽灵助手消息，再在同一会话完成独立续接。",
+      systemKey: "spark-x-agent",
+      moduleKey: "chat",
+      priority: "P1",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "chat", "p1", "full-regression", "cancel", "resume", "real-model"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 180_000,
+      caseTimeoutMs: 300_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:chat"],
+    steps: [
+      {
+        id: "create-cancel-conversation",
+        name: "创建并登记取消回归会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: marker,
+        },
+        capture: { "cancel-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.cancel-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "cancel-active-turn-and-resume",
+        name: "取消 active Turn 并完成同会话续接",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.cancel-and-resume",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.cancel-conversation-id}",
+          requestId: "${run.id}",
+          cancelMessage,
+          resumeMessage,
+          expectedText: marker,
+        },
+      },
+      {
+        id: "assert-cancel-conversation-recent",
+        name: "校验取消与续接后的三条持久化消息",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.assert-recent",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.cancel-conversation-id}",
+          title: marker,
+          expectedMessageCount: 3,
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "delete-cancel-conversation",
+        name: "删除取消回归会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.cancel-conversation-id}",
         },
       },
     ],
@@ -2279,6 +2396,125 @@ async function executeContextSmoke(
   return run;
 }
 
+function assertCancelEvidence(run: RunDetail): void {
+  const cancelled = run.steps.find((step) => step.stepId === "cancel-active-turn-and-resume");
+  const recent = run.steps.find((step) => step.stepId === "assert-cancel-conversation-recent");
+  const cancelMessage = `请生成一篇不少于五千字的长回答，用于用户停止生成回归。不要调用工具或 Skill。取消标识 ${run.id}。`;
+  const marker = `spark-x-cancel-resume-${run.id}`;
+  const resumeMessage = `上一轮已经由用户停止，不要继续上一轮内容。请只回复恢复标识 ${marker}，不要调用工具或 Skill。`;
+  const summary = cancelled?.outputSummary;
+  check(
+    summary !== null &&
+      summary !== undefined &&
+      typeof summary.conversationId === "string" &&
+      typeof summary.cancelledTurnId === "string" &&
+      typeof summary.resumedTurnId === "string" &&
+      summary.cancelledTurnId !== summary.resumedTurnId &&
+      summary.cancelRequested === true &&
+      summary.cancelActionBoundary === "none" &&
+      summary.cancelledStatus === "cancelled" &&
+      summary.cancelledAssistantAbsent === true &&
+      summary.resumeCompleted === true &&
+      summary.messageCount === 3 &&
+      summary.cancelledUserMessageCount === 1 &&
+      summary.resumedUserMessageCount === 1 &&
+      summary.resumedAssistantMessageCount === 1 &&
+      summary.toolMessageCount === 0 &&
+      summary.ghostAssistantCount === 0 &&
+      summary.expectedTextMatched === true &&
+      summary.cancelInputSha256 === createHash("sha256").update(cancelMessage).digest("hex") &&
+      summary.resumeInputSha256 === createHash("sha256").update(resumeMessage).digest("hex") &&
+      typeof summary.resumeAssistantSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(summary.resumeAssistantSha256) &&
+      typeof summary.resumeAssistantContentLength === "number" &&
+      summary.resumeAssistantContentLength > 0 &&
+      typeof summary.activePollAttempts === "number" &&
+      summary.activePollAttempts >= 1 &&
+      typeof summary.cancelPollAttempts === "number" &&
+      summary.cancelPollAttempts >= 1 &&
+      typeof summary.resumePollAttempts === "number" &&
+      summary.resumePollAttempts >= 1,
+    "CHAT-003 cancellation, ghost-message or same-conversation resume evidence is incomplete",
+  );
+  check(
+    recent?.outputSummary?.conversationId === summary.conversationId &&
+      recent.outputSummary.listed === true &&
+      recent.outputSummary.occurrenceCount === 1 &&
+      recent.outputSummary.messageCount === 3 &&
+      recent.outputSummary.messageCountSource === "conversation-history",
+    "CHAT-003 recent conversation projection did not preserve the exact three-message history",
+  );
+  const evidence = JSON.stringify({ cancelled, recent });
+  check(
+    !evidence.includes(cancelMessage) &&
+      !evidence.includes(resumeMessage) &&
+      !evidence.includes(marker) &&
+      !evidence.includes("memory-only-access-token"),
+    "CHAT-003 prompt, expected marker or in-memory token leaked into structured evidence",
+  );
+}
+
+async function executeCancelSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-chat-cancel-p1-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-chat-cancel-p1-verification",
+      priority: 90,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent chat cancellation run was not accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(
+    run.gateResult === "passed",
+    `Spark X Agent chat cancellation gate is ${String(run.gateResult)}`,
+  );
+  check(run.summary.passed === 1, "Spark X Agent chat cancellation case did not pass");
+  check(run.firstFailure === null, "Spark X Agent chat cancellation retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent chat cancellation case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/chat.cancel-and-resume",
+        "main:adapter:spark-x-agent/conversation.assert-recent",
+        "finally:adapter:spark-x-agent/conversation.delete",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent chat cancellation structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 1 &&
+      run.resources[0]?.resourceType === "spark-x-agent-conversation" &&
+      run.resources[0].cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete" &&
+      run.resources[0].cleanupStatus === "passed",
+    "Spark X Agent chat cancellation resource ledger or cleanup is incomplete",
+  );
+  check(run.cleanupJob === null, "normal chat cancellation run unexpectedly required compensation");
+  assertCancelEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into CHAT-003 evidence",
+    );
+  }
+  return run;
+}
+
 function assertConversationPaginationEvidence(run: RunDetail): void {
   const createSteps = run.steps.filter(
     (step) => step.phase === "main" && step.action === "adapter:spark-x-agent/conversation.create",
@@ -3256,6 +3492,14 @@ const chatContextCase = await ensureCase(
   chatContextDefinition(),
   "新增两轮上下文续接、跨会话隔离、流式哈希和四消息历史 P0 闭环",
 );
+const chatCancelCase = await ensureCase(
+  system.id,
+  chat.id,
+  environment.id,
+  "CHAT-003 用户停止生成与同会话续接",
+  chatCancelDefinition(),
+  "新增 active Turn 取消、零幽灵助手消息、同会话独立续接和完整清理 P1 闭环",
+);
 const toolCatalogCase = await ensureCase(
   system.id,
   tools.id,
@@ -3359,6 +3603,20 @@ const chatContextSuite = await ensureSuite(
   "CHAT-002 独立干扰会话、同会话两轮续接、流式哈希、四消息历史和完整清理闭环。",
   [chatContextCase.testCase.id],
 );
+const chatCancelSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-chat-cancel-p1",
+  "星火 Agent 用户停止生成 P1 纵向切片",
+  "CHAT-003 active Turn 取消、无外部副作用边界、零幽灵助手消息、同会话独立续接和完整清理闭环。",
+  [chatCancelCase.testCase.id],
+);
+const chatSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-chat",
+  "星火 Agent 聊天回归",
+  "聊天模块当前 CHAT-001/002/003 流式首轮、两轮上下文隔离、用户取消和同会话续接。",
+  [chatCase.testCase.id, chatContextCase.testCase.id, chatCancelCase.testCase.id],
+);
 const toolSuite = await ensureSuite(
   system.id,
   "spark-x-agent-tools-p0",
@@ -3416,8 +3674,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 13/32）",
-  "手动一键完整回归入口；当前已接入 13/32 条案例，覆盖七个模块的全部 P0 与 CONV-003/004 最近会话 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 14/32）",
+  "手动一键完整回归入口；当前已接入 14/32 条案例，覆盖七个模块的全部 P0、CHAT-003 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -3425,6 +3683,7 @@ const fullRegressionSuite = await ensureSuite(
     conversationDeleteCase.testCase.id,
     chatCase.testCase.id,
     chatContextCase.testCase.id,
+    chatCancelCase.testCase.id,
     toolCatalogCase.testCase.id,
     toolInvocationCase.testCase.id,
     knowledgeBaseCase.testCase.id,
@@ -3438,6 +3697,7 @@ check(
   [
     runSmoke,
     runContextSmoke,
+    runCancelSmoke,
     runConversationReopenSmoke,
     runConversationPaginationSmoke,
     runConversationDeleteSmoke,
@@ -3452,63 +3712,67 @@ const run = runSmoke
   ? await executeSmoke(system.id, environment.id, suite.id, password)
   : runContextSmoke
     ? await executeContextSmoke(system.id, environment.id, chatContextSuite.id, password)
-    : runConversationReopenSmoke
-      ? await executeConversationReopenSmoke(
-          system.id,
-          environment.id,
-          conversationReopenSuite.id,
-          password,
-        )
-      : runConversationPaginationSmoke
-        ? await executeConversationPaginationSmoke(
+    : runCancelSmoke
+      ? await executeCancelSmoke(system.id, environment.id, chatCancelSuite.id, password)
+      : runConversationReopenSmoke
+        ? await executeConversationReopenSmoke(
             system.id,
             environment.id,
-            conversationPaginationSuite.id,
+            conversationReopenSuite.id,
             password,
           )
-        : runConversationDeleteSmoke
-          ? await executeConversationDeleteSmoke(
+        : runConversationPaginationSmoke
+          ? await executeConversationPaginationSmoke(
               system.id,
               environment.id,
-              conversationDeleteSuite.id,
+              conversationPaginationSuite.id,
               password,
             )
-          : runKnowledgeSmoke
-            ? await executeKnowledgeSmoke(
+          : runConversationDeleteSmoke
+            ? await executeConversationDeleteSmoke(
                 system.id,
                 environment.id,
-                knowledgeBaseSuite.id,
+                conversationDeleteSuite.id,
                 password,
               )
-            : runSkillSmoke
-              ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
-              : runMcpSmoke
-                ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
-                : runAutomationSmoke
-                  ? await executeAutomationSmoke(
-                      system.id,
-                      environment.id,
-                      automationSuite.id,
-                      password,
-                    )
-                  : undefined;
+            : runKnowledgeSmoke
+              ? await executeKnowledgeSmoke(
+                  system.id,
+                  environment.id,
+                  knowledgeBaseSuite.id,
+                  password,
+                )
+              : runSkillSmoke
+                ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
+                : runMcpSmoke
+                  ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
+                  : runAutomationSmoke
+                    ? await executeAutomationSmoke(
+                        system.id,
+                        environment.id,
+                        automationSuite.id,
+                        password,
+                      )
+                    : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
-  : runConversationReopenSmoke
-    ? "spark-x-agent-conversation-reopen-p0"
-    : runConversationPaginationSmoke
-      ? "spark-x-agent-conversation-pagination-p1"
-      : runConversationDeleteSmoke
-        ? "spark-x-agent-conversation-delete-p1"
-        : runKnowledgeSmoke
-          ? "spark-x-agent-knowledge-base-p0"
-          : runSkillSmoke
-            ? "spark-x-agent-skills-p0"
-            : runMcpSmoke
-              ? "spark-x-agent-mcp-p0"
-              : runAutomationSmoke
-                ? "spark-x-agent-automations-p0"
-                : "spark-x-agent-core-smoke";
+  : runCancelSmoke
+    ? "spark-x-agent-chat-cancel-p1"
+    : runConversationReopenSmoke
+      ? "spark-x-agent-conversation-reopen-p0"
+      : runConversationPaginationSmoke
+        ? "spark-x-agent-conversation-pagination-p1"
+        : runConversationDeleteSmoke
+          ? "spark-x-agent-conversation-delete-p1"
+          : runKnowledgeSmoke
+            ? "spark-x-agent-knowledge-base-p0"
+            : runSkillSmoke
+              ? "spark-x-agent-skills-p0"
+              : runMcpSmoke
+                ? "spark-x-agent-mcp-p0"
+                : runAutomationSmoke
+                  ? "spark-x-agent-automations-p0"
+                  : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -3519,24 +3783,26 @@ console.info(
         ? 0
         : runContextSmoke
           ? 28
-          : runConversationReopenSmoke
-            ? 23
-            : runConversationPaginationSmoke
-              ? 24
-              : runConversationDeleteSmoke
+          : runCancelSmoke
+            ? 30
+            : runConversationReopenSmoke
+              ? 23
+              : runConversationPaginationSmoke
                 ? 24
-                : runKnowledgeSmoke
-                  ? 32
-                  : runSkillSmoke
-                    ? 12
-                    : runMcpSmoke
-                      ? expectMcpUnavailable
-                        ? 10
-                        : 12
-                      : runAutomationSmoke
-                        ? 20
-                        : 161,
-    caseCount: 13,
+                : runConversationDeleteSmoke
+                  ? 24
+                  : runKnowledgeSmoke
+                    ? 32
+                    : runSkillSmoke
+                      ? 12
+                      : runMcpSmoke
+                        ? expectMcpUnavailable
+                          ? 10
+                          : 12
+                        : runAutomationSmoke
+                          ? 20
+                          : 161,
+    caseCount: 14,
     coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -3554,6 +3820,8 @@ console.info(
     chatCaseVersionId: chatCase.version.id,
     chatContextCaseId: chatContextCase.testCase.id,
     chatContextCaseVersionId: chatContextCase.version.id,
+    chatCancelCaseId: chatCancelCase.testCase.id,
+    chatCancelCaseVersionId: chatCancelCase.version.id,
     toolCatalogCaseId: toolCatalogCase.testCase.id,
     toolCatalogCaseVersionId: toolCatalogCase.version.id,
     toolInvocationCaseId: toolInvocationCase.testCase.id,
@@ -3574,6 +3842,8 @@ console.info(
     conversationDeleteSuiteId: conversationDeleteSuite.id,
     recentConversationSuiteId: recentConversationSuite.id,
     chatContextSuiteId: chatContextSuite.id,
+    chatCancelSuiteId: chatCancelSuite.id,
+    chatSuiteId: chatSuite.id,
     toolSuiteId: toolSuite.id,
     knowledgeBaseSuiteId: knowledgeBaseSuite.id,
     skillSuiteId: skillSuite.id,

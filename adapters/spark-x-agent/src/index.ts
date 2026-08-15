@@ -17,6 +17,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/conversation.assert-deleted-state",
   "adapter:spark-x-agent/conversation.delete",
   "adapter:spark-x-agent/chat.ask",
+  "adapter:spark-x-agent/chat.cancel-and-resume",
   "adapter:spark-x-agent/chat.assert-history",
   "adapter:spark-x-agent/chat.assert-context-history",
   "adapter:spark-x-agent/tool.assert-safe-catalog",
@@ -268,6 +269,89 @@ export const sparkXAgentActionCapabilities = [
         truncated: { const: false },
         stopReason: { type: "string" },
         durationMs: { type: "number", minimum: 0 },
+      },
+    },
+  },
+  {
+    key: "chat.cancel-and-resume",
+    name: "取消生成并续接会话",
+    description:
+      "通过受控 Turn 队列启动长回答，在 active 状态请求取消，确认无幽灵助手消息后用同一会话完成下一轮。",
+    actionLevel: "write",
+    defaultTimeoutMs: 180_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "conversationId",
+        "requestId",
+        "cancelMessage",
+        "resumeMessage",
+        "expectedText",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        requestId: { type: "string", format: "uuid" },
+        cancelMessage: { type: "string", minLength: 1, maxLength: 20_000 },
+        resumeMessage: { type: "string", minLength: 1, maxLength: 20_000 },
+        expectedText: { type: "string", minLength: 1, maxLength: 5_000 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "cancelledTurnId",
+        "resumedTurnId",
+        "cancelRequested",
+        "cancelActionBoundary",
+        "cancelledStatus",
+        "cancelledAssistantAbsent",
+        "resumeCompleted",
+        "messageCount",
+        "cancelledUserMessageCount",
+        "resumedUserMessageCount",
+        "resumedAssistantMessageCount",
+        "toolMessageCount",
+        "ghostAssistantCount",
+        "expectedTextMatched",
+        "cancelInputSha256",
+        "resumeInputSha256",
+        "resumeAssistantSha256",
+        "resumeAssistantContentLength",
+        "activePollAttempts",
+        "cancelPollAttempts",
+        "resumePollAttempts",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        cancelledTurnId: { type: "string", format: "uuid" },
+        resumedTurnId: { type: "string", format: "uuid" },
+        cancelRequested: { const: true },
+        cancelActionBoundary: { const: "none" },
+        cancelledStatus: { const: "cancelled" },
+        cancelledAssistantAbsent: { const: true },
+        resumeCompleted: { const: true },
+        messageCount: { const: 3 },
+        cancelledUserMessageCount: { const: 1 },
+        resumedUserMessageCount: { const: 1 },
+        resumedAssistantMessageCount: { const: 1 },
+        toolMessageCount: { const: 0 },
+        ghostAssistantCount: { const: 0 },
+        expectedTextMatched: { const: true },
+        cancelInputSha256: { type: "string", minLength: 64, maxLength: 64 },
+        resumeInputSha256: { type: "string", minLength: 64, maxLength: 64 },
+        resumeAssistantSha256: { type: "string", minLength: 64, maxLength: 64 },
+        resumeAssistantContentLength: { type: "integer", minimum: 1 },
+        activePollAttempts: { type: "integer", minimum: 1, maximum: 200 },
+        cancelPollAttempts: { type: "integer", minimum: 1, maximum: 300 },
+        resumePollAttempts: { type: "integer", minimum: 1, maximum: 600 },
       },
     },
   },
@@ -1145,7 +1229,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.10.0",
+  version: "0.11.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1162,7 +1246,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "full-regression-conversation-delete" as const;
+export const sparkXAgentAdapterPhase = "full-regression-chat-cancel" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -1195,6 +1279,20 @@ function objectValue(value: unknown): Readonly<Record<string, unknown>> | null {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function derivedUuid(seed: string, purpose: string): string {
+  const hex = sha256(`${seed}:${purpose}`).split("");
+  hex[12] = "4";
+  hex[16] = ["8", "9", "a", "b"][Number.parseInt(hex[16] ?? "0", 16) % 4] ?? "8";
+  const value = hex.join("");
+  return [
+    value.slice(0, 8),
+    value.slice(8, 12),
+    value.slice(12, 16),
+    value.slice(16, 20),
+    value.slice(20, 32),
+  ].join("-");
 }
 
 function assertBoundedJson(
@@ -2327,6 +2425,220 @@ async function scanConversationOccurrences(
   }
 
   return { occurrences, pagesScanned };
+}
+
+const sparkXTurnStatuses = new Set([
+  "queued",
+  "claimed",
+  "running",
+  "waiting_user_input",
+  "waiting_user_decision",
+  "waiting_action_authorization",
+  "waiting_action_reconciliation",
+  "cancel_requested",
+  "cancelling",
+  "completed",
+  "cancelled",
+  "failed",
+  "interrupted",
+]);
+const terminalSparkXTurnStatuses = new Set(["completed", "cancelled", "failed", "interrupted"]);
+
+interface SparkXTurnSnapshot {
+  readonly turnId: string;
+  readonly conversationId: string;
+  readonly status: string;
+  readonly stateVersion: number;
+  readonly cancelRequestedAt: string | null;
+  readonly finishedAt: string | null;
+  readonly assistantMessageId: string | null;
+  readonly finishReason: string | null;
+  readonly failureCode: string | null;
+  readonly failureRetryable: boolean | null;
+}
+
+function sparkXTurnSnapshot(
+  body: unknown,
+  expectedTurnId: string,
+  expectedConversationId: string,
+): SparkXTurnSnapshot {
+  const snapshot = objectValue(body);
+  if (
+    snapshot === null ||
+    snapshot.turn_id !== expectedTurnId ||
+    snapshot.conversation_id !== expectedConversationId ||
+    typeof snapshot.status !== "string" ||
+    !sparkXTurnStatuses.has(snapshot.status) ||
+    typeof snapshot.state_version !== "number" ||
+    !Number.isSafeInteger(snapshot.state_version) ||
+    snapshot.state_version < 1 ||
+    !(snapshot.cancel_requested_at === null || typeof snapshot.cancel_requested_at === "string") ||
+    !(snapshot.finished_at === null || typeof snapshot.finished_at === "string") ||
+    !(
+      snapshot.assistant_message_id === null ||
+      (typeof snapshot.assistant_message_id === "string" &&
+        uuidPattern.test(snapshot.assistant_message_id))
+    ) ||
+    !(
+      snapshot.finish_reason === null ||
+      (typeof snapshot.finish_reason === "string" &&
+        ["stop", "max_tokens", "other"].includes(snapshot.finish_reason))
+    ) ||
+    !(snapshot.failure_code === null || typeof snapshot.failure_code === "string") ||
+    !(snapshot.failure_retryable === null || typeof snapshot.failure_retryable === "boolean") ||
+    terminalSparkXTurnStatuses.has(snapshot.status) !== (typeof snapshot.finished_at === "string")
+  ) {
+    throw apiFailure(
+      "SPARK_X_AGENT_TURN_SNAPSHOT_INVALID",
+      "星火 Agent Turn 快照缺少受限状态或终态字段。",
+    );
+  }
+  return {
+    turnId: expectedTurnId,
+    conversationId: expectedConversationId,
+    status: snapshot.status,
+    stateVersion: snapshot.state_version,
+    cancelRequestedAt: snapshot.cancel_requested_at,
+    finishedAt: snapshot.finished_at,
+    assistantMessageId: snapshot.assistant_message_id,
+    finishReason: snapshot.finish_reason,
+    failureCode: snapshot.failure_code === null ? null : String(snapshot.failure_code),
+    failureRetryable: snapshot.failure_retryable,
+  };
+}
+
+interface EnqueuedSparkXTurn {
+  readonly turnId: string;
+  readonly messageId: string;
+}
+
+async function enqueueSparkXTurn(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  conversationId: string,
+  requestId: string,
+  content: string,
+  remainingOptions: () => SparkXAgentExecutionOptions,
+): Promise<EnqueuedSparkXTurn> {
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    {
+      method: "POST",
+      path: actionPath(`/v5/conversations/${encodeURIComponent(conversationId)}/turns`),
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": requestId,
+      },
+      body: {
+        client_request_id: requestId,
+        content,
+        attachments: [],
+        skill_names: [],
+        document_ids: [],
+        task_title: null,
+        document_context: null,
+        required_capabilities: null,
+      },
+    },
+    remainingOptions(),
+  );
+  accepted(response, "SPARK_X_AGENT_TURN_ENQUEUE_FAILED");
+  const receipt = objectValue(response.body);
+  if (
+    receipt === null ||
+    typeof receipt.turn_id !== "string" ||
+    !uuidPattern.test(receipt.turn_id) ||
+    typeof receipt.message_id !== "string" ||
+    !uuidPattern.test(receipt.message_id) ||
+    receipt.status !== "queued" ||
+    receipt.idempotent_replay !== false
+  ) {
+    throw apiFailure(
+      "SPARK_X_AGENT_TURN_ENQUEUE_RESPONSE_INVALID",
+      "星火 Agent Turn 入队回执缺少唯一新建标识或排队状态。",
+    );
+  }
+  return { turnId: receipt.turn_id, messageId: receipt.message_id };
+}
+
+async function readSparkXTurnSnapshot(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  conversationId: string,
+  turnId: string,
+  remainingOptions: () => SparkXAgentExecutionOptions,
+): Promise<SparkXTurnSnapshot> {
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    {
+      method: "GET",
+      path: actionPath(`/v5/turns/${encodeURIComponent(turnId)}`),
+    },
+    remainingOptions(),
+  );
+  accepted(response, "SPARK_X_AGENT_TURN_SNAPSHOT_FAILED");
+  return sparkXTurnSnapshot(response.body, turnId, conversationId);
+}
+
+async function waitForSparkXTurnActive(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  conversationId: string,
+  turnId: string,
+  remainingOptions: () => SparkXAgentExecutionOptions,
+): Promise<Readonly<{ snapshot: SparkXTurnSnapshot; pollAttempts: number }>> {
+  for (let attempt = 1; attempt <= 200; attempt += 1) {
+    const snapshot = await readSparkXTurnSnapshot(
+      environment,
+      token,
+      conversationId,
+      turnId,
+      remainingOptions,
+    );
+    if (snapshot.status === "claimed" || snapshot.status === "running") {
+      return { snapshot, pollAttempts: attempt };
+    }
+    if (terminalSparkXTurnStatuses.has(snapshot.status)) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_TURN_CANCEL_WINDOW_MISSED",
+        "星火 Agent Turn 在取消窗口建立前已经终止，无法验证用户停止生成。",
+      );
+    }
+    await boundedDelay(100, remainingOptions().signal);
+  }
+  throw environmentFailure(
+    "SPARK_X_AGENT_TURN_ACTIVE_TIMEOUT",
+    "星火 Agent Turn 未在有界时间内进入可取消的 active 状态。",
+  );
+}
+
+async function waitForSparkXTurnTerminal(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  conversationId: string,
+  turnId: string,
+  maximumAttempts: number,
+  remainingOptions: () => SparkXAgentExecutionOptions,
+): Promise<Readonly<{ snapshot: SparkXTurnSnapshot; pollAttempts: number }>> {
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    const snapshot = await readSparkXTurnSnapshot(
+      environment,
+      token,
+      conversationId,
+      turnId,
+      remainingOptions,
+    );
+    if (terminalSparkXTurnStatuses.has(snapshot.status)) {
+      return { snapshot, pollAttempts: attempt };
+    }
+    await boundedDelay(200, remainingOptions().signal);
+  }
+  throw environmentFailure(
+    "SPARK_X_AGENT_TURN_TERMINAL_TIMEOUT",
+    "星火 Agent Turn 未在有界时间内进入终态。",
+  );
 }
 
 interface UploadedFixtureProjection {
@@ -4214,6 +4526,232 @@ export async function executeSparkXAgentAction(
       truncated: false,
       ...(result.stopReason === undefined ? {} : { stopReason: result.stopReason }),
       ...(result.durationMs === undefined ? {} : { durationMs: result.durationMs }),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/chat.cancel-and-resume") {
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const requestId = requiredUuid(params, "requestId", variables);
+    const cancelMessage = requiredString(params, "cancelMessage", variables, 20_000);
+    const resumeMessage = requiredString(params, "resumeMessage", variables, 20_000);
+    const expectedText = requiredString(params, "expectedText", variables, 5_000);
+    if (
+      cancelMessage.includes("\u0000") ||
+      resumeMessage.includes("\u0000") ||
+      cancelMessage === resumeMessage
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "取消与续接消息必须是不同的受控非空文本，且不能包含空字符。",
+      );
+    }
+    const cancelTurn = await enqueueSparkXTurn(
+      environment,
+      token,
+      conversationId,
+      requestId,
+      cancelMessage,
+      remainingOptions,
+    );
+    const active = await waitForSparkXTurnActive(
+      environment,
+      token,
+      conversationId,
+      cancelTurn.turnId,
+      remainingOptions,
+    );
+    const cancelRequestId = derivedUuid(requestId, "cancel");
+    const cancelResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath(`/v5/turns/${encodeURIComponent(cancelTurn.turnId)}/cancel`),
+        headers: { "Idempotency-Key": cancelRequestId },
+      },
+      remainingOptions(),
+    );
+    accepted(cancelResponse, "SPARK_X_AGENT_TURN_CANCEL_FAILED");
+    const cancelReceipt = objectValue(cancelResponse.body);
+    const actionBoundaries = [
+      "none",
+      "prepared_cancelled",
+      "external_effect_in_flight",
+      "completed_effect_exists",
+    ];
+    if (
+      cancelReceipt === null ||
+      typeof cancelReceipt.control_request_id !== "string" ||
+      !uuidPattern.test(cancelReceipt.control_request_id) ||
+      cancelReceipt.request_disposition !== "requested" ||
+      cancelReceipt.idempotent_replay !== false ||
+      typeof cancelReceipt.action_boundary !== "string" ||
+      !actionBoundaries.includes(cancelReceipt.action_boundary)
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_TURN_CANCEL_RESPONSE_INVALID",
+        "星火 Agent Turn 取消回执缺少首次请求、控制标识或动作边界。",
+      );
+    }
+    const receiptSnapshot = sparkXTurnSnapshot(
+      cancelReceipt.snapshot,
+      cancelTurn.turnId,
+      conversationId,
+    );
+    if (
+      !["cancel_requested", "cancelling", "cancelled"].includes(receiptSnapshot.status) ||
+      receiptSnapshot.cancelRequestedAt === null ||
+      cancelReceipt.action_boundary !== "none"
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_TURN_CANCEL_BOUNDARY_FAILED",
+        "无工具对话取消没有停留在安全的无外部副作用边界。",
+      );
+    }
+    const cancelled = await waitForSparkXTurnTerminal(
+      environment,
+      token,
+      conversationId,
+      cancelTurn.turnId,
+      300,
+      remainingOptions,
+    );
+    if (
+      cancelled.snapshot.status !== "cancelled" ||
+      cancelled.snapshot.cancelRequestedAt === null ||
+      cancelled.snapshot.assistantMessageId !== null ||
+      cancelled.snapshot.finishReason !== null ||
+      cancelled.snapshot.failureCode !== null ||
+      cancelled.snapshot.failureRetryable !== null
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_TURN_CANCEL_TERMINAL_FAILED",
+        "星火 Agent Turn 取消终态包含助手消息或不一致的成功/失败字段。",
+      );
+    }
+
+    const resumeRequestId = derivedUuid(requestId, "resume");
+    const resumedTurn = await enqueueSparkXTurn(
+      environment,
+      token,
+      conversationId,
+      resumeRequestId,
+      resumeMessage,
+      remainingOptions,
+    );
+    const resumed = await waitForSparkXTurnTerminal(
+      environment,
+      token,
+      conversationId,
+      resumedTurn.turnId,
+      600,
+      remainingOptions,
+    );
+    if (
+      resumed.snapshot.status !== "completed" ||
+      resumed.snapshot.assistantMessageId === null ||
+      resumed.snapshot.finishReason !== "stop" ||
+      resumed.snapshot.failureCode !== null ||
+      resumed.snapshot.failureRetryable !== null
+    ) {
+      if (resumed.snapshot.failureRetryable === true) {
+        throw environmentFailure(
+          "SPARK_X_AGENT_TURN_RESUME_ENVIRONMENT_FAILED",
+          "取消后的续接 Turn 因可重试运行时或 Provider 原因失败。",
+        );
+      }
+      throw apiFailure("SPARK_X_AGENT_TURN_RESUME_FAILED", "取消后的续接 Turn 未以 stop 完成。");
+    }
+
+    const historyResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+        ),
+      },
+      remainingOptions(),
+    );
+    accepted(historyResponse, "SPARK_X_AGENT_TURN_CANCEL_HISTORY_FAILED");
+    const history = dataEnvelope(
+      historyResponse.body,
+      "SPARK_X_AGENT_TURN_CANCEL_HISTORY_RESPONSE_INVALID",
+    );
+    const items = Array.isArray(history.items)
+      ? history.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    if (items.some((item) => item.payload_truncated === true)) {
+      throw apiFailure(
+        "SPARK_X_AGENT_TURN_CANCEL_HISTORY_TRUNCATED",
+        "星火 Agent 取消与续接历史包含截断消息。",
+      );
+    }
+    const publicMessages = items.filter(
+      (item) => item.role === "user" || item.role === "assistant",
+    );
+    const toolMessages = items.filter((item) => item.role === "tool");
+    const cancelledUsers = publicMessages.filter(
+      (item) => item.turn_id === cancelTurn.turnId && item.role === "user",
+    );
+    const ghostAssistants = publicMessages.filter(
+      (item) => item.turn_id === cancelTurn.turnId && item.role === "assistant",
+    );
+    const resumedUsers = publicMessages.filter(
+      (item) => item.turn_id === resumedTurn.turnId && item.role === "user",
+    );
+    const resumedAssistants = publicMessages.filter(
+      (item) => item.turn_id === resumedTurn.turnId && item.role === "assistant",
+    );
+    const resumedAssistant = resumedAssistants[0];
+    if (
+      publicMessages.length !== 3 ||
+      toolMessages.length !== 0 ||
+      cancelledUsers.length !== 1 ||
+      ghostAssistants.length !== 0 ||
+      resumedUsers.length !== 1 ||
+      resumedAssistants.length !== 1 ||
+      cancelledUsers[0]?.content !== cancelMessage ||
+      cancelledUsers[0]?.turn_status !== "cancelled" ||
+      resumedUsers[0]?.content !== resumeMessage ||
+      resumedUsers[0]?.turn_status !== "completed" ||
+      resumedAssistant === undefined ||
+      typeof resumedAssistant.content !== "string" ||
+      !resumedAssistant.content.includes(expectedText) ||
+      resumedAssistant.turn_status !== "completed" ||
+      resumedAssistant.finish_reason !== "stop"
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_TURN_CANCEL_HISTORY_ASSERTION_FAILED",
+        "取消与续接历史没有保持一条取消输入、零幽灵回复和一组完整续接消息。",
+      );
+    }
+    return {
+      conversationId,
+      cancelledTurnId: cancelTurn.turnId,
+      resumedTurnId: resumedTurn.turnId,
+      cancelRequested: true,
+      cancelActionBoundary: cancelReceipt.action_boundary,
+      cancelledStatus: "cancelled",
+      cancelledAssistantAbsent: true,
+      resumeCompleted: true,
+      messageCount: publicMessages.length,
+      cancelledUserMessageCount: cancelledUsers.length,
+      resumedUserMessageCount: resumedUsers.length,
+      resumedAssistantMessageCount: resumedAssistants.length,
+      toolMessageCount: toolMessages.length,
+      ghostAssistantCount: ghostAssistants.length,
+      expectedTextMatched: true,
+      cancelInputSha256: sha256(cancelMessage),
+      resumeInputSha256: sha256(resumeMessage),
+      resumeAssistantSha256: sha256(resumedAssistant.content),
+      resumeAssistantContentLength: resumedAssistant.content.length,
+      activePollAttempts: active.pollAttempts,
+      cancelPollAttempts: cancelled.pollAttempts,
+      resumePollAttempts: resumed.pollAttempts,
     };
   }
 

@@ -35,6 +35,11 @@ const variables = {
 const conversationId = "00000000-0000-4000-8000-000000000202";
 const secondConversationId = "00000000-0000-4000-8000-000000000203";
 const thirdConversationId = "00000000-0000-4000-8000-000000000204";
+const cancelledTurnId = "00000000-0000-4000-8000-000000000206";
+const resumedTurnId = "00000000-0000-4000-8000-000000000207";
+const cancelledMessageId = "00000000-0000-4000-8000-000000000208";
+const resumedMessageId = "00000000-0000-4000-8000-000000000209";
+const resumedAssistantMessageId = "00000000-0000-4000-8000-00000000020a";
 const knowledgeBaseId = "00000000-0000-4000-8000-000000000210";
 const uploadedDocumentId = "00000000-0000-4000-8000-000000000211";
 const knowledgeDocumentId = "00000000-0000-4000-8000-000000000212";
@@ -136,7 +141,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.10.0",
+      version: "0.11.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -156,6 +161,10 @@ describe("spark-x-agent adapter", () => {
             actionLevel: "read",
           }),
           expect.objectContaining({ key: "chat.ask", producesResource: false }),
+          expect.objectContaining({
+            key: "chat.cancel-and-resume",
+            actionLevel: "write",
+          }),
           expect.objectContaining({
             key: "chat.assert-history",
             actionLevel: "write",
@@ -958,6 +967,307 @@ describe("spark-x-agent adapter", () => {
     expect(serialized).not.toContain(finalContent);
     expect(serialized).not.toContain("memory-only-access-token-value");
     expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("cancels one active Turn, records no ghost reply and completes the next Turn", async () => {
+    const cancelMessage = `请持续生成长回答，取消标识 ${variables["run.id"]}`;
+    const expectedText = `resume-${variables["run.id"]}`;
+    const resumeMessage = `取消后续接，只回复 ${expectedText}`;
+    const resumedContent = `已恢复：${expectedText}`;
+    const runningSnapshot = {
+      turn_id: cancelledTurnId,
+      conversation_id: conversationId,
+      status: "running",
+      state_version: 2,
+      cancel_requested_at: null,
+      finished_at: null,
+      assistant_message_id: null,
+      finish_reason: null,
+      failure_code: null,
+      failure_retryable: null,
+    };
+    const cancelRequestedSnapshot = {
+      ...runningSnapshot,
+      status: "cancel_requested",
+      state_version: 3,
+      cancel_requested_at: "2026-08-15T06:00:00.000Z",
+    };
+    const cancelledSnapshot = {
+      ...cancelRequestedSnapshot,
+      status: "cancelled",
+      state_version: 4,
+      finished_at: "2026-08-15T06:00:00.100Z",
+    };
+    const completedSnapshot = {
+      turn_id: resumedTurnId,
+      conversation_id: conversationId,
+      status: "completed",
+      state_version: 4,
+      cancel_requested_at: null,
+      finished_at: "2026-08-15T06:00:01.000Z",
+      assistant_message_id: resumedAssistantMessageId,
+      finish_reason: "stop",
+      failure_code: null,
+      failure_retryable: null,
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          turn_id: cancelledTurnId,
+          submission_id: "00000000-0000-4000-8000-00000000020b",
+          message_id: cancelledMessageId,
+          status: "queued",
+          sequence_no: 1,
+          queue_position: 1,
+          state_version: 1,
+          idempotent_replay: false,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(runningSnapshot))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          control_request_id: "00000000-0000-4000-8000-00000000020c",
+          request_disposition: "requested",
+          action_boundary: "none",
+          idempotent_replay: false,
+          snapshot: cancelRequestedSnapshot,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(cancelledSnapshot))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          turn_id: resumedTurnId,
+          submission_id: "00000000-0000-4000-8000-00000000020d",
+          message_id: resumedMessageId,
+          status: "queued",
+          sequence_no: 2,
+          queue_position: 1,
+          state_version: 1,
+          idempotent_replay: false,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(completedSnapshot))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                id: cancelledMessageId,
+                role: "user",
+                content: cancelMessage,
+                turn_id: cancelledTurnId,
+                turn_status: "cancelled",
+              },
+              {
+                id: resumedMessageId,
+                role: "user",
+                content: resumeMessage,
+                turn_id: resumedTurnId,
+                turn_status: "completed",
+              },
+              {
+                id: resumedAssistantMessageId,
+                role: "assistant",
+                content: resumedContent,
+                turn_id: resumedTurnId,
+                turn_status: "completed",
+                finish_reason: "stop",
+              },
+            ],
+          },
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/chat.cancel-and-resume",
+      environment,
+      {
+        ...credentials,
+        conversationId,
+        requestId: "${run.id}",
+        cancelMessage: "请持续生成长回答，取消标识 ${run.id}",
+        resumeMessage: "取消后续接，只回复 resume-${run.id}",
+        expectedText: "resume-${run.id}",
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      conversationId,
+      cancelledTurnId,
+      resumedTurnId,
+      cancelRequested: true,
+      cancelActionBoundary: "none",
+      cancelledStatus: "cancelled",
+      cancelledAssistantAbsent: true,
+      resumeCompleted: true,
+      messageCount: 3,
+      cancelledUserMessageCount: 1,
+      resumedUserMessageCount: 1,
+      resumedAssistantMessageCount: 1,
+      toolMessageCount: 0,
+      ghostAssistantCount: 0,
+      expectedTextMatched: true,
+      cancelInputSha256: createHash("sha256").update(cancelMessage).digest("hex"),
+      resumeInputSha256: createHash("sha256").update(resumeMessage).digest("hex"),
+      resumeAssistantSha256: createHash("sha256").update(resumedContent).digest("hex"),
+      resumeAssistantContentLength: resumedContent.length,
+      activePollAttempts: 1,
+      cancelPollAttempts: 1,
+      resumePollAttempts: 1,
+    });
+    const firstEnqueueBody = fetcher.mock.calls[1]?.[1]?.body;
+    expect(typeof firstEnqueueBody).toBe("string");
+    if (typeof firstEnqueueBody !== "string") throw new Error("expected JSON enqueue body");
+    const firstEnqueue = JSON.parse(firstEnqueueBody) as Record<string, unknown>;
+    expect(firstEnqueue).toMatchObject({
+      client_request_id: variables["run.id"],
+      content: cancelMessage,
+      attachments: [],
+      skill_names: [],
+      required_capabilities: null,
+    });
+    expect(new Headers(fetcher.mock.calls[3]?.[1]?.headers).get("idempotency-key")).toMatch(
+      /^[0-9a-f-]{36}$/u,
+    );
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain(cancelMessage);
+    expect(serialized).not.toContain(resumeMessage);
+    expect(serialized).not.toContain(resumedContent);
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("returns inconclusive when the Turn completes before an active cancel window", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          turn_id: cancelledTurnId,
+          submission_id: "00000000-0000-4000-8000-00000000020b",
+          message_id: cancelledMessageId,
+          status: "queued",
+          sequence_no: 1,
+          queue_position: 1,
+          state_version: 1,
+          idempotent_replay: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          turn_id: cancelledTurnId,
+          conversation_id: conversationId,
+          status: "completed",
+          state_version: 3,
+          cancel_requested_at: null,
+          finished_at: "2026-08-15T06:00:00.000Z",
+          assistant_message_id: resumedAssistantMessageId,
+          finish_reason: "stop",
+          failure_code: null,
+          failure_retryable: null,
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/chat.cancel-and-resume",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          requestId: "${run.id}",
+          cancelMessage: "long ${run.id}",
+          resumeMessage: "resume ${run.id}",
+          expectedText: "${run.id}",
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_TURN_CANCEL_WINDOW_MISSED",
+        classification: "environment_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects an external-effect boundary for a no-tool Turn cancellation", async () => {
+    const runningSnapshot = {
+      turn_id: cancelledTurnId,
+      conversation_id: conversationId,
+      status: "running",
+      state_version: 2,
+      cancel_requested_at: null,
+      finished_at: null,
+      assistant_message_id: null,
+      finish_reason: null,
+      failure_code: null,
+      failure_retryable: null,
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          turn_id: cancelledTurnId,
+          submission_id: "00000000-0000-4000-8000-00000000020b",
+          message_id: cancelledMessageId,
+          status: "queued",
+          sequence_no: 1,
+          queue_position: 1,
+          state_version: 1,
+          idempotent_replay: false,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(runningSnapshot))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          control_request_id: "00000000-0000-4000-8000-00000000020c",
+          request_disposition: "requested",
+          action_boundary: "external_effect_in_flight",
+          idempotent_replay: false,
+          snapshot: {
+            ...runningSnapshot,
+            status: "cancel_requested",
+            state_version: 3,
+            cancel_requested_at: "2026-08-15T06:00:00.000Z",
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/chat.cancel-and-resume",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          requestId: "${run.id}",
+          cancelMessage: "long ${run.id}",
+          resumeMessage: "resume ${run.id}",
+          expectedText: "${run.id}",
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_TURN_CANCEL_BOUNDARY_FAILED",
+        classification: "product_failed",
+      },
+    });
   });
 
   it("fails with a stable product error when the chat stream has no terminal event", async () => {

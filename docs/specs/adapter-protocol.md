@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -34,6 +34,7 @@
       { "key": "conversation.rename-and-assert-pagination" },
       { "key": "conversation.assert-deleted-state" },
       { "key": "chat.ask" },
+      { "key": "chat.cancel-and-resume" },
       { "key": "chat.assert-history" },
       { "key": "chat.assert-context-history" },
       { "key": "conversation.delete" }
@@ -190,9 +191,9 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.10.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+当前 `0.11.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
 `conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
-`chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
+`chat.cancel-and-resume`、`chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-conversation-scope`、`knowledge-base.cleanup` 和
 `skill.assert-trusted-publication`，以及 `automation.create`、`automation.wait-fired` 和
@@ -220,6 +221,13 @@ ID 与登记 ID 一致、存在内容事件和唯一终态 `done`，并只输出
 `user/assistant` 顺序、两次流式 SHA-256、`stop` 终态、无工具消息和独立干扰会话标识完全缺失。CHAT 用例必须先用 `conversation.create` 登记
 `spark-x-agent-conversation` 资源再执行 `chat.ask`，因此聊天取消、超时或失败时，普通 `finally` 和独立
 补偿 Worker 都已持有清理 ID。删除动作重新登录；HTTP 404 作为已经清理成功处理，不触发掩盖根因的重试。
+`chat.cancel-and-resume` 使用固定 V5 Turn 队列路径且显式关闭工具能力：先等待长回答 Turn 进入
+`claimed/running`，再以独立幂等键请求 active cancel。回执必须是首次 `requested` 且动作边界为 `none`；
+取消终态必须为 `cancelled`，不能包含助手消息、成功终止原因或失败字段。随后同一会话入队独立续接 Turn，
+要求以 `completed/stop` 完成；最终历史必须恰好包含一条取消输入、一条续接输入和一条续接回复，取消 Turn
+不能有幽灵助手消息或工具消息。若 Provider 太快导致 active 取消窗口无法建立，稳定返回
+`SPARK_X_AGENT_TURN_CANCEL_WINDOW_MISSED/environment_failed`，不会把未执行的取消伪造成通过；正文只输出
+SHA-256、长度、Turn ID 和状态计数。
 
 TOOL 动作仅允许仓库内置的 `builtin-demo__calculator`、`builtin-demo__echo` 和 `builtin-demo__time` 只读
 工具。目录校验同时检查普通用户投影不含连接命令、环境变量、地址、工作目录或错误详情，以及管理员登记
