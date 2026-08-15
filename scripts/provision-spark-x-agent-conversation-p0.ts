@@ -64,6 +64,8 @@ interface RunDetail extends IdentifiedRecord {
 const apiBase = process.env.SPARK_X_TEST_PLATFORM_API_URL ?? "http://127.0.0.1:4100/api/v1";
 const runSmoke = process.env.SPARK_X_AGENT_RUN_SMOKE === "true";
 const runContextSmoke = process.env.SPARK_X_AGENT_RUN_CONTEXT_SMOKE === "true";
+const runConversationReopenSmoke =
+  process.env.SPARK_X_AGENT_RUN_CONVERSATION_REOPEN_SMOKE === "true";
 const runKnowledgeSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_SMOKE === "true";
 const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
 const runAutomationSmoke = process.env.SPARK_X_AGENT_RUN_AUTOMATION_SMOKE === "true";
@@ -332,6 +334,153 @@ function conversationDefinition(): Readonly<Record<string, unknown>> {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
           conversationId: "${step.conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
+function conversationReopenDefinition(): Readonly<Record<string, unknown>> {
+  const marker = "spark-x-reopen-${run.id}";
+  const firstMessage = `请记住会话恢复标识 ${marker}，并只回复这个标识。当前会话不绑定知识库或 Skill，不要调用工具。`;
+  const secondMessage =
+    "从最近会话重新打开后，请只回复上一轮的会话恢复标识；本轮校验号 ${run.id}。不要调用工具。";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "CONV-002 从最近列表重新打开并继续会话",
+      description:
+        "首轮真实模型对话后从最近列表重新定位同一会话，校验消息计数，再用原会话续接第二轮并确认空知识库、Skill 和工具范围未漂移。",
+      systemKey: "spark-x-agent",
+      moduleKey: "recent-conversations",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "conversation", "p0", "core-smoke", "real-model", "reopen"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 120_000,
+      caseTimeoutMs: 360_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:recent-conversations"],
+    steps: [
+      {
+        id: "create-reopen-conversation",
+        name: "创建并登记待重新打开的会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: marker,
+        },
+        capture: { "reopen-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.reopen-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "ask-reopen-first-turn",
+        name: "写入首轮会话恢复标识",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.ask",
+        timeoutMs: 120_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.reopen-conversation-id}",
+          message: firstMessage,
+          expectedText: marker,
+        },
+        capture: { "reopen-first-assistant-sha256": "$.finalContentSha256" },
+      },
+      {
+        id: "reopen-from-recent-list",
+        name: "从最近会话列表重新定位原会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.assert-recent",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.reopen-conversation-id}",
+          title: marker,
+        },
+      },
+      {
+        id: "ask-reopen-second-turn",
+        name: "用重新定位的原会话续接第二轮",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.ask",
+        timeoutMs: 120_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.reopen-conversation-id}",
+          message: secondMessage,
+          expectedText: marker,
+        },
+        capture: { "reopen-second-assistant-sha256": "$.finalContentSha256" },
+      },
+      {
+        id: "assert-reopen-history",
+        name: "校验恢复后的两轮历史和空扩展范围",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.assert-context-history",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.reopen-conversation-id}",
+          firstUserText: firstMessage,
+          firstAssistantSha256: "${step.reopen-first-assistant-sha256}",
+          secondUserText: secondMessage,
+          secondExpectedText: marker,
+          secondAssistantSha256: "${step.reopen-second-assistant-sha256}",
+          forbiddenText: "spark-x-forbidden-scope-${run.id}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "delete-reopen-conversation",
+        name: "删除重新打开的测试会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.reopen-conversation-id}",
         },
       },
     ],
@@ -1278,9 +1427,9 @@ async function executeSmoke(
   check(accepted.status === 202, "Spark X Agent core smoke run was not newly accepted");
   const run = await waitForRun(accepted.body.id);
   check(run.gateResult === "passed", `Spark X Agent core smoke gate is ${String(run.gateResult)}`);
-  check(run.summary.passed === 8, "Spark X Agent core smoke cases did not all pass");
+  check(run.summary.passed === 9, "Spark X Agent core smoke cases did not all pass");
   check(run.firstFailure === null, "Spark X Agent core smoke retained an unexpected first failure");
-  check(run.cases.length === 8, "Spark X Agent core smoke run case linkage is incomplete");
+  check(run.cases.length === 9, "Spark X Agent core smoke run case linkage is incomplete");
   check(
     run.cases.every((item) => item.result === "passed"),
     "Spark X Agent core smoke case failed",
@@ -1290,8 +1439,8 @@ async function executeSmoke(
     "Spark X Agent core smoke cleanup status is invalid",
   );
   check(
-    run.steps.length === 32,
-    "Spark X Agent core smoke did not record twenty-four main steps and eight finally steps",
+    run.steps.length === 38,
+    "Spark X Agent core smoke did not record twenty-nine main steps and nine finally steps",
   );
   check(
     run.steps.every((step) => step.status === "passed"),
@@ -1302,6 +1451,12 @@ async function executeSmoke(
       [
         "main:adapter:spark-x-agent/conversation.create",
         "main:adapter:spark-x-agent/conversation.assert-recent",
+        "finally:adapter:spark-x-agent/conversation.delete",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/chat.ask",
+        "main:adapter:spark-x-agent/conversation.assert-recent",
+        "main:adapter:spark-x-agent/chat.ask",
+        "main:adapter:spark-x-agent/chat.assert-context-history",
         "finally:adapter:spark-x-agent/conversation.delete",
         "main:adapter:spark-x-agent/conversation.create",
         "main:adapter:spark-x-agent/chat.ask",
@@ -1335,10 +1490,10 @@ async function executeSmoke(
       ].join(","),
     "Spark X Agent core smoke structured step sequence is incorrect",
   );
-  check(run.resources.length === 8, "Spark X Agent core smoke resource ledger linkage is missing");
+  check(run.resources.length === 9, "Spark X Agent core smoke resource ledger linkage is missing");
   check(
     run.resources.filter((resource) => resource.resourceType === "spark-x-agent-conversation")
-      .length === 6 &&
+      .length === 7 &&
       run.resources.filter((resource) => resource.resourceType === "spark-x-agent-knowledge-base")
         .length === 1 &&
       run.resources.filter((resource) => resource.resourceType === "spark-x-agent-automation")
@@ -1353,10 +1508,8 @@ async function executeSmoke(
     run.cleanupJob === null,
     "normal Spark X Agent core smoke unexpectedly required compensation",
   );
-  const chatAsk = run.steps.find((step) => step.action === "adapter:spark-x-agent/chat.ask");
-  const chatHistory = run.steps.find(
-    (step) => step.action === "adapter:spark-x-agent/chat.assert-history",
-  );
+  const chatAsk = run.steps.find((step) => step.stepId === "ask-chat");
+  const chatHistory = run.steps.find((step) => step.stepId === "assert-chat-history");
   check(chatAsk?.outputSummary?.done === true, "CHAT-001 did not record a terminal done event");
   check(
     chatAsk.outputSummary.expectedTextMatched === true &&
@@ -1371,6 +1524,7 @@ async function executeSmoke(
       chatHistory.outputSummary.assistantContentSha256 === chatAsk.outputSummary.finalContentSha256,
     "CHAT-001 persisted history is not linked to the streamed answer",
   );
+  assertConversationReopenEvidence(run);
   assertContextEvidence(run);
   const toolCatalog = run.steps.find(
     (step) => step.action === "adapter:spark-x-agent/tool.assert-safe-catalog",
@@ -1562,6 +1716,124 @@ async function executeContextSmoke(
     check(
       !JSON.stringify(run).includes(password),
       "administrator password leaked into CHAT-002 evidence",
+    );
+  }
+  return run;
+}
+
+function assertConversationReopenEvidence(run: RunDetail): void {
+  const firstAsk = run.steps.find((step) => step.stepId === "ask-reopen-first-turn");
+  const recent = run.steps.find((step) => step.stepId === "reopen-from-recent-list");
+  const secondAsk = run.steps.find((step) => step.stepId === "ask-reopen-second-turn");
+  const history = run.steps.find((step) => step.stepId === "assert-reopen-history");
+  check(
+    [firstAsk, secondAsk].every(
+      (step) =>
+        step?.outputSummary?.done === true &&
+        step.outputSummary.expectedTextMatched === true &&
+        step.outputSummary.toolEventCount === 0 &&
+        step.outputSummary.skillEventCount === 0 &&
+        step.outputSummary.reviewEventCount === 0 &&
+        step.outputSummary.truncated === false &&
+        typeof step.outputSummary.finalContentSha256 === "string" &&
+        /^[0-9a-f]{64}$/u.test(step.outputSummary.finalContentSha256),
+    ),
+    "CONV-002 streamed continuation evidence is incomplete or unexpectedly invoked an extension",
+  );
+  check(
+    recent?.outputSummary?.listed === true &&
+      typeof recent.outputSummary.recentPosition === "number" &&
+      recent.outputSummary.recentPosition >= 0 &&
+      recent.outputSummary.messageCount === 2,
+    "CONV-002 did not reopen the first-turn conversation from the recent list",
+  );
+  check(
+    history?.outputSummary?.messageCount === 4 &&
+      history.outputSummary.userMessageCount === 2 &&
+      history.outputSummary.assistantMessageCount === 2 &&
+      history.outputSummary.toolMessageCount === 0 &&
+      history.outputSummary.expectedOrderMatched === true &&
+      history.outputSummary.firstAssistantHashMatched === true &&
+      history.outputSummary.secondAssistantHashMatched === true &&
+      history.outputSummary.secondExpectedTextMatched === true &&
+      history.outputSummary.forbiddenTextAbsent === true &&
+      history.outputSummary.assistantFinishReasonsMatched === true &&
+      history.outputSummary.firstAssistantContentSha256 ===
+        firstAsk?.outputSummary?.finalContentSha256 &&
+      history.outputSummary.secondAssistantContentSha256 ===
+        secondAsk?.outputSummary?.finalContentSha256,
+    "CONV-002 reopened history, context or empty extension scope is incomplete",
+  );
+  const evidence = JSON.stringify({ firstAsk, recent, secondAsk, history });
+  check(
+    !evidence.includes("请记住会话恢复标识") &&
+      !evidence.includes("从最近会话重新打开") &&
+      !evidence.includes("memory-only-access-token"),
+    "CONV-002 message content or in-memory token leaked into structured evidence",
+  );
+}
+
+async function executeConversationReopenSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-conversation-reopen-p0-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-conversation-reopen-p0-verification",
+      priority: 95,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent conversation reopen run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(
+    run.gateResult === "passed",
+    `Spark X Agent conversation reopen gate is ${String(run.gateResult)}`,
+  );
+  check(run.summary.passed === 1, "Spark X Agent conversation reopen case did not pass");
+  check(run.firstFailure === null, "Spark X Agent conversation reopen retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent conversation reopen case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/chat.ask",
+        "main:adapter:spark-x-agent/conversation.assert-recent",
+        "main:adapter:spark-x-agent/chat.ask",
+        "main:adapter:spark-x-agent/chat.assert-context-history",
+        "finally:adapter:spark-x-agent/conversation.delete",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent conversation reopen structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 1 &&
+      run.resources[0]?.resourceType === "spark-x-agent-conversation" &&
+      run.resources[0].cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete" &&
+      run.resources[0].cleanupStatus === "passed",
+    "Spark X Agent conversation reopen resource ledger or cleanup is incomplete",
+  );
+  check(
+    run.cleanupJob === null,
+    "normal conversation reopen run unexpectedly required compensation",
+  );
+  assertConversationReopenEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into CONV-002 evidence",
     );
   }
   return run;
@@ -1933,6 +2205,14 @@ const conversation = await ensureCase(
   conversationDefinition(),
   "同步星火 Agent 会话 P0 适配器定义",
 );
+const conversationReopenCase = await ensureCase(
+  system.id,
+  recentConversations.id,
+  environment.id,
+  "CONV-002 从最近列表重新打开并继续会话",
+  conversationReopenDefinition(),
+  "新增最近列表重新定位、两轮上下文续接、空扩展范围和完整清理 P0 闭环",
+);
 const chatCase = await ensureCase(
   system.id,
   chat.id,
@@ -1996,6 +2276,13 @@ const conversationSuite = await ensureSuite(
   "CONV-001 真实会话创建、最近排序、资源登记与清理闭环。",
   [conversation.testCase.id],
 );
+const conversationReopenSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-conversation-reopen-p0",
+  "星火 Agent 会话重新打开 P0 纵向切片",
+  "CONV-002 首轮后从最近列表重新定位同一会话、续接第二轮、核对空扩展范围并完整清理。",
+  [conversationReopenCase.testCase.id],
+);
 const chatContextSuite = await ensureSuite(
   system.id,
   "spark-x-agent-chat-context-p0",
@@ -2035,9 +2322,10 @@ const suite = await ensureSuite(
   system.id,
   "spark-x-agent-core-smoke",
   "星火 Agent 核心冒烟",
-  "发布后核心冒烟套件；当前包含 CONV-001、CHAT-001/002、TOOL-001/002、KB-001、SKILL-001 与 AUTO-001，后续按模块扩充到 10～12 条 P0。",
+  "发布后核心冒烟套件；当前包含 CONV-001/002、CHAT-001/002、TOOL-001/002、KB-001、SKILL-001 与 AUTO-001，后续按模块扩充到 10～12 条 P0。",
   [
     conversation.testCase.id,
+    conversationReopenCase.testCase.id,
     chatCase.testCase.id,
     chatContextCase.testCase.id,
     toolCatalogCase.testCase.id,
@@ -2048,30 +2336,45 @@ const suite = await ensureSuite(
   ],
 );
 check(
-  [runSmoke, runContextSmoke, runKnowledgeSmoke, runSkillSmoke, runAutomationSmoke].filter(Boolean)
-    .length <= 1,
+  [
+    runSmoke,
+    runContextSmoke,
+    runConversationReopenSmoke,
+    runKnowledgeSmoke,
+    runSkillSmoke,
+    runAutomationSmoke,
+  ].filter(Boolean).length <= 1,
   "only one Spark X Agent smoke mode can be true",
 );
 const run = runSmoke
   ? await executeSmoke(system.id, environment.id, suite.id, password)
   : runContextSmoke
     ? await executeContextSmoke(system.id, environment.id, chatContextSuite.id, password)
-    : runKnowledgeSmoke
-      ? await executeKnowledgeSmoke(system.id, environment.id, knowledgeBaseSuite.id, password)
-      : runSkillSmoke
-        ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
-        : runAutomationSmoke
-          ? await executeAutomationSmoke(system.id, environment.id, automationSuite.id, password)
-          : undefined;
+    : runConversationReopenSmoke
+      ? await executeConversationReopenSmoke(
+          system.id,
+          environment.id,
+          conversationReopenSuite.id,
+          password,
+        )
+      : runKnowledgeSmoke
+        ? await executeKnowledgeSmoke(system.id, environment.id, knowledgeBaseSuite.id, password)
+        : runSkillSmoke
+          ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
+          : runAutomationSmoke
+            ? await executeAutomationSmoke(system.id, environment.id, automationSuite.id, password)
+            : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
-  : runKnowledgeSmoke
-    ? "spark-x-agent-knowledge-base-p0"
-    : runSkillSmoke
-      ? "spark-x-agent-skills-p0"
-      : runAutomationSmoke
-        ? "spark-x-agent-automations-p0"
-        : "spark-x-agent-core-smoke";
+  : runConversationReopenSmoke
+    ? "spark-x-agent-conversation-reopen-p0"
+    : runKnowledgeSmoke
+      ? "spark-x-agent-knowledge-base-p0"
+      : runSkillSmoke
+        ? "spark-x-agent-skills-p0"
+        : runAutomationSmoke
+          ? "spark-x-agent-automations-p0"
+          : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -2082,20 +2385,24 @@ console.info(
         ? 0
         : runContextSmoke
           ? 28
-          : runKnowledgeSmoke
-            ? 16
-            : runSkillSmoke
-              ? 12
-              : runAutomationSmoke
-                ? 20
-                : 110,
-    caseCount: 8,
+          : runConversationReopenSmoke
+            ? 23
+            : runKnowledgeSmoke
+              ? 16
+              : runSkillSmoke
+                ? 12
+                : runAutomationSmoke
+                  ? 20
+                  : 133,
+    caseCount: 9,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
     systemId: system.id,
     environmentId: environment.id,
     conversationCaseId: conversation.testCase.id,
     conversationCaseVersionId: conversation.version.id,
+    conversationReopenCaseId: conversationReopenCase.testCase.id,
+    conversationReopenCaseVersionId: conversationReopenCase.version.id,
     chatCaseId: chatCase.testCase.id,
     chatCaseVersionId: chatCase.version.id,
     chatContextCaseId: chatContextCase.testCase.id,
@@ -2111,6 +2418,7 @@ console.info(
     automationCaseId: automationCase.testCase.id,
     automationCaseVersionId: automationCase.version.id,
     conversationSuiteId: conversationSuite.id,
+    conversationReopenSuiteId: conversationReopenSuite.id,
     chatContextSuiteId: chatContextSuite.id,
     toolSuiteId: toolSuite.id,
     knowledgeBaseSuiteId: knowledgeBaseSuite.id,
