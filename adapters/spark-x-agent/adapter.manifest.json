@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -4122,6 +4122,288 @@
               "type": "string",
               "minLength": 64,
               "maxLength": 64
+            }
+          }
+        }
+      },
+      {
+        "key": "skill.create-lifecycle-fixture",
+        "name": "创建 Skill 生命周期夹具",
+        "description": "只创建可完整删除的 Skill 元数据夹具，不上传文件、不发布不可变版本且不写入对象存储。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 20000,
+        "producesResource": true,
+        "cleanupAction": "skill.cleanup-lifecycle-fixture",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "name"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skillFixtureResourceId",
+            "skillId",
+            "skillNameSha256",
+            "promptSha256",
+            "created",
+            "enabled",
+            "builtin",
+            "userCatalogOccurrences",
+            "userDetailMatched",
+            "assetRootAbsent",
+            "mainAssetAbsent"
+          ],
+          "properties": {
+            "skillFixtureResourceId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "skillId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "skillNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "promptSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "created": {
+              "const": true
+            },
+            "enabled": {
+              "const": true
+            },
+            "builtin": {
+              "const": false
+            },
+            "userCatalogOccurrences": {
+              "const": 1
+            },
+            "userDetailMatched": {
+              "const": true
+            },
+            "assetRootAbsent": {
+              "const": true
+            },
+            "mainAssetAbsent": {
+              "const": true
+            }
+          }
+        }
+      },
+      {
+        "key": "skill.assert-disabled-and-deleted",
+        "name": "校验 Skill 停用、删除与无副作用",
+        "description": "停用已登记夹具后验证用户投影和会话选择被拒绝，删除后再验证管理/用户投影无残留且会话零消息。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 30000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "conversationId", "skillId"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "skillId": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "skillId",
+            "skillNameSha256",
+            "disabled",
+            "disabledAdminStateMatched",
+            "disabledUserCatalogOccurrences",
+            "disabledUserDetailDenied",
+            "disabledSelectionDenied",
+            "deleted",
+            "deletedAdminDetailAbsent",
+            "deletedAdminCatalogOccurrences",
+            "deletedUserCatalogOccurrences",
+            "deletedUserDetailDenied",
+            "deletedSelectionDenied",
+            "activeSkillAbsentBeforeDelete",
+            "activeSkillAbsentAfterDelete",
+            "messageCountBeforeDelete",
+            "messageCountAfterDelete",
+            "disabledErrorSha256",
+            "deletedErrorSha256"
+          ],
+          "properties": {
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "skillId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "skillNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "disabled": {
+              "const": true
+            },
+            "disabledAdminStateMatched": {
+              "const": true
+            },
+            "disabledUserCatalogOccurrences": {
+              "const": 0
+            },
+            "disabledUserDetailDenied": {
+              "const": true
+            },
+            "disabledSelectionDenied": {
+              "const": true
+            },
+            "deleted": {
+              "const": true
+            },
+            "deletedAdminDetailAbsent": {
+              "const": true
+            },
+            "deletedAdminCatalogOccurrences": {
+              "const": 0
+            },
+            "deletedUserCatalogOccurrences": {
+              "const": 0
+            },
+            "deletedUserDetailDenied": {
+              "const": true
+            },
+            "deletedSelectionDenied": {
+              "const": true
+            },
+            "activeSkillAbsentBeforeDelete": {
+              "const": true
+            },
+            "activeSkillAbsentAfterDelete": {
+              "const": true
+            },
+            "messageCountBeforeDelete": {
+              "const": 0
+            },
+            "messageCountAfterDelete": {
+              "const": 0
+            },
+            "disabledErrorSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "deletedErrorSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          }
+        }
+      },
+      {
+        "key": "skill.cleanup-lifecycle-fixture",
+        "name": "清理 Skill 生命周期夹具",
+        "description": "只删除名称严格绑定当前 run_id 的 Skill 元数据夹具，并验证管理投影已缺失；删除后重放幂等成功。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 20000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "skillId"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "skillId": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "skillId",
+            "skillNameSha256",
+            "deleted",
+            "alreadyMissing",
+            "adminDetailAbsent",
+            "adminCatalogOccurrences"
+          ],
+          "properties": {
+            "skillId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "skillNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "deleted": {
+              "const": true
+            },
+            "alreadyMissing": {
+              "type": "boolean"
+            },
+            "adminDetailAbsent": {
+              "const": true
+            },
+            "adminCatalogOccurrences": {
+              "const": 0
             }
           }
         }

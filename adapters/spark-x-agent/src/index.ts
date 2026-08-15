@@ -42,6 +42,9 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/knowledge-base.cleanup",
   "adapter:spark-x-agent/skill.assert-trusted-publication",
   "adapter:spark-x-agent/skill.assert-selected-injection",
+  "adapter:spark-x-agent/skill.create-lifecycle-fixture",
+  "adapter:spark-x-agent/skill.assert-disabled-and-deleted",
+  "adapter:spark-x-agent/skill.cleanup-lifecycle-fixture",
   "adapter:spark-x-agent/automation.create",
   "adapter:spark-x-agent/automation.wait-fired",
   "adapter:spark-x-agent/automation.assert-no-duplicate-delivery",
@@ -2189,6 +2192,163 @@ export const sparkXAgentActionCapabilities = [
     },
   },
   {
+    key: "skill.create-lifecycle-fixture",
+    name: "创建 Skill 生命周期夹具",
+    description:
+      "只创建可完整删除的 Skill 元数据夹具，不上传文件、不发布不可变版本且不写入对象存储。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 20_000,
+    producesResource: true,
+    cleanupAction: "skill.cleanup-lifecycle-fixture",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "name"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        name: { type: "string", minLength: 1, maxLength: 128 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "skillFixtureResourceId",
+        "skillId",
+        "skillNameSha256",
+        "promptSha256",
+        "created",
+        "enabled",
+        "builtin",
+        "userCatalogOccurrences",
+        "userDetailMatched",
+        "assetRootAbsent",
+        "mainAssetAbsent",
+      ],
+      properties: {
+        skillFixtureResourceId: { type: "string", format: "uuid" },
+        skillId: { type: "string", format: "uuid" },
+        skillNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        promptSha256: { type: "string", minLength: 64, maxLength: 64 },
+        created: { const: true },
+        enabled: { const: true },
+        builtin: { const: false },
+        userCatalogOccurrences: { const: 1 },
+        userDetailMatched: { const: true },
+        assetRootAbsent: { const: true },
+        mainAssetAbsent: { const: true },
+      },
+    },
+  },
+  {
+    key: "skill.assert-disabled-and-deleted",
+    name: "校验 Skill 停用、删除与无副作用",
+    description:
+      "停用已登记夹具后验证用户投影和会话选择被拒绝，删除后再验证管理/用户投影无残留且会话零消息。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 30_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "conversationId", "skillId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        skillId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "skillId",
+        "skillNameSha256",
+        "disabled",
+        "disabledAdminStateMatched",
+        "disabledUserCatalogOccurrences",
+        "disabledUserDetailDenied",
+        "disabledSelectionDenied",
+        "deleted",
+        "deletedAdminDetailAbsent",
+        "deletedAdminCatalogOccurrences",
+        "deletedUserCatalogOccurrences",
+        "deletedUserDetailDenied",
+        "deletedSelectionDenied",
+        "activeSkillAbsentBeforeDelete",
+        "activeSkillAbsentAfterDelete",
+        "messageCountBeforeDelete",
+        "messageCountAfterDelete",
+        "disabledErrorSha256",
+        "deletedErrorSha256",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        skillId: { type: "string", format: "uuid" },
+        skillNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        disabled: { const: true },
+        disabledAdminStateMatched: { const: true },
+        disabledUserCatalogOccurrences: { const: 0 },
+        disabledUserDetailDenied: { const: true },
+        disabledSelectionDenied: { const: true },
+        deleted: { const: true },
+        deletedAdminDetailAbsent: { const: true },
+        deletedAdminCatalogOccurrences: { const: 0 },
+        deletedUserCatalogOccurrences: { const: 0 },
+        deletedUserDetailDenied: { const: true },
+        deletedSelectionDenied: { const: true },
+        activeSkillAbsentBeforeDelete: { const: true },
+        activeSkillAbsentAfterDelete: { const: true },
+        messageCountBeforeDelete: { const: 0 },
+        messageCountAfterDelete: { const: 0 },
+        disabledErrorSha256: { type: "string", minLength: 64, maxLength: 64 },
+        deletedErrorSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
+    key: "skill.cleanup-lifecycle-fixture",
+    name: "清理 Skill 生命周期夹具",
+    description:
+      "只删除名称严格绑定当前 run_id 的 Skill 元数据夹具，并验证管理投影已缺失；删除后重放幂等成功。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 20_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "skillId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        skillId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "skillId",
+        "skillNameSha256",
+        "deleted",
+        "alreadyMissing",
+        "adminDetailAbsent",
+        "adminCatalogOccurrences",
+      ],
+      properties: {
+        skillId: { type: "string", format: "uuid" },
+        skillNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        deleted: { const: true },
+        alreadyMissing: { type: "boolean" },
+        adminDetailAbsent: { const: true },
+        adminCatalogOccurrences: { const: 0 },
+      },
+    },
+  },
+  {
     key: "conversation.delete",
     name: "删除会话",
     description: "重新登录后按会话 ID 执行幂等清理，可用于 finally 与独立补偿任务。",
@@ -2222,7 +2382,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.23.0",
+  version: "0.24.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -2254,6 +2414,9 @@ const trustedSkillDisplayName = "贸易与港口每日简报";
 const trustedSkillCategory = "utility";
 const trustedSkillBusinessType = "行业研究";
 const trustedSkillMainFile = "trade-port-daily-brief.md";
+const lifecycleSkillNamePrefix = "spark-x-skill-lifecycle-";
+const lifecycleSkillSource = "spark-x-test-platform-lifecycle-fixture";
+const lifecycleSkillCategory = "testing";
 const privateCatalogFields = [
   "command",
   "args",
@@ -4029,6 +4192,206 @@ function providerFixtureResource(value: string): SparkXProviderFixtureResource {
   return { fixtureProviderId: match[1], originalProviderId: match[2] };
 }
 
+interface SparkXSkillLifecycleProjection {
+  readonly id: string;
+  readonly name: string;
+  readonly enabled: boolean;
+}
+
+function lifecycleSkillName(runId: string): string {
+  return `${lifecycleSkillNamePrefix}${runId}`;
+}
+
+function lifecycleSkillPrompt(runId: string): string {
+  return `SKILL004_PROMPT:${runId}`;
+}
+
+function lifecycleSkillProjection(
+  value: unknown,
+  runId: string,
+  code: string,
+): SparkXSkillLifecycleProjection {
+  const skill = objectValue(value);
+  const config = objectValue(skill?.config);
+  const assets = objectValue(skill?.assets);
+  const expectedName = lifecycleSkillName(runId);
+  const expectedPrompt = lifecycleSkillPrompt(runId);
+  const allowedConfigKeys = new Set([
+    "prompt_template",
+    "source",
+    "lifecycle_fixture",
+    "durable_agent_task_v17",
+  ]);
+  if (
+    skill === null ||
+    typeof skill.id !== "string" ||
+    !uuidPattern.test(skill.id) ||
+    skill.name !== expectedName ||
+    skill.display_name !== `Spark X Skill Lifecycle ${runId}` ||
+    skill.description !== "Spark X Test Platform reversible Skill lifecycle fixture" ||
+    skill.category !== lifecycleSkillCategory ||
+    skill.is_builtin !== false ||
+    typeof skill.is_enabled !== "boolean" ||
+    config === null ||
+    config.prompt_template !== expectedPrompt ||
+    config.source !== lifecycleSkillSource ||
+    config.lifecycle_fixture !== true ||
+    Object.keys(config).some((key) => !allowedConfigKeys.has(key)) ||
+    (Object.hasOwn(config, "durable_agent_task_v17") && config.durable_agent_task_v17 !== false) ||
+    assets === null ||
+    assets.root_exists !== false ||
+    assets.has_skill_md !== false ||
+    assets.main_file !== null ||
+    assets.asset_count !== 0
+  ) {
+    throw apiFailure(code, "Skill 生命周期夹具投影超出可回收元数据边界。");
+  }
+  return { id: skill.id, name: expectedName, enabled: skill.is_enabled };
+}
+
+async function listAdminSkillOccurrences(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  expectedName: string,
+  options: SparkXAgentExecutionOptions,
+): Promise<number> {
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    { method: "GET", path: actionPath("/admin/skills?page=1&per_page=100") },
+    options,
+  );
+  acceptedSkillRuntime(response, "SPARK_X_AGENT_SKILL_ADMIN_LIST_FAILED");
+  const data = dataEnvelope(response.body, "SPARK_X_AGENT_SKILL_ADMIN_LIST_RESPONSE_INVALID");
+  const items = Array.isArray(data.items) ? data.items.map(objectValue) : null;
+  if (
+    items === null ||
+    items.some((item) => item === null || typeof item.name !== "string") ||
+    typeof data.total !== "number" ||
+    !Number.isSafeInteger(data.total) ||
+    data.total < 0 ||
+    data.total > 100 ||
+    data.page !== 1 ||
+    data.per_page !== 100 ||
+    items.length !== data.total
+  ) {
+    if (typeof data.total === "number" && data.total > 100) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_SKILL_CATALOG_BOUND_EXCEEDED",
+        "Skill 管理清单超过 100 条，无法安全证明夹具无残留。",
+      );
+    }
+    throw apiFailure(
+      "SPARK_X_AGENT_SKILL_ADMIN_LIST_RESPONSE_INVALID",
+      "Skill 管理清单缺少受限分页投影。",
+    );
+  }
+  return items.filter((item) => item?.name === expectedName).length;
+}
+
+async function listUserSkillOccurrences(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  expectedName: string,
+  options: SparkXAgentExecutionOptions,
+): Promise<number> {
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    { method: "GET", path: actionPath("/skills") },
+    options,
+  );
+  acceptedSkillRuntime(response, "SPARK_X_AGENT_SKILL_LIST_FAILED");
+  const data = successfulData(response.body, "SPARK_X_AGENT_SKILL_LIST_RESPONSE_INVALID");
+  if (!Array.isArray(data) || data.length > 100) {
+    throw environmentFailure(
+      "SPARK_X_AGENT_SKILL_CATALOG_BOUND_EXCEEDED",
+      "Skill 用户清单超出可控回归边界。",
+    );
+  }
+  const items = data.map(objectValue);
+  if (items.some((item) => item === null || typeof item.name !== "string")) {
+    throw apiFailure("SPARK_X_AGENT_SKILL_LIST_RESPONSE_INVALID", "Skill 用户清单包含无效投影。");
+  }
+  return items.filter((item) => item?.name === expectedName).length;
+}
+
+function skillDenialErrorSha256(
+  response: HttpExecutionResult,
+  phase: "disabled" | "deleted",
+): string {
+  if (response.status >= 500 || response.status === 401 || response.status === 429) {
+    throw environmentFailure(
+      "SPARK_X_AGENT_SKILL_LIFECYCLE_DEPENDENCY_UNAVAILABLE",
+      `Skill ${phase} 阶段依赖返回 HTTP ${response.status}。`,
+    );
+  }
+  const body = objectValue(response.body);
+  if (
+    response.status !== 403 ||
+    body?.success !== false ||
+    typeof body.error !== "string" ||
+    body.error !== "该技能已禁用、删除或当前用户无权激活"
+  ) {
+    throw apiFailure(
+      "SPARK_X_AGENT_SKILL_LIFECYCLE_DENIAL_FAILED",
+      `Skill ${phase} 后未以稳定 403 拒绝选择。`,
+      response.status,
+    );
+  }
+  return sha256(body.error);
+}
+
+function assertUserSkillDetailDenied(
+  response: HttpExecutionResult,
+  phase: "disabled" | "deleted",
+): void {
+  if (response.status >= 500 || response.status === 401 || response.status === 429) {
+    throw environmentFailure(
+      "SPARK_X_AGENT_SKILL_LIFECYCLE_DEPENDENCY_UNAVAILABLE",
+      `Skill ${phase} 详情依赖返回 HTTP ${response.status}。`,
+    );
+  }
+  if (response.status !== 403 || response.body !== "无权访问此技能") {
+    throw apiFailure(
+      "SPARK_X_AGENT_SKILL_LIFECYCLE_DETAIL_DENIAL_FAILED",
+      `Skill ${phase} 后用户详情未以稳定 403 拒绝。`,
+      response.status,
+    );
+  }
+}
+
+async function assertEmptySkillLifecycleConversation(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  conversationId: string,
+  options: SparkXAgentExecutionOptions,
+): Promise<void> {
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    {
+      method: "GET",
+      path: actionPath(`/conversations/${encodeURIComponent(conversationId)}`),
+    },
+    options,
+  );
+  accepted(response, "SPARK_X_AGENT_SKILL_LIFECYCLE_CONVERSATION_FAILED");
+  const data = dataEnvelope(response.body, "SPARK_X_AGENT_SKILL_LIFECYCLE_CONVERSATION_INVALID");
+  const conversation = objectValue(data.conversation);
+  if (
+    conversation?.id !== conversationId ||
+    conversation.active_skill_name !== null ||
+    conversation.active_skill_activated_at !== null ||
+    data.message_count !== 0
+  ) {
+    throw apiFailure(
+      "SPARK_X_AGENT_SKILL_LIFECYCLE_SIDE_EFFECT_DETECTED",
+      "被拒绝的 Skill 选择产生了 active 状态或消息副作用。",
+    );
+  }
+}
+
 interface SparkXTurnAdmission {
   readonly documentContext?: Readonly<{
     provider: "caishui_knowledge";
@@ -4770,7 +5133,7 @@ export async function executeSparkXAgentAction(
     } catch (firstError) {
       if (typeof createdData.id === "string" && uuidPattern.test(createdData.id)) {
         try {
-          await authenticatedRequest(
+          const cleanupResponse = await authenticatedRequest(
             environment,
             token,
             {
@@ -4778,6 +5141,10 @@ export async function executeSparkXAgentAction(
               path: actionPath(`/providers/${encodeURIComponent(createdData.id)}`),
             },
             remainingOptions(),
+          );
+          acceptedSkillRuntime(
+            cleanupResponse,
+            "SPARK_X_AGENT_SKILL_LIFECYCLE_CREATE_ROLLBACK_FAILED",
           );
         } catch {
           // Preserve the first product failure; the malformed fixture has no safe ledger identity.
@@ -6112,6 +6479,440 @@ export async function executeSparkXAgentAction(
       skillArgsSha256: sha256(""),
       promptSha256,
       finalContentSha256: sha256(finalContent),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/skill.create-lifecycle-fixture") {
+    const runId = variables["run.id"];
+    const name = requiredString(params, "name", variables, 128);
+    if (
+      typeof runId !== "string" ||
+      !uuidPattern.test(runId) ||
+      name !== lifecycleSkillName(runId)
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_TRACEABILITY_REQUIRED",
+        "Skill 生命周期夹具名称必须严格绑定当前 run_id。",
+      );
+    }
+    const beforeOccurrences = await listAdminSkillOccurrences(
+      environment,
+      token,
+      name,
+      remainingOptions(),
+    );
+    if (beforeOccurrences !== 0) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_NAME_CONFLICT",
+        "当前 run_id 的 Skill 生命周期夹具已存在，需先清理残留。",
+      );
+    }
+    const prompt = lifecycleSkillPrompt(runId);
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath("/admin/skills"),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          name,
+          display_name: `Spark X Skill Lifecycle ${runId}`,
+          description: "Spark X Test Platform reversible Skill lifecycle fixture",
+          category: lifecycleSkillCategory,
+          config: {
+            prompt_template: prompt,
+            source: lifecycleSkillSource,
+            lifecycle_fixture: true,
+          },
+        },
+      },
+      remainingOptions(),
+    );
+    acceptedSkillRuntime(response, "SPARK_X_AGENT_SKILL_LIFECYCLE_CREATE_FAILED");
+    const data = dataEnvelope(
+      response.body,
+      "SPARK_X_AGENT_SKILL_LIFECYCLE_CREATE_RESPONSE_INVALID",
+    );
+    let createdId: string | undefined;
+    try {
+      const created = lifecycleSkillProjection(
+        data,
+        runId,
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_CREATE_RESPONSE_INVALID",
+      );
+      createdId = created.id;
+      if (!created.enabled) {
+        throw apiFailure(
+          "SPARK_X_AGENT_SKILL_LIFECYCLE_CREATE_RESPONSE_INVALID",
+          "Skill 生命周期夹具创建后未启用。",
+        );
+      }
+      const userCatalogOccurrences = await listUserSkillOccurrences(
+        environment,
+        token,
+        name,
+        remainingOptions(),
+      );
+      const detailResponse = await authenticatedRequest(
+        environment,
+        token,
+        { method: "GET", path: actionPath(`/skills/${encodeURIComponent(name)}`) },
+        remainingOptions(),
+      );
+      acceptedSkillRuntime(detailResponse, "SPARK_X_AGENT_SKILL_LIFECYCLE_USER_DETAIL_FAILED");
+      const detail = lifecycleSkillProjection(
+        successfulData(detailResponse.body, "SPARK_X_AGENT_SKILL_LIFECYCLE_USER_DETAIL_INVALID"),
+        runId,
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_USER_DETAIL_INVALID",
+      );
+      if (userCatalogOccurrences !== 1 || detail.id !== created.id || !detail.enabled) {
+        throw apiFailure(
+          "SPARK_X_AGENT_SKILL_LIFECYCLE_USER_PROJECTION_FAILED",
+          "Skill 生命周期夹具未形成唯一已启用用户投影。",
+        );
+      }
+      return {
+        skillFixtureResourceId: created.id,
+        skillId: created.id,
+        skillNameSha256: sha256(name),
+        promptSha256: sha256(prompt),
+        created: true,
+        enabled: true,
+        builtin: false,
+        userCatalogOccurrences,
+        userDetailMatched: true,
+        assetRootAbsent: true,
+        mainAssetAbsent: true,
+      };
+    } catch (firstError) {
+      const possibleId =
+        createdId ??
+        (data.name === name && typeof data.id === "string" && uuidPattern.test(data.id)
+          ? data.id
+          : undefined);
+      if (possibleId !== undefined) {
+        try {
+          await authenticatedRequest(
+            environment,
+            token,
+            {
+              method: "DELETE",
+              path: actionPath(`/admin/skills/${encodeURIComponent(possibleId)}`),
+            },
+            remainingOptions(),
+          );
+        } catch {
+          // Preserve the first projection failure; the bounded fixture delete is best-effort here.
+        }
+      }
+      throw firstError;
+    }
+  }
+
+  if (action === "adapter:spark-x-agent/skill.assert-disabled-and-deleted") {
+    const runId = variables["run.id"];
+    if (typeof runId !== "string" || !uuidPattern.test(runId)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SKILL_RUN_ID_REQUIRED",
+        "Skill 生命周期回归必须绑定有效 run_id。",
+      );
+    }
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const skillId = requiredUuid(params, "skillId", variables);
+    const name = lifecycleSkillName(runId);
+    const baselineResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/skills/${encodeURIComponent(skillId)}`) },
+      remainingOptions(),
+    );
+    acceptedSkillRuntime(baselineResponse, "SPARK_X_AGENT_SKILL_LIFECYCLE_BASELINE_FAILED");
+    const baseline = lifecycleSkillProjection(
+      successfulData(baselineResponse.body, "SPARK_X_AGENT_SKILL_LIFECYCLE_BASELINE_INVALID"),
+      runId,
+      "SPARK_X_AGENT_SKILL_LIFECYCLE_BASELINE_INVALID",
+    );
+    if (baseline.id !== skillId || !baseline.enabled) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_BASELINE_INVALID",
+        "Skill 生命周期夹具不存在或已偏离启用基线。",
+      );
+    }
+
+    const toggleResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "PATCH",
+        path: actionPath(`/admin/skills/${encodeURIComponent(skillId)}/toggle`),
+      },
+      remainingOptions(),
+    );
+    acceptedSkillRuntime(toggleResponse, "SPARK_X_AGENT_SKILL_LIFECYCLE_DISABLE_FAILED");
+    const toggle = dataEnvelope(
+      toggleResponse.body,
+      "SPARK_X_AGENT_SKILL_LIFECYCLE_DISABLE_RESPONSE_INVALID",
+    );
+    if (toggle.id !== skillId || toggle.is_enabled !== false) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_DISABLE_RESPONSE_INVALID",
+        "Skill 停用回执未关联已登记夹具或状态不正确。",
+      );
+    }
+
+    const disabledAdminResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/skills/${encodeURIComponent(skillId)}`) },
+      remainingOptions(),
+    );
+    acceptedSkillRuntime(
+      disabledAdminResponse,
+      "SPARK_X_AGENT_SKILL_LIFECYCLE_DISABLED_ADMIN_FAILED",
+    );
+    const disabledAdmin = lifecycleSkillProjection(
+      successfulData(
+        disabledAdminResponse.body,
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_DISABLED_ADMIN_INVALID",
+      ),
+      runId,
+      "SPARK_X_AGENT_SKILL_LIFECYCLE_DISABLED_ADMIN_INVALID",
+    );
+    if (disabledAdmin.id !== skillId || disabledAdmin.enabled) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_DISABLED_ADMIN_INVALID",
+        "Skill 管理投影未持久化停用状态。",
+      );
+    }
+    const disabledUserCatalogOccurrences = await listUserSkillOccurrences(
+      environment,
+      token,
+      name,
+      remainingOptions(),
+    );
+    if (disabledUserCatalogOccurrences !== 0) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_DISABLED_CATALOG_FAILED",
+        "已停用 Skill 仍出现在用户可用清单。",
+      );
+    }
+    const disabledDetailResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/skills/${encodeURIComponent(name)}`) },
+      remainingOptions(),
+    );
+    assertUserSkillDetailDenied(disabledDetailResponse, "disabled");
+    const disabledSelectionResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath("/chat"),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          message: `SKILL004_DISABLED_PROBE:${runId}`,
+          conversation_id: conversationId,
+          skill_names: [name],
+          active_skill_name: name,
+        },
+      },
+      remainingOptions(),
+    );
+    const disabledErrorSha256 = skillDenialErrorSha256(disabledSelectionResponse, "disabled");
+    await assertEmptySkillLifecycleConversation(
+      environment,
+      token,
+      conversationId,
+      remainingOptions(),
+    );
+
+    const deleteResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "DELETE", path: actionPath(`/admin/skills/${encodeURIComponent(skillId)}`) },
+      remainingOptions(),
+    );
+    acceptedSkillRuntime(deleteResponse, "SPARK_X_AGENT_SKILL_LIFECYCLE_DELETE_FAILED");
+    const deleteBody = objectValue(deleteResponse.body);
+    if (deleteBody?.success !== true || deleteBody.message !== "技能已删除") {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_DELETE_RESPONSE_INVALID",
+        "Skill 删除回执缺少稳定成功证据。",
+      );
+    }
+    const deletedAdminDetail = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/skills/${encodeURIComponent(skillId)}`) },
+      remainingOptions(),
+    );
+    if (deletedAdminDetail.status !== 404) {
+      if (deletedAdminDetail.status >= 500) {
+        throw environmentFailure(
+          "SPARK_X_AGENT_SKILL_LIFECYCLE_DEPENDENCY_UNAVAILABLE",
+          `Skill 删除后管理详情返回 HTTP ${deletedAdminDetail.status}。`,
+        );
+      }
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_DELETE_RESIDUE",
+        "Skill 删除后管理详情仍可读。",
+        deletedAdminDetail.status,
+      );
+    }
+    const deletedAdminCatalogOccurrences = await listAdminSkillOccurrences(
+      environment,
+      token,
+      name,
+      remainingOptions(),
+    );
+    const deletedUserCatalogOccurrences = await listUserSkillOccurrences(
+      environment,
+      token,
+      name,
+      remainingOptions(),
+    );
+    if (deletedAdminCatalogOccurrences !== 0 || deletedUserCatalogOccurrences !== 0) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_DELETE_RESIDUE",
+        "Skill 删除后管理或用户清单仍有残留。",
+      );
+    }
+    const deletedDetailResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/skills/${encodeURIComponent(name)}`) },
+      remainingOptions(),
+    );
+    assertUserSkillDetailDenied(deletedDetailResponse, "deleted");
+    const deletedSelectionResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath("/chat"),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          message: `SKILL004_DELETED_PROBE:${runId}`,
+          conversation_id: conversationId,
+          skill_names: [name],
+          active_skill_name: name,
+        },
+      },
+      remainingOptions(),
+    );
+    const deletedErrorSha256 = skillDenialErrorSha256(deletedSelectionResponse, "deleted");
+    await assertEmptySkillLifecycleConversation(
+      environment,
+      token,
+      conversationId,
+      remainingOptions(),
+    );
+    return {
+      conversationId,
+      skillId,
+      skillNameSha256: sha256(name),
+      disabled: true,
+      disabledAdminStateMatched: true,
+      disabledUserCatalogOccurrences,
+      disabledUserDetailDenied: true,
+      disabledSelectionDenied: true,
+      deleted: true,
+      deletedAdminDetailAbsent: true,
+      deletedAdminCatalogOccurrences,
+      deletedUserCatalogOccurrences,
+      deletedUserDetailDenied: true,
+      deletedSelectionDenied: true,
+      activeSkillAbsentBeforeDelete: true,
+      activeSkillAbsentAfterDelete: true,
+      messageCountBeforeDelete: 0,
+      messageCountAfterDelete: 0,
+      disabledErrorSha256,
+      deletedErrorSha256,
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/skill.cleanup-lifecycle-fixture") {
+    const runId = variables["run.id"];
+    if (typeof runId !== "string" || !uuidPattern.test(runId)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_SKILL_RUN_ID_REQUIRED",
+        "Skill 夹具清理必须绑定有效 run_id。",
+      );
+    }
+    const skillId = requiredUuid(params, "skillId", variables);
+    const name = lifecycleSkillName(runId);
+    const detailResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/skills/${encodeURIComponent(skillId)}`) },
+      remainingOptions(),
+    );
+    let alreadyMissing = detailResponse.status === 404;
+    if (!alreadyMissing) {
+      acceptedSkillRuntime(detailResponse, "SPARK_X_AGENT_SKILL_LIFECYCLE_CLEANUP_READ_FAILED");
+      const detail = lifecycleSkillProjection(
+        successfulData(detailResponse.body, "SPARK_X_AGENT_SKILL_LIFECYCLE_CLEANUP_READ_INVALID"),
+        runId,
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_CLEANUP_READ_INVALID",
+      );
+      if (detail.id !== skillId) {
+        throw assertionFailure(
+          "SPARK_X_AGENT_SKILL_LIFECYCLE_CLEANUP_OWNERSHIP_FAILED",
+          "Skill 夹具清理目标与当前 run_id 资源不一致。",
+        );
+      }
+      const deleteResponse = await authenticatedRequest(
+        environment,
+        token,
+        { method: "DELETE", path: actionPath(`/admin/skills/${encodeURIComponent(skillId)}`) },
+        remainingOptions(),
+      );
+      if (deleteResponse.status === 404) {
+        alreadyMissing = true;
+      } else {
+        acceptedSkillRuntime(deleteResponse, "SPARK_X_AGENT_SKILL_LIFECYCLE_CLEANUP_DELETE_FAILED");
+      }
+    }
+    const verifyResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/skills/${encodeURIComponent(skillId)}`) },
+      remainingOptions(),
+    );
+    if (verifyResponse.status !== 404) {
+      if (verifyResponse.status >= 500) {
+        throw environmentFailure(
+          "SPARK_X_AGENT_SKILL_LIFECYCLE_DEPENDENCY_UNAVAILABLE",
+          `Skill 夹具清理复核返回 HTTP ${verifyResponse.status}。`,
+        );
+      }
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_CLEANUP_RESIDUE",
+        "Skill 夹具清理后管理详情仍可读。",
+        verifyResponse.status,
+      );
+    }
+    const adminCatalogOccurrences = await listAdminSkillOccurrences(
+      environment,
+      token,
+      name,
+      remainingOptions(),
+    );
+    if (adminCatalogOccurrences !== 0) {
+      throw apiFailure(
+        "SPARK_X_AGENT_SKILL_LIFECYCLE_CLEANUP_RESIDUE",
+        "Skill 夹具清理后管理清单仍有同名残留。",
+      );
+    }
+    return {
+      skillId,
+      skillNameSha256: sha256(name),
+      deleted: true,
+      alreadyMissing,
+      adminDetailAbsent: true,
+      adminCatalogOccurrences,
     };
   }
 

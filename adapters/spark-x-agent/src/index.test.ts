@@ -81,12 +81,15 @@ const forbiddenKnowledgeBaseId = "00000000-0000-4000-8000-00000000021b";
 const forbiddenKnowledgeDocumentId = "00000000-0000-4000-8000-00000000021c";
 const knowledgeRetrievalId = "00000000-0000-4000-8000-00000000021d";
 const skillId = "00000000-0000-4000-8000-000000000213";
+const lifecycleSkillId = "00000000-0000-4000-8000-00000000023a";
 const automationId = "00000000-0000-4000-8000-000000000214";
 const automationMarker = `spark-x-auto-${variables["run.id"]}`;
 const automationName = automationMarker;
 const automationGoal = `自动任务回归标识 ${automationMarker}。请只回复这个标识，不要调用任何工具或 Skill。`;
 const skillPrompt = "Produce the trusted daily trade and port brief without exposing credentials.";
 const skillPromptSha256 = createHash("sha256").update(skillPrompt).digest("hex");
+const lifecycleSkillName = `spark-x-skill-lifecycle-${variables["run.id"]}`;
+const lifecycleSkillPrompt = `SKILL004_PROMPT:${variables["run.id"]}`;
 
 function trustedSkillProjection(
   prompt = skillPrompt,
@@ -112,6 +115,57 @@ function trustedSkillProjection(
       has_skill_md: localAssetPresent,
       main_file: localAssetPresent ? "trade-port-daily-brief.md" : null,
       asset_count: localAssetPresent ? 1 : 0,
+    },
+  };
+}
+
+function lifecycleSkillProjection(
+  enabled: boolean,
+  userProjection = false,
+): Readonly<Record<string, unknown>> {
+  return {
+    id: lifecycleSkillId,
+    name: lifecycleSkillName,
+    display_name: `Spark X Skill Lifecycle ${variables["run.id"]}`,
+    description: "Spark X Test Platform reversible Skill lifecycle fixture",
+    category: "testing",
+    is_builtin: false,
+    is_enabled: enabled,
+    config: {
+      prompt_template: lifecycleSkillPrompt,
+      source: "spark-x-test-platform-lifecycle-fixture",
+      lifecycle_fixture: true,
+      ...(userProjection ? { durable_agent_task_v17: false } : {}),
+    },
+    assets: {
+      root_exists: false,
+      has_skill_md: false,
+      main_file: null,
+      asset_count: 0,
+    },
+  };
+}
+
+function skillAdminList(
+  items: readonly Readonly<Record<string, unknown>>[],
+): Readonly<Record<string, unknown>> {
+  return {
+    success: true,
+    data: { items, total: items.length, page: 1, per_page: 100 },
+  };
+}
+
+function emptyConversationDetail(): Readonly<Record<string, unknown>> {
+  return {
+    success: true,
+    data: {
+      conversation: {
+        id: conversationId,
+        active_skill_name: null,
+        active_skill_activated_at: null,
+      },
+      messages: [],
+      message_count: 0,
     },
   };
 }
@@ -259,7 +313,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.23.0",
+      version: "0.24.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -407,6 +461,20 @@ describe("spark-x-agent adapter", () => {
             key: "skill.assert-selected-injection",
             actionLevel: "dangerous",
             producesResource: false,
+          }),
+          expect.objectContaining({
+            key: "skill.create-lifecycle-fixture",
+            producesResource: true,
+            cleanupAction: "skill.cleanup-lifecycle-fixture",
+          }),
+          expect.objectContaining({
+            key: "skill.assert-disabled-and-deleted",
+            actionLevel: "dangerous",
+            producesResource: false,
+          }),
+          expect.objectContaining({
+            key: "skill.cleanup-lifecycle-fixture",
+            actionLevel: "dangerous",
           }),
           expect.objectContaining({
             key: "conversation.delete",
@@ -6233,6 +6301,235 @@ describe("spark-x-agent adapter", () => {
     expect(serialized).not.toContain(fixtureBaseUrl);
     expect(serialized).not.toContain("memory-only-access-token-value");
     expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("creates only a reversible metadata Skill fixture and registers its user projection", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse(skillAdminList([])))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: lifecycleSkillProjection(true) }))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: [lifecycleSkillProjection(true, true)] }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: lifecycleSkillProjection(true, true) }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/skill.create-lifecycle-fixture",
+      environment,
+      { ...credentials, name: "spark-x-skill-lifecycle-${run.id}" },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      skillFixtureResourceId: lifecycleSkillId,
+      skillId: lifecycleSkillId,
+      skillNameSha256: createHash("sha256").update(lifecycleSkillName).digest("hex"),
+      promptSha256: createHash("sha256").update(lifecycleSkillPrompt).digest("hex"),
+      created: true,
+      enabled: true,
+      builtin: false,
+      userCatalogOccurrences: 1,
+      userDetailMatched: true,
+      assetRootAbsent: true,
+      mainAssetAbsent: true,
+    });
+    const createBody = fetcher.mock.calls[2]?.[1]?.body;
+    expect(typeof createBody).toBe("string");
+    if (typeof createBody !== "string") throw new Error("expected Skill lifecycle create body");
+    expect(JSON.parse(createBody)).toEqual({
+      name: lifecycleSkillName,
+      display_name: `Spark X Skill Lifecycle ${variables["run.id"]}`,
+      description: "Spark X Test Platform reversible Skill lifecycle fixture",
+      category: "testing",
+      config: {
+        prompt_template: lifecycleSkillPrompt,
+        source: "spark-x-test-platform-lifecycle-fixture",
+        lifecycle_fixture: true,
+      },
+    });
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain(lifecycleSkillName);
+    expect(serialized).not.toContain(lifecycleSkillPrompt);
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("disables and deletes the registered Skill while rejected selections leave no messages", async () => {
+    const deniedError = "该技能已禁用、删除或当前用户无权激活";
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: lifecycleSkillProjection(true) }))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { id: lifecycleSkillId, is_enabled: false } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: lifecycleSkillProjection(false) }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [] }))
+      .mockResolvedValueOnce(new Response("无权访问此技能", { status: 403 }))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: deniedError }, 403))
+      .mockResolvedValueOnce(jsonResponse(emptyConversationDetail()))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "技能已删除" }))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "技能不存在" }, 404))
+      .mockResolvedValueOnce(jsonResponse(skillAdminList([])))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [] }))
+      .mockResolvedValueOnce(new Response("无权访问此技能", { status: 403 }))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: deniedError }, 403))
+      .mockResolvedValueOnce(jsonResponse(emptyConversationDetail()));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/skill.assert-disabled-and-deleted",
+      environment,
+      { ...credentials, conversationId, skillId: lifecycleSkillId },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    const denialSha256 = createHash("sha256").update(deniedError).digest("hex");
+    expect(output).toEqual({
+      conversationId,
+      skillId: lifecycleSkillId,
+      skillNameSha256: createHash("sha256").update(lifecycleSkillName).digest("hex"),
+      disabled: true,
+      disabledAdminStateMatched: true,
+      disabledUserCatalogOccurrences: 0,
+      disabledUserDetailDenied: true,
+      disabledSelectionDenied: true,
+      deleted: true,
+      deletedAdminDetailAbsent: true,
+      deletedAdminCatalogOccurrences: 0,
+      deletedUserCatalogOccurrences: 0,
+      deletedUserDetailDenied: true,
+      deletedSelectionDenied: true,
+      activeSkillAbsentBeforeDelete: true,
+      activeSkillAbsentAfterDelete: true,
+      messageCountBeforeDelete: 0,
+      messageCountAfterDelete: 0,
+      disabledErrorSha256: denialSha256,
+      deletedErrorSha256: denialSha256,
+    });
+    const chatBodies = [fetcher.mock.calls[6]?.[1]?.body, fetcher.mock.calls[13]?.[1]?.body];
+    expect(
+      chatBodies.map((body) => {
+        if (typeof body !== "string") throw new Error("expected Skill lifecycle chat body");
+        return JSON.parse(body) as unknown;
+      }),
+    ).toEqual([
+      {
+        message: `SKILL004_DISABLED_PROBE:${variables["run.id"]}`,
+        conversation_id: conversationId,
+        skill_names: [lifecycleSkillName],
+        active_skill_name: lifecycleSkillName,
+      },
+      {
+        message: `SKILL004_DELETED_PROBE:${variables["run.id"]}`,
+        conversation_id: conversationId,
+        skill_names: [lifecycleSkillName],
+        active_skill_name: lifecycleSkillName,
+      },
+    ]);
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain(lifecycleSkillName);
+    expect(serialized).not.toContain(deniedError);
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("cleans an existing lifecycle fixture only when its run-bound identity matches", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: lifecycleSkillProjection(false) }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "技能已删除" }))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "技能不存在" }, 404))
+      .mockResolvedValueOnce(jsonResponse(skillAdminList([])));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/skill.cleanup-lifecycle-fixture",
+      environment,
+      { ...credentials, skillId: lifecycleSkillId },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      skillId: lifecycleSkillId,
+      skillNameSha256: createHash("sha256").update(lifecycleSkillName).digest("hex"),
+      deleted: true,
+      alreadyMissing: false,
+      adminDetailAbsent: true,
+      adminCatalogOccurrences: 0,
+    });
+    expect(fetcher.mock.calls[2]?.[1]?.method).toBe("DELETE");
+  });
+
+  it("keeps lifecycle cleanup idempotent after the main action already deleted the Skill", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "技能不存在" }, 404))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "技能不存在" }, 404))
+      .mockResolvedValueOnce(jsonResponse(skillAdminList([])));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/skill.cleanup-lifecycle-fixture",
+      environment,
+      { ...credentials, skillId: lifecycleSkillId },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toMatchObject({
+      skillId: lifecycleSkillId,
+      deleted: true,
+      alreadyMissing: true,
+      adminDetailAbsent: true,
+      adminCatalogOccurrences: 0,
+    });
+    expect(fetcher.mock.calls.some((call) => call[1]?.method === "DELETE")).toBe(false);
+  });
+
+  it("preserves an unexpectedly accepted disabled Skill selection as the first product failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: lifecycleSkillProjection(true) }))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { id: lifecycleSkillId, is_enabled: false } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: lifecycleSkillProjection(false) }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [] }))
+      .mockResolvedValueOnce(new Response("无权访问此技能", { status: 403 }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: { unexpected: true } }));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/skill.assert-disabled-and-deleted",
+        environment,
+        { ...credentials, conversationId, skillId: lifecycleSkillId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_SKILL_LIFECYCLE_DENIAL_FAILED",
+        classification: "product_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(7);
   });
 
   it("classifies a missing trusted Skill as an environment failure", async () => {

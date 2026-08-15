@@ -91,14 +91,15 @@
 - `spark-x-agent-knowledge-large-table-p1`：`KB-006` 固定 96 行 XLSX、精确 Parser 版本、真实签名游标、表头/分段/行顺序断言和完整清理；
 - `spark-x-agent-knowledge-base`：知识库模块全部 `KB-001/002/003/004/005/006`；
 - `spark-x-agent-skill-injection-p0`：`SKILL-002` 固定受限 Provider、唯一选中 Skill 正文、active 状态、流式事件、公开轨迹和完整清理闭环；
-- `spark-x-agent-skills-p0`：`SKILL-001/002` 受信任发布清单、唯一选择注入、实际能力回复、active 状态和公开轨迹证据闭环；
+- `spark-x-agent-skill-lifecycle-p1`：`SKILL-004` 可逆元数据夹具停用、删除、用户投影与会话选择拒绝、零消息副作用和幂等清理闭环；
+- `spark-x-agent-skills-p0`：稳定 key 下的 Skill 模块回归，当前覆盖 `SKILL-001/002/004` 受信任发布、唯一选择注入、生命周期拒绝和完整清理；
 - `spark-x-agent-mcp-p0`：`MCP-001` 内置连接器用户投影、运行状态、工具发现、只读风险策略和凭据边界闭环；
 - `spark-x-agent-automations-p0`：`AUTO-001` 立即触发、单次结果关联、无工具证据和版本化完整清理闭环；
 - `spark-x-agent-automation-timezone-p0`：`AUTO-002` 五秒延迟真实调度、上海时区首次触发误差、UTC/本地五分钟推进和完整清理；
 - `spark-x-agent-automation-idempotency-p1`：`AUTO-004` 单次真实调度后固定三次状态版本、触发游标、唯一消息对和回复哈希静默观察；
 - `spark-x-agent-automations`：自动任务模块 `AUTO-001/002/003/004` 单次调度、上海时区计划、生命周期、重复投递防护和完整清理；
 - `spark-x-agent-core-smoke`：所有 P0 中每个模块至少一个主路径，目标 10～12 个案例；
-- `spark-x-agent-full-regression`：固定的一键完整回归入口；当前接入 27/32 条，后续原 key 追加到全部 32 条；
+- `spark-x-agent-full-regression`：固定的一键完整回归入口；当前接入 28/32 条，后续原 key 追加到全部 32 条；
 - 每个模块独立套件：聊天、工具、知识库、Skill、MCP、自动任务、最近会话；
 - `spark-x-agent-real-model-canary`：真实模型多次运行案例；
 - `spark-x-agent-deterministic-contract`：固定 Provider 和结构化契约案例。
@@ -113,7 +114,7 @@
 
 ## 10. 当前实现检查点
 
-`CONV-001/002/003/004`、`CHAT-001/002/003/004/005`、`TOOL-001/002/003/004/005`、`KB-001/002/003/004/005/006`、`SKILL-001/002`、`MCP-001` 与 `AUTO-001/002/003/004` 已具备用例定义和受信任适配器执行闭环。CONV-001 覆盖创建会话、
+`CONV-001/002/003/004`、`CHAT-001/002/003/004/005`、`TOOL-001/002/003/004/005`、`KB-001/002/003/004/005/006`、`SKILL-001/002/004`、`MCP-001` 与 `AUTO-001/002/003/004` 已具备用例定义和受信任适配器执行闭环。CONV-001 覆盖创建会话、
 最近排序和清理；CONV-002 在首轮后从最近列表重新定位原会话，校验两条已持久化消息，再续接第二轮并核对四消息历史、空知识库/Skill范围与零工具事件；
 CONV-003 创建三个运行隔离会话，重命名最早会话使其成为最新会话，再以每页两条连续完整扫描两次；三个运行会话必须跨页且每次恰好出现一次，
 保持“重命名目标、最新创建、次新创建”的顺序和相同页内位置，最后逆序清理三个资源。分页动作只输出标题 SHA-256、页数、计数和布尔判定；
@@ -158,7 +159,7 @@ TOOL 覆盖普通用户工具
 表格正文、Parser ID、签名游标和凭据均不落盘。失败不重试且由 `finally` 删除文档、解析索引、原始上传并归档知识库。SKILL-001 只读核对部署预置 `trade-port-daily-brief` 的用户/管理员投影、有效 Task 能力、主资产和
 按被测系统 frontmatter 解析后的规范化 Prompt SHA-256，原始 Prompt 不进入结构化证据；本地资产摘要属于 legacy
 容器文件兼容层，允许 V12 发布重启后为空，但三个 API 投影必须一致并如实登记是否存在。由于被测系统当前删除接口不能完整撤销不可变发布目录、
-授权和对象存储内容，本阶段不创建临时 Skill，避免无法补偿的残留。SKILL-002 复用受信任发布，临时创建可补偿的固定 Provider 夹具，仅选择该 Skill 发起一次运行隔离请求。夹具只有在 active 标记、唯一选中 Skill 正文和未选中 Skill 正文缺失同时成立时才返回成功标识；适配器还要求流式 `skill` 事件、会话 active 状态、两条消息与 `public_execution_trace` 完全一致，并拒绝任何工具或复核事件。夹具端点默认关闭，固定模型和非凭据 Bearer，不转发、不回显 Prompt；结构化证据只保存 ID、计数、布尔判定和 SHA-256，`finally` 和独立补偿均恢复原 Provider 并删除夹具与会话。AUTO 创建固定 300 秒周期且 `selected_skill_id=null` 的立即任务，
+授权和对象存储内容，本阶段不创建带文件或不可变发布版本的临时 Skill，避免无法补偿的残留。SKILL-002 复用受信任发布，临时创建可补偿的固定 Provider 夹具，仅选择该 Skill 发起一次运行隔离请求。夹具只有在 active 标记、唯一选中 Skill 正文和未选中 Skill 正文缺失同时成立时才返回成功标识；适配器还要求流式 `skill` 事件、会话 active 状态、两条消息与 `public_execution_trace` 完全一致，并拒绝任何工具或复核事件。夹具端点默认关闭，固定模型和非凭据 Bearer，不转发、不回显 Prompt；结构化证据只保存 ID、计数、布尔判定和 SHA-256，`finally` 和独立补偿均恢复原 Provider 并删除夹具与会话。SKILL-004 只创建严格绑定 `run_id` 的元数据记录，不上传文件、不生成 V12 不可变版本且不写对象存储；停用后必须从用户清单消失，用户详情和会话选择均返回稳定拒绝，删除后管理与用户投影均无残留。两次拒绝前后会话都必须保持零消息和空 active Skill，证据只保存 UUID、计数、布尔判定及名称、Prompt、拒绝正文的 SHA-256；主步骤删除后 `finally` 和资源补偿继续执行同一所有权校验清理。AUTO 创建固定 300 秒周期且 `selected_skill_id=null` 的立即任务，
 轮询定义 `last_fire_at`/`next_fire_at` 和绑定会话历史，要求恰好一条用户消息、一条 `stop` 助手回复且无工具调用；证据只保留状态、计数、
 时间和正文 SHA-256。调度器会递增乐观状态版本，清理动作因此先重新读取最新版本再软删除；会话先登记、任务后登记，使独立补偿按倒序先停
 任务再删会话。AUTO-002 创建五秒后首次触发的独立任务，把创建回执的 UTC 时间作为不可变预期，要求实际触发
@@ -172,9 +173,9 @@ MCP-001 复用同一受信任连接器目录动作，只读核对 `builtin-demo`
 三项只读工具风险策略和凭据边界；连接器停用时必须返回 `environment_failed`，独立 MCP 诊断套件明确输出
 `inconclusive`，不得伪造通过或自动启动服务。
 `scripts/provision-spark-x-agent-conversation-p0.ts` 幂等创建；脚本同时维护 CONV、CHAT、TOOL、KB、SKILL、MCP、AUTO 诊断套件、
-当前含十二条案例的 `spark-x-agent-core-smoke`，以及建设中含 27/32 条案例的固定
+当前含十二条案例的 `spark-x-agent-core-smoke`，以及建设中含 28/32 条案例的固定
 `spark-x-agent-full-regression` 一键入口；脚本从文件或标准输入读取管理员密码，只向平台密钥库提交且不打印密钥。
 已配置环境可设置 `SPARK_X_AGENT_USE_EXISTING_SECRETS=true`，此时脚本不读取也不更新密钥，仅复用平台密钥库
 中已有的引用值，适合发布后无人值守回归。
-当前进度为核心冒烟 12/10～12、完整回归 27/32，最近会话模块 4/4、聊天模块 5/5、工具模块 5/5、知识库模块 6/6、Skill 模块 2/4、自动任务模块 4/4，已覆盖全部七个模块；测试环境 `builtin-demo` 由管理员明确停用，因此依赖该连接器的 TOOL/MCP
+当前进度为核心冒烟 12/10～12、完整回归 28/32，最近会话模块 4/4、聊天模块 5/5、工具模块 5/5、知识库模块 6/6、Skill 模块 3/4、自动任务模块 4/4，已覆盖全部七个模块；测试环境 `builtin-demo` 由管理员明确停用，因此依赖该连接器的 TOOL/MCP
 真实运行保持 `inconclusive`。仍以完成真实发布联动、完整回归和全部故障验收为最终完成条件。

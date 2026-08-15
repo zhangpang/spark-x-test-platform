@@ -83,6 +83,7 @@ const runKnowledgeLargeTableSmoke =
   process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_LARGE_TABLE_SMOKE === "true";
 const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
 const runSkillInjectionSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_INJECTION_SMOKE === "true";
+const runSkillLifecycleSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_LIFECYCLE_SMOKE === "true";
 const runMcpSmoke = process.env.SPARK_X_AGENT_RUN_MCP_SMOKE === "true";
 const expectMcpUnavailable = process.env.SPARK_X_AGENT_EXPECT_MCP_UNAVAILABLE === "true";
 const runAutomationSmoke = process.env.SPARK_X_AGENT_RUN_AUTOMATION_SMOKE === "true";
@@ -3565,6 +3566,142 @@ function skillInjectionDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function skillLifecycleDefinition(): Readonly<Record<string, unknown>> {
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "SKILL-004 Skill 停用、删除与无副作用",
+      description:
+        "创建不含文件和不可变发布版本的可逆 Skill 元数据夹具，验证停用与删除后的用户投影、会话选择拒绝、零消息副作用和幂等清理。",
+      systemKey: "spark-x-agent",
+      moduleKey: "skills",
+      priority: "P1",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: [
+        "adapter",
+        "skill",
+        "p1",
+        "full-regression",
+        "lifecycle",
+        "disabled",
+        "deleted",
+        "no-side-effect",
+      ],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 30_000,
+      caseTimeoutMs: 120_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:skill-catalog", "spark-x-agent:admin:chat"],
+    steps: [
+      {
+        id: "create-skill-lifecycle-fixture",
+        name: "创建并登记可逆 Skill 生命周期夹具",
+        kind: "action",
+        action: "adapter:spark-x-agent/skill.create-lifecycle-fixture",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          name: "spark-x-skill-lifecycle-${run.id}",
+        },
+        capture: { "skill-lifecycle-resource-id": "$.skillFixtureResourceId" },
+        resource: {
+          type: "spark-x-agent-skill-fixture",
+          id: "${step.skill-lifecycle-resource-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/skill.cleanup-lifecycle-fixture",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              skillId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "create-skill-lifecycle-conversation",
+        name: "创建并登记 Skill 生命周期回归会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: "spark-x-lifecycle-conversation-${run.id}",
+        },
+        capture: { "skill-lifecycle-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.skill-lifecycle-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "assert-skill-disabled-and-deleted",
+        name: "校验 Skill 停用、删除、选择拒绝与零消息副作用",
+        kind: "action",
+        action: "adapter:spark-x-agent/skill.assert-disabled-and-deleted",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.skill-lifecycle-conversation-id}",
+          skillId: "${step.skill-lifecycle-resource-id}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "cleanup-skill-lifecycle-fixture",
+        name: "幂等清理 Skill 生命周期夹具",
+        kind: "action",
+        action: "adapter:spark-x-agent/skill.cleanup-lifecycle-fixture",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          skillId: "${step.skill-lifecycle-resource-id}",
+        },
+      },
+      {
+        id: "delete-skill-lifecycle-conversation",
+        name: "删除 Skill 生命周期回归会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.skill-lifecycle-conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
 function automationDefinition(): Readonly<Record<string, unknown>> {
   const name = "spark-x-auto-${run.id}";
   const goal =
@@ -5577,6 +5714,158 @@ function assertSkillInjectionEvidence(run: RunDetail): void {
   );
 }
 
+function assertSkillLifecycleEvidence(run: RunDetail): void {
+  const createFixture = run.steps.find((step) => step.stepId === "create-skill-lifecycle-fixture");
+  const createConversation = run.steps.find(
+    (step) => step.stepId === "create-skill-lifecycle-conversation",
+  );
+  const assertion = run.steps.find((step) => step.stepId === "assert-skill-disabled-and-deleted");
+  const cleanupFixture = run.steps.find(
+    (step) => step.stepId === "cleanup-skill-lifecycle-fixture",
+  );
+  const deleteConversation = run.steps.find(
+    (step) => step.stepId === "delete-skill-lifecycle-conversation",
+  );
+  check(
+    createFixture?.outputSummary !== null &&
+      createFixture?.outputSummary !== undefined &&
+      createConversation?.outputSummary !== null &&
+      createConversation?.outputSummary !== undefined &&
+      assertion?.outputSummary !== null &&
+      assertion?.outputSummary !== undefined &&
+      cleanupFixture?.outputSummary !== null &&
+      cleanupFixture?.outputSummary !== undefined &&
+      deleteConversation?.outputSummary !== null &&
+      deleteConversation?.outputSummary !== undefined,
+    "SKILL-004 structured evidence is missing",
+  );
+  const fixture = createFixture.outputSummary;
+  const conversation = createConversation.outputSummary;
+  const result = assertion.outputSummary;
+  const cleanup = cleanupFixture.outputSummary;
+  check(
+    fixture.skillFixtureResourceId === fixture.skillId &&
+      typeof fixture.skillId === "string" &&
+      fixture.created === true &&
+      fixture.enabled === true &&
+      fixture.builtin === false &&
+      fixture.userCatalogOccurrences === 1 &&
+      fixture.userDetailMatched === true &&
+      fixture.assetRootAbsent === true &&
+      fixture.mainAssetAbsent === true &&
+      [fixture.skillNameSha256, fixture.promptSha256].every(
+        (hash) => typeof hash === "string" && /^[0-9a-f]{64}$/u.test(hash),
+      ),
+    "SKILL-004 reversible metadata fixture evidence is incomplete",
+  );
+  check(
+    Object.keys(fixture).sort().join(",") ===
+      [
+        "assetRootAbsent",
+        "builtin",
+        "created",
+        "enabled",
+        "mainAssetAbsent",
+        "promptSha256",
+        "skillFixtureResourceId",
+        "skillId",
+        "skillNameSha256",
+        "userCatalogOccurrences",
+        "userDetailMatched",
+      ]
+        .sort()
+        .join(","),
+    "SKILL-004 fixture evidence contains unregistered fields",
+  );
+  check(
+    result.conversationId === conversation.conversationId &&
+      result.skillId === fixture.skillId &&
+      result.skillNameSha256 === fixture.skillNameSha256 &&
+      result.disabled === true &&
+      result.disabledAdminStateMatched === true &&
+      result.disabledUserCatalogOccurrences === 0 &&
+      result.disabledUserDetailDenied === true &&
+      result.disabledSelectionDenied === true &&
+      result.deleted === true &&
+      result.deletedAdminDetailAbsent === true &&
+      result.deletedAdminCatalogOccurrences === 0 &&
+      result.deletedUserCatalogOccurrences === 0 &&
+      result.deletedUserDetailDenied === true &&
+      result.deletedSelectionDenied === true &&
+      result.activeSkillAbsentBeforeDelete === true &&
+      result.activeSkillAbsentAfterDelete === true &&
+      result.messageCountBeforeDelete === 0 &&
+      result.messageCountAfterDelete === 0 &&
+      typeof result.disabledErrorSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(result.disabledErrorSha256) &&
+      result.deletedErrorSha256 === result.disabledErrorSha256,
+    "SKILL-004 disabled/deleted projection, denial or zero-side-effect evidence is incomplete",
+  );
+  check(
+    Object.keys(result).sort().join(",") ===
+      [
+        "activeSkillAbsentAfterDelete",
+        "activeSkillAbsentBeforeDelete",
+        "conversationId",
+        "deleted",
+        "deletedAdminCatalogOccurrences",
+        "deletedAdminDetailAbsent",
+        "deletedErrorSha256",
+        "deletedSelectionDenied",
+        "deletedUserCatalogOccurrences",
+        "deletedUserDetailDenied",
+        "disabled",
+        "disabledAdminStateMatched",
+        "disabledErrorSha256",
+        "disabledSelectionDenied",
+        "disabledUserCatalogOccurrences",
+        "disabledUserDetailDenied",
+        "messageCountAfterDelete",
+        "messageCountBeforeDelete",
+        "skillId",
+        "skillNameSha256",
+      ]
+        .sort()
+        .join(","),
+    "SKILL-004 lifecycle evidence contains unregistered fields",
+  );
+  check(
+    cleanup.skillId === fixture.skillId &&
+      cleanup.skillNameSha256 === fixture.skillNameSha256 &&
+      cleanup.deleted === true &&
+      cleanup.alreadyMissing === true &&
+      cleanup.adminDetailAbsent === true &&
+      cleanup.adminCatalogOccurrences === 0 &&
+      deleteConversation.outputSummary.conversationId === conversation.conversationId &&
+      deleteConversation.outputSummary.deleted === true,
+    "SKILL-004 idempotent Skill or conversation cleanup evidence is incomplete",
+  );
+  check(
+    Object.keys(cleanup).sort().join(",") ===
+      [
+        "adminCatalogOccurrences",
+        "adminDetailAbsent",
+        "alreadyMissing",
+        "deleted",
+        "skillId",
+        "skillNameSha256",
+      ]
+        .sort()
+        .join(","),
+    "SKILL-004 cleanup evidence contains unregistered fields",
+  );
+  const evidence = JSON.stringify({ createFixture, assertion, cleanupFixture });
+  check(
+    !evidence.includes("spark-x-skill-lifecycle-") &&
+      !evidence.includes("SKILL004_PROMPT") &&
+      !evidence.includes("SKILL004_DISABLED_PROBE") &&
+      !evidence.includes("SKILL004_DELETED_PROBE") &&
+      !evidence.includes("该技能已禁用、删除或当前用户无权激活") &&
+      !evidence.includes("无权访问此技能"),
+    "SKILL-004 name, prompt, probe or denial body leaked into structured evidence",
+  );
+}
+
 function assertKnowledgeEvidence(run: RunDetail): void {
   const upload = run.steps.find(
     (step) => step.action === "adapter:spark-x-agent/knowledge-base.upload-fixture",
@@ -6705,16 +6994,16 @@ async function executeSkillSmoke(
   check(accepted.status === 202, "Spark X Agent Skill run was not newly accepted");
   const run = await waitForRun(accepted.body.id);
   check(run.gateResult === "passed", `Spark X Agent Skill gate is ${String(run.gateResult)}`);
-  check(run.summary.passed === 2, "Spark X Agent Skill cases did not pass");
+  check(run.summary.passed === 3, "Spark X Agent Skill cases did not pass");
   check(run.firstFailure === null, "Spark X Agent Skill run retained a first failure");
   check(
-    run.cases.length === 2 &&
+    run.cases.length === 3 &&
       run.cases.every((item) => item.result === "passed") &&
       run.cases
         .map((item) => item.cleanupStatus)
         .sort()
-        .join(",") === "not_required,passed",
-    "Spark X Agent Skill cases or injection cleanup failed",
+        .join(",") === "not_required,passed,passed",
+    "Spark X Agent Skill cases or lifecycle cleanup failed",
   );
   check(
     run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
@@ -6725,32 +7014,112 @@ async function executeSkillSmoke(
         "main:adapter:spark-x-agent/skill.assert-selected-injection",
         "finally:adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
         "finally:adapter:spark-x-agent/conversation.delete",
+        "main:adapter:spark-x-agent/skill.create-lifecycle-fixture",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/skill.assert-disabled-and-deleted",
+        "finally:adapter:spark-x-agent/skill.cleanup-lifecycle-fixture",
+        "finally:adapter:spark-x-agent/conversation.delete",
       ].join(",") && run.steps.every((step) => step.status === "passed"),
     "Spark X Agent Skill structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 4 &&
+      run.resources.every((resource) => resource.cleanupStatus === "passed") &&
+      run.resources.filter(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-provider-fixture" &&
+          resource.cleanupDefinition.action ===
+            "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+      ).length === 1 &&
+      run.resources.filter(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-conversation" &&
+          resource.cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete",
+      ).length === 2 &&
+      run.resources.filter(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-skill-fixture" &&
+          resource.cleanupDefinition.action ===
+            "adapter:spark-x-agent/skill.cleanup-lifecycle-fixture",
+      ).length === 1,
+    "Spark X Agent Skill resources or cleanup definitions are incomplete",
+  );
+  check(run.cleanupJob === null, "normal Skill run unexpectedly required compensation");
+  assertSkillEvidence(run);
+  assertSkillInjectionEvidence(run);
+  assertSkillLifecycleEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into Skill evidence",
+    );
+  }
+  return run;
+}
+
+async function executeSkillLifecycleSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-skill-lifecycle-p1-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-skill-lifecycle-p1-verification",
+      priority: 90,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent SKILL-004 run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(run.gateResult === "passed", `Spark X Agent SKILL-004 gate is ${String(run.gateResult)}`);
+  check(run.summary.passed === 1, "Spark X Agent SKILL-004 case did not pass");
+  check(run.firstFailure === null, "Spark X Agent SKILL-004 retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent SKILL-004 case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/skill.create-lifecycle-fixture",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/skill.assert-disabled-and-deleted",
+        "finally:adapter:spark-x-agent/skill.cleanup-lifecycle-fixture",
+        "finally:adapter:spark-x-agent/conversation.delete",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent SKILL-004 structured step sequence is incomplete",
   );
   check(
     run.resources.length === 2 &&
       run.resources.every((resource) => resource.cleanupStatus === "passed") &&
       run.resources.some(
         (resource) =>
-          resource.resourceType === "spark-x-agent-provider-fixture" &&
+          resource.resourceType === "spark-x-agent-skill-fixture" &&
           resource.cleanupDefinition.action ===
-            "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+            "adapter:spark-x-agent/skill.cleanup-lifecycle-fixture",
       ) &&
       run.resources.some(
         (resource) =>
           resource.resourceType === "spark-x-agent-conversation" &&
           resource.cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete",
       ),
-    "Spark X Agent Skill injection resources or cleanup definitions are incomplete",
+    "Spark X Agent SKILL-004 resource ledger or cleanup definition is incomplete",
   );
-  check(run.cleanupJob === null, "normal Skill run unexpectedly required compensation");
-  assertSkillEvidence(run);
-  assertSkillInjectionEvidence(run);
+  check(run.cleanupJob === null, "normal SKILL-004 run unexpectedly required compensation");
+  assertSkillLifecycleEvidence(run);
   if (password !== undefined) {
     check(
       !JSON.stringify(run).includes(password),
-      "administrator password leaked into Skill evidence",
+      "administrator password leaked into SKILL-004 evidence",
     );
   }
   return run;
@@ -7214,6 +7583,14 @@ const skillInjectionCase = await ensureCase(
   skillInjectionDefinition(),
   "新增唯一选中 Skill 正文与 active 上下文真实进入 Provider、流式事件、持久化状态、公开轨迹和完整清理 P0 闭环",
 );
+const skillLifecycleCase = await ensureCase(
+  system.id,
+  skills.id,
+  environment.id,
+  "SKILL-004 Skill 停用、删除与无副作用",
+  skillLifecycleDefinition(),
+  "新增可逆元数据夹具、停用/删除用户投影与选择拒绝、零消息副作用、资源登记和幂等清理 P1 闭环",
+);
 const mcpConnectorCase = await ensureCase(
   system.id,
   mcp.id,
@@ -7423,12 +7800,23 @@ const skillInjectionSuite = await ensureSuite(
   "SKILL-002 固定受限 Provider、唯一选中 Skill 正文、active 状态、流式事件、公开轨迹和完整清理闭环。",
   [skillInjectionCase.testCase.id],
 );
+const skillLifecycleSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-skill-lifecycle-p1",
+  "星火 Agent Skill 生命周期 P1 纵向切片",
+  "SKILL-004 可逆元数据夹具停用、删除、用户投影与会话选择拒绝、零消息副作用和幂等清理闭环。",
+  [skillLifecycleCase.testCase.id],
+);
 const skillSuite = await ensureSuite(
   system.id,
   "spark-x-agent-skills-p0",
-  "星火 Agent Skill P0 纵向切片",
-  "SKILL-001/002 受信任发布清单、唯一选择注入、实际能力回复、active 状态、公开轨迹和完整清理闭环。",
-  [skillPublicationCase.testCase.id, skillInjectionCase.testCase.id],
+  "星火 Agent Skill 回归",
+  "SKILL-001/002/004 受信任发布清单、唯一选择注入、实际能力回复、生命周期拒绝、零副作用和完整清理闭环。",
+  [
+    skillPublicationCase.testCase.id,
+    skillInjectionCase.testCase.id,
+    skillLifecycleCase.testCase.id,
+  ],
 );
 const mcpSuite = await ensureSuite(
   system.id,
@@ -7493,8 +7881,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 27/32）",
-  "手动一键完整回归入口；当前已接入 27/32 条案例，覆盖七个模块的当前 P0、CHAT-003/004/005、TOOL-004、KB-005/006、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 28/32）",
+  "手动一键完整回归入口；当前已接入 28/32 条案例，覆盖七个模块的当前 P0、CHAT-003/004/005、TOOL-004、KB-005/006、SKILL-004、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -7518,6 +7906,7 @@ const fullRegressionSuite = await ensureSuite(
     knowledgeLargeTableCase.testCase.id,
     skillPublicationCase.testCase.id,
     skillInjectionCase.testCase.id,
+    skillLifecycleCase.testCase.id,
     mcpConnectorCase.testCase.id,
     automationCase.testCase.id,
     automationTimezoneCase.testCase.id,
@@ -7542,6 +7931,7 @@ check(
     runKnowledgeLargeTableSmoke,
     runSkillSmoke,
     runSkillInjectionSmoke,
+    runSkillLifecycleSmoke,
     runMcpSmoke,
     runAutomationSmoke,
   ].filter(Boolean).length <= 1,
@@ -7630,28 +8020,35 @@ const run = runSmoke
                                 skillInjectionSuite.id,
                                 password,
                               )
-                            : runSkillSmoke
-                              ? await executeSkillSmoke(
+                            : runSkillLifecycleSmoke
+                              ? await executeSkillLifecycleSmoke(
                                   system.id,
                                   environment.id,
-                                  skillSuite.id,
+                                  skillLifecycleSuite.id,
                                   password,
                                 )
-                              : runMcpSmoke
-                                ? await executeMcpSmoke(
+                              : runSkillSmoke
+                                ? await executeSkillSmoke(
                                     system.id,
                                     environment.id,
-                                    mcpSuite.id,
+                                    skillSuite.id,
                                     password,
                                   )
-                                : runAutomationSmoke
-                                  ? await executeAutomationSmoke(
+                                : runMcpSmoke
+                                  ? await executeMcpSmoke(
                                       system.id,
                                       environment.id,
-                                      automationSuite.id,
+                                      mcpSuite.id,
                                       password,
                                     )
-                                  : undefined;
+                                  : runAutomationSmoke
+                                    ? await executeAutomationSmoke(
+                                        system.id,
+                                        environment.id,
+                                        automationSuite.id,
+                                        password,
+                                      )
+                                    : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
   : runCancelSmoke
@@ -7678,13 +8075,15 @@ const scenario = runContextSmoke
                         ? "spark-x-agent-knowledge-large-table-p1"
                         : runSkillInjectionSmoke
                           ? "spark-x-agent-skill-injection-p0"
-                          : runSkillSmoke
-                            ? "spark-x-agent-skills-p0"
-                            : runMcpSmoke
-                              ? "spark-x-agent-mcp-p0"
-                              : runAutomationSmoke
-                                ? "spark-x-agent-automations-p0"
-                                : "spark-x-agent-core-smoke";
+                          : runSkillLifecycleSmoke
+                            ? "spark-x-agent-skill-lifecycle-p1"
+                            : runSkillSmoke
+                              ? "spark-x-agent-skills-p0"
+                              : runMcpSmoke
+                                ? "spark-x-agent-mcp-p0"
+                                : runAutomationSmoke
+                                  ? "spark-x-agent-automations-p0"
+                                  : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -7719,16 +8118,18 @@ console.info(
                                 ? 30
                                 : runSkillInjectionSmoke
                                   ? 30
-                                  : runSkillSmoke
-                                    ? 42
-                                    : runMcpSmoke
-                                      ? expectMcpUnavailable
-                                        ? 10
-                                        : 12
-                                      : runAutomationSmoke
-                                        ? 20
-                                        : 191,
-    caseCount: 27,
+                                  : runSkillLifecycleSmoke
+                                    ? 36
+                                    : runSkillSmoke
+                                      ? 78
+                                      : runMcpSmoke
+                                        ? expectMcpUnavailable
+                                          ? 10
+                                          : 12
+                                        : runAutomationSmoke
+                                          ? 20
+                                          : 191,
+    caseCount: 28,
     coreSmokeCaseCount: 12,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -7778,6 +8179,8 @@ console.info(
     skillPublicationCaseVersionId: skillPublicationCase.version.id,
     skillInjectionCaseId: skillInjectionCase.testCase.id,
     skillInjectionCaseVersionId: skillInjectionCase.version.id,
+    skillLifecycleCaseId: skillLifecycleCase.testCase.id,
+    skillLifecycleCaseVersionId: skillLifecycleCase.version.id,
     mcpConnectorCaseId: mcpConnectorCase.testCase.id,
     mcpConnectorCaseVersionId: mcpConnectorCase.version.id,
     automationCaseId: automationCase.testCase.id,
@@ -7808,6 +8211,7 @@ console.info(
     knowledgeLargeTableSuiteId: knowledgeLargeTableSuite.id,
     knowledgeModuleSuiteId: knowledgeModuleSuite.id,
     skillInjectionSuiteId: skillInjectionSuite.id,
+    skillLifecycleSuiteId: skillLifecycleSuite.id,
     skillSuiteId: skillSuite.id,
     mcpSuiteId: mcpSuite.id,
     automationSuiteId: automationSuite.id,
