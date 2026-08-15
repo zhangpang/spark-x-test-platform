@@ -657,6 +657,7 @@ describe("M2 asset validation", () => {
             password: "${case.admin-password}",
             conversationId: "${step.conversation-id}",
             title: "spark-x-regression-${run.id}",
+            expectedMessageCount: 0,
           },
         },
       ],

@@ -1212,11 +1212,11 @@ describe("run worker", () => {
               id: conversationId,
               title,
               is_pinned: false,
-              message_count: 0,
             },
           ],
         },
       },
+      { success: true, data: { items: [] } },
       { success: true, data: { token: "adapter-memory-only-token-value" } },
       { success: true, message: "deleted" },
     ];

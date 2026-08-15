@@ -85,7 +85,7 @@ const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
   ["adapter:spark-x-agent/conversation.create", new Set(["username", "password", "title"])],
   [
     "adapter:spark-x-agent/conversation.assert-recent",
-    new Set(["username", "password", "conversationId", "title"]),
+    new Set(["username", "password", "conversationId", "title", "expectedMessageCount"]),
   ],
   [
     "adapter:spark-x-agent/conversation.delete",
@@ -429,6 +429,21 @@ function validateSparkXAgentAction(
     });
   }
   for (const name of allowed) {
+    if (name === "expectedMessageCount") {
+      const value = params[name];
+      if (
+        value !== undefined &&
+        (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 99)
+      ) {
+        issues.push({
+          severity: "error",
+          code: "ADAPTER_PARAMETER_INVALID",
+          path: `${path}.params.${name}`,
+          message: "星火 Agent 适配器参数 expectedMessageCount 必须是 0 到 99 的整数。",
+        });
+      }
+      continue;
+    }
     if (typeof params[name] !== "string" || params[name].trim() === "") {
       issues.push({
         severity: "error",

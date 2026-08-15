@@ -71,7 +71,7 @@ const conversationActionCapabilities = [
   {
     key: "conversation.assert-recent",
     name: "校验最近会话",
-    description: "验证新会话出现在最近会话列表的首个非置顶位置。",
+    description: "验证会话出现在最近列表的首个非置顶位置，并用历史接口核对消息数。",
     actionLevel: "write",
     defaultTimeoutMs: 20_000,
     producesResource: false,
@@ -84,17 +84,25 @@ const conversationActionCapabilities = [
         password: { type: "string", minLength: 1, maxLength: 4_096 },
         conversationId: { type: "string", format: "uuid" },
         title: { type: "string", minLength: 1, maxLength: 200 },
+        expectedMessageCount: { type: "integer", minimum: 0, maximum: 99 },
       },
     },
     outputSchema: {
       type: "object",
       additionalProperties: false,
-      required: ["conversationId", "listed", "recentPosition", "messageCount"],
+      required: [
+        "conversationId",
+        "listed",
+        "recentPosition",
+        "messageCount",
+        "messageCountSource",
+      ],
       properties: {
         conversationId: { type: "string", format: "uuid" },
         listed: { const: true },
         recentPosition: { type: "integer", minimum: 0 },
         messageCount: { type: "integer", minimum: 0 },
+        messageCountSource: { const: "conversation-history" },
       },
     },
   },
@@ -945,7 +953,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.8.0",
+  version: "0.8.1",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -962,7 +970,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "core-smoke-context" as const;
+export const sparkXAgentAdapterPhase = "core-smoke-reopen" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -1137,6 +1145,24 @@ function requiredString(
     });
   }
   return interpolated;
+}
+
+function optionalBoundedInteger(
+  params: Readonly<Record<string, unknown>>,
+  name: string,
+  minimum: number,
+  maximum: number,
+): number | undefined {
+  const value = params[name];
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new ExecutorFailure({
+      code: "SPARK_X_AGENT_PARAMETER_INVALID",
+      message: `星火 Agent 适配器参数 ${name} 必须是 ${minimum} 到 ${maximum} 的整数。`,
+      classification: "test_failed",
+    });
+  }
+  return value;
 }
 
 function apiFailure(code: string, message: string, status?: number): ExecutorFailure {
@@ -3769,6 +3795,7 @@ export async function executeSparkXAgentAction(
   }
   if (action === "adapter:spark-x-agent/conversation.assert-recent") {
     const expectedTitle = requiredString(params, "title", variables, 200);
+    const expectedMessageCount = optionalBoundedInteger(params, "expectedMessageCount", 0, 99);
     const response = await authenticatedRequest(
       environment,
       token,
@@ -3799,16 +3826,47 @@ export async function executeSparkXAgentAction(
         "新建会话未出现在最近会话列表的首个非置顶位置，或标题不一致。",
       );
     }
-    const rawMessageCount = found?.message_count;
-    const messageCount =
-      typeof rawMessageCount === "number" && Number.isInteger(rawMessageCount)
-        ? rawMessageCount
-        : 0;
+    const historyResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+        ),
+      },
+      remainingOptions(),
+    );
+    accepted(historyResponse, "SPARK_X_AGENT_RECENT_CONVERSATION_HISTORY_FAILED");
+    const historyData = dataEnvelope(
+      historyResponse.body,
+      "SPARK_X_AGENT_RECENT_CONVERSATION_HISTORY_RESPONSE_INVALID",
+    );
+    if (!Array.isArray(historyData.items)) {
+      throw apiFailure(
+        "SPARK_X_AGENT_RECENT_CONVERSATION_HISTORY_RESPONSE_INVALID",
+        "星火 Agent 会话历史缺少消息列表。",
+      );
+    }
+    if (historyData.items.length >= 100) {
+      throw apiFailure(
+        "SPARK_X_AGENT_RECENT_CONVERSATION_HISTORY_LIMIT_EXCEEDED",
+        "最近会话的持久化消息数超出受控回归边界。",
+      );
+    }
+    const messageCount = historyData.items.length;
+    if (expectedMessageCount !== undefined && messageCount !== expectedMessageCount) {
+      throw apiFailure(
+        "SPARK_X_AGENT_RECENT_CONVERSATION_MESSAGE_COUNT_FAILED",
+        "最近会话的持久化消息数与预期不一致。",
+      );
+    }
     return {
       conversationId,
       listed: true,
       recentPosition: position,
       messageCount,
+      messageCountSource: "conversation-history",
     };
   }
 

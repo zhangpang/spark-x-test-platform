@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -188,7 +188,7 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.8.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
+当前 `0.8.1` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
 `chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.cleanup` 和
@@ -196,7 +196,10 @@ telemetry.*
 `automation.cleanup`。动作只调用适配器内
 固定的 `/trade/api` 与 `/trade-domain-api` 路径，所有请求与
 重定向执行环境 allowlist 校验；登录 Token、用户密码和模型回答正文都不进入输出、日志、资源台账或
-结构化证据。`chat.ask` 只向此前已创建并登记的测试会话发送消息，将 SSE 限制在 1 MB 内，要求流中会话
+结构化证据。`conversation.assert-recent` 不把列表响应缺失的 `message_count` 当作零，而是通过会话历史接口
+读取最多 99 条持久化消息；用例可以声明精确预期数，数量偏差直接归类为产品失败，不轮询或重试。旧用例
+未声明预期数时仍返回真实历史计数，保持兼容。
+`chat.ask` 只向此前已创建并登记的测试会话发送消息，将 SSE 限制在 1 MB 内，要求流中会话
 ID 与登记 ID 一致、存在内容事件和唯一终态 `done`，并只输出事件计数、长度与最终回答 SHA-256；
 `chat.assert-history` 使用该哈希确认单轮落库回答与流式终态一致；`chat.assert-context-history` 同时核对两轮
 `user/assistant` 顺序、两次流式 SHA-256、`stop` 终态、无工具消息和独立干扰会话标识完全缺失。CHAT 用例必须先用 `conversation.create` 登记

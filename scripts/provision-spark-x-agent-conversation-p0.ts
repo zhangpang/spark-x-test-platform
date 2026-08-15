@@ -321,6 +321,7 @@ function conversationDefinition(): Readonly<Record<string, unknown>> {
           password: "${case.admin-password}",
           conversationId: "${step.conversation-id}",
           title: "spark-x-regression-${run.id}",
+          expectedMessageCount: 0,
         },
       },
     ],
@@ -351,7 +352,7 @@ function conversationReopenDefinition(): Readonly<Record<string, unknown>> {
     metadata: {
       name: "CONV-002 从最近列表重新打开并继续会话",
       description:
-        "首轮真实模型对话后从最近列表重新定位同一会话，校验消息计数，再用原会话续接第二轮并确认空知识库、Skill 和工具范围未漂移。",
+        "首轮真实模型对话后从最近列表重新定位同一会话，通过历史接口校验持久化消息数，再用原会话续接第二轮并确认空知识库、Skill 和工具范围未漂移。",
       systemKey: "spark-x-agent",
       moduleKey: "recent-conversations",
       priority: "P0",
@@ -434,6 +435,7 @@ function conversationReopenDefinition(): Readonly<Record<string, unknown>> {
           password: "${case.admin-password}",
           conversationId: "${step.reopen-conversation-id}",
           title: marker,
+          expectedMessageCount: 2,
         },
       },
       {
@@ -1744,7 +1746,8 @@ function assertConversationReopenEvidence(run: RunDetail): void {
     recent?.outputSummary?.listed === true &&
       typeof recent.outputSummary.recentPosition === "number" &&
       recent.outputSummary.recentPosition >= 0 &&
-      recent.outputSummary.messageCount === 2,
+      recent.outputSummary.messageCount === 2 &&
+      recent.outputSummary.messageCountSource === "conversation-history",
     "CONV-002 did not reopen the first-turn conversation from the recent list",
   );
   check(

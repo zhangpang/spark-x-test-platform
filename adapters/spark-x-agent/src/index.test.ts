@@ -126,7 +126,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.8.0",
+      version: "0.8.1",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -247,7 +247,7 @@ describe("spark-x-agent adapter", () => {
     expect(serialized).not.toContain(variables["case.admin-password"]);
   });
 
-  it("asserts the new conversation at the first non-pinned recent position", async () => {
+  it("uses persisted history for the recent conversation message count", async () => {
     const title = `regression-${variables["run.id"]}`;
     const fetcher = vi
       .fn<typeof fetch>()
@@ -267,10 +267,15 @@ describe("spark-x-agent adapter", () => {
                 id: conversationId,
                 title,
                 is_pinned: false,
-                message_count: 0,
               },
             ],
           },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { items: [] },
         }),
       );
 
@@ -291,6 +296,56 @@ describe("spark-x-agent adapter", () => {
       listed: true,
       recentPosition: 1,
       messageCount: 0,
+      messageCountSource: "conversation-history",
+    });
+    expect(fetcher.mock.calls[2]?.[0]).toMatchObject({
+      href: `http://192.168.110.136/trade/api/conversations/${conversationId}/messages?page=1&per_page=100`,
+    });
+  });
+
+  it("fails when recent conversation history has a different message count", async () => {
+    const title = `regression-${variables["run.id"]}`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { token: "memory-only-access-token-value" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [{ id: conversationId, title, is_pinned: false }],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { items: [{ role: "user" }] },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/conversation.assert-recent",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          title: "regression-${run.id}",
+          expectedMessageCount: 2,
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_RECENT_CONVERSATION_MESSAGE_COUNT_FAILED",
+        classification: "product_failed",
+      },
     });
   });
 
