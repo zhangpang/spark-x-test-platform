@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -1254,6 +1254,62 @@
         }
       },
       {
+        "key": "knowledge-base.assert-cleaned-state",
+        "name": "校验知识库清理无残留",
+        "description": "在显式清理后只读校验知识库、活动列表、领域文档、版本、检索范围和原始上传均不可访问。",
+        "actionLevel": "read",
+        "defaultTimeoutMs": 30000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "knowledgeBaseId",
+            "knowledgeDocumentId",
+            "uploadedDocumentId"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "knowledgeBaseId": { "type": "string", "format": "uuid" },
+            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
+            "uploadedDocumentId": { "type": "string", "format": "uuid" }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "knowledgeBaseId",
+            "knowledgeDocumentId",
+            "uploadedDocumentId",
+            "baseDetailAbsent",
+            "activeListAbsent",
+            "domainDocumentAbsent",
+            "domainVersionsAbsent",
+            "retrievalRejected",
+            "uploadStatusAbsent",
+            "rawDocumentAbsent",
+            "cleanupClosureMatched"
+          ],
+          "properties": {
+            "knowledgeBaseId": { "type": "string", "format": "uuid" },
+            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
+            "uploadedDocumentId": { "type": "string", "format": "uuid" },
+            "baseDetailAbsent": { "const": true },
+            "activeListAbsent": { "const": true },
+            "domainDocumentAbsent": { "const": true },
+            "domainVersionsAbsent": { "const": true },
+            "retrievalRejected": { "const": true },
+            "uploadStatusAbsent": { "const": true },
+            "rawDocumentAbsent": { "const": true },
+            "cleanupClosureMatched": { "const": true }
+          }
+        }
+      },
+      {
         "key": "knowledge-base.cleanup",
         "name": "清理知识库测试资源",
         "description": "按已登记知识库 ID 删除其文档与原始上传，并幂等归档知识库。",
@@ -1277,6 +1333,13 @@
             "knowledgeBaseId",
             "cleaned",
             "knowledgeDocumentDeleteCount",
+            "knowledgeDocumentAlreadyAbsentCount",
+            "parserDeleteReceiptCount",
+            "parserDeletedCount",
+            "parserAlreadyAbsentCount",
+            "parserVersionDeleteCount",
+            "parserJobDeleteCount",
+            "parserCleanupConfirmed",
             "rawDocumentDeleted",
             "knowledgeBaseArchived"
           ],
@@ -1284,6 +1347,13 @@
             "knowledgeBaseId": { "type": "string", "format": "uuid" },
             "cleaned": { "const": true },
             "knowledgeDocumentDeleteCount": { "type": "integer", "minimum": 0 },
+            "knowledgeDocumentAlreadyAbsentCount": { "type": "integer", "minimum": 0 },
+            "parserDeleteReceiptCount": { "type": "integer", "minimum": 0 },
+            "parserDeletedCount": { "type": "integer", "minimum": 0 },
+            "parserAlreadyAbsentCount": { "type": "integer", "minimum": 0 },
+            "parserVersionDeleteCount": { "type": "integer", "minimum": 0 },
+            "parserJobDeleteCount": { "type": "integer", "minimum": 0 },
+            "parserCleanupConfirmed": { "const": true },
             "rawDocumentDeleted": { "type": "boolean" },
             "knowledgeBaseArchived": { "type": "boolean" },
             "alreadyMissing": { "type": "boolean" }

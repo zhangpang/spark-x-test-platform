@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -56,10 +56,7 @@
 export interface TestSystemAdapter {
   readonly manifest: AdapterManifest;
 
-  validateEnvironment(
-    config: unknown,
-    context: ValidationContext,
-  ): Promise<ValidationResult>;
+  validateEnvironment(config: unknown, context: ValidationContext): Promise<ValidationResult>;
 
   healthCheck(context: AdapterExecutionContext): Promise<HealthResult>;
 
@@ -191,13 +188,13 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.18.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+当前 `0.19.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
 `conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
 `chat.cancel-and-resume`、`chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
 `tool.invoke-failure-recovery`、`tool.assert-history`、`tool.assert-failure-recovery-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-conversation-scope`、
-`knowledge-base.query-and-assert-evidence`、`knowledge-base.cleanup` 和
+`knowledge-base.query-and-assert-evidence`、`knowledge-base.assert-cleaned-state`、`knowledge-base.cleanup` 和
 `skill.assert-trusted-publication`，以及 `automation.create`、`automation.wait-fired`、`automation.assert-no-duplicate-delivery`、`automation.assert-lifecycle` 和
 `automation.cleanup`。动作只调用适配器内
 固定的 `/trade/api` 与 `/trade-domain-api` 路径，所有请求与
@@ -291,6 +288,11 @@ HTTP 201，同一请求重放必须返回 HTTP 200，且范围哈希、快照 ID
 可选的 `expectedResourceMarker` 与 `forbiddenResourceMarker` 必须成对提供且为不同 UUID；适配器会同时在模型回答
 和每条证据片段中要求已绑定标识存在、未绑定标识缺失。KB-004 使用两份标题与业务事实完全相同、仅
 `RUN_RESOURCE_ID` 不同的固定订单 PDF，因此即使检索结果表面相似，也能以不可变运行标识证明没有跨知识库串读。
+`knowledge-base.cleanup` 只删除已登记知识库下不超过十份的文档，并要求永久删除回执明确证明解析端文档、版本和任务
+已删除或已缺失；随后删除受控原始上传并归档知识库。`knowledge-base.assert-cleaned-state` 只接受本次运行捕获的知识库、
+领域文档和原始上传 UUID，依次证明活动详情与列表无目标、领域文档与版本为 404、原知识库被检索接口拒绝、上传状态
+为缺失或已退役且原始文档为 404。KB-005 再执行两次同一清理动作，要求零新增删除且 `alreadyMissing=true`；首次失败
+仍保留并进入 `finally`，不存在业务失败重试。所有输出仅为 UUID、计数和布尔结论，不登记对象存储键、签名地址或文档内容。
 
 SKILL 动作当前只读校验部署系统已经发布的固定 `trade-port-daily-brief`，不接受 Skill 名称、Prompt、文件、
 URL 或脚本参数。动作分别读取当前用户清单、用户详情和管理员清单，要求 UUID、名称、展示名、分类、启用状态、

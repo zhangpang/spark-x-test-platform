@@ -147,7 +147,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.18.0",
+      version: "0.19.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -223,6 +223,10 @@ describe("spark-x-agent adapter", () => {
           expect.objectContaining({
             key: "knowledge-base.query-and-assert-evidence",
             actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "knowledge-base.assert-cleaned-state",
+            actionLevel: "read",
           }),
           expect.objectContaining({
             key: "knowledge-base.cleanup",
@@ -3714,7 +3718,24 @@ describe("spark-x-agent adapter", () => {
           data: { items: [{ id: knowledgeDocumentId, status: "completed" }] },
         }),
       )
-      .mockResolvedValueOnce(jsonResponse({ success: true, data: {} }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            document_id: knowledgeDocumentId,
+            status: "deleted",
+            deleted: true,
+            parser: {
+              document_id: knowledgeDocumentId,
+              status: "deleted",
+              deleted: true,
+              already_absent: false,
+              version_count: 1,
+              job_count: 1,
+            },
+          },
+        }),
+      )
       .mockResolvedValueOnce(
         jsonResponse({
           success: true,
@@ -3727,7 +3748,12 @@ describe("spark-x-agent adapter", () => {
         }),
       )
       .mockResolvedValueOnce(jsonResponse({ success: true, data: {} }))
-      .mockResolvedValueOnce(jsonResponse({ success: true, data: {} }));
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { id: knowledgeBaseId, status: "archived" },
+        }),
+      );
 
     await expect(
       executeSparkXAgentAction(
@@ -3741,6 +3767,13 @@ describe("spark-x-agent adapter", () => {
       knowledgeBaseId,
       cleaned: true,
       knowledgeDocumentDeleteCount: 1,
+      knowledgeDocumentAlreadyAbsentCount: 0,
+      parserDeleteReceiptCount: 1,
+      parserDeletedCount: 1,
+      parserAlreadyAbsentCount: 0,
+      parserVersionDeleteCount: 1,
+      parserJobDeleteCount: 1,
+      parserCleanupConfirmed: true,
       rawDocumentDeleted: true,
       knowledgeBaseArchived: true,
     });
@@ -3771,6 +3804,226 @@ describe("spark-x-agent adapter", () => {
         method: "DELETE",
       },
     ]);
+  });
+
+  it("proves the archived base, domain document, parser scope and raw upload are absent", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "missing" }, 404))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: { items: [] } }))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "missing" }, 404))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "missing" }, 404))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "inactive scope" }, 403))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: false, error: { code: "UPLOAD_TERMINAL" } }, 410),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "missing" }, 404));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.assert-cleaned-state",
+        environment,
+        { ...credentials, knowledgeBaseId, knowledgeDocumentId, uploadedDocumentId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).resolves.toEqual({
+      knowledgeBaseId,
+      knowledgeDocumentId,
+      uploadedDocumentId,
+      baseDetailAbsent: true,
+      activeListAbsent: true,
+      domainDocumentAbsent: true,
+      domainVersionsAbsent: true,
+      retrievalRejected: true,
+      uploadStatusAbsent: true,
+      rawDocumentAbsent: true,
+      cleanupClosureMatched: true,
+    });
+    expect(
+      fetcher.mock.calls.slice(1).map((call) => ({
+        url: urlOf(call[0] as URL | RequestInfo),
+        method: call[1]?.method,
+      })),
+    ).toEqual([
+      {
+        url: `http://192.168.110.136/trade-domain-api/knowledge-bases/${knowledgeBaseId}`,
+        method: "GET",
+      },
+      {
+        url: "http://192.168.110.136/trade-domain-api/knowledge-bases",
+        method: "GET",
+      },
+      {
+        url: `http://192.168.110.136/trade-domain-api/knowledge-bases/${knowledgeBaseId}/documents/${knowledgeDocumentId}`,
+        method: "GET",
+      },
+      {
+        url: `http://192.168.110.136/trade-domain-api/knowledge-bases/${knowledgeBaseId}/documents/${knowledgeDocumentId}/versions`,
+        method: "GET",
+      },
+      {
+        url: "http://192.168.110.136/trade-domain-api/knowledge/search",
+        method: "POST",
+      },
+      {
+        url: `http://192.168.110.136/trade/api/documents/upload-status/${knowledgeBaseId}`,
+        method: "GET",
+      },
+      {
+        url: `http://192.168.110.136/trade/api/documents/${uploadedDocumentId}`,
+        method: "GET",
+      },
+    ]);
+  });
+
+  it("preserves a stable failure when a cleaned knowledge base remains active", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { id: knowledgeBaseId, status: "active" } }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.assert-cleaned-state",
+        environment,
+        { ...credentials, knowledgeBaseId, knowledgeDocumentId, uploadedDocumentId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_BASE_REMAINS",
+        classification: "test_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves a stable failure when the archived knowledge scope remains searchable", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "missing" }, 404))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: { items: [] } }))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "missing" }, 404))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "missing" }, 404))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { documents: [], total_documents: 0, total_hits: 0 },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.assert-cleaned-state",
+        environment,
+        { ...credentials, knowledgeBaseId, knowledgeDocumentId, uploadedDocumentId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_SEARCH_REMAINS",
+        classification: "test_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(6);
+  });
+
+  it("rejects a cleanup receipt that does not prove parser index deletion", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { items: [{ id: knowledgeDocumentId, status: "completed" }] },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            document_id: knowledgeDocumentId,
+            status: "deleted",
+            deleted: true,
+            parser: {
+              document_id: knowledgeDocumentId,
+              status: "deleted",
+              deleted: false,
+              already_absent: false,
+              version_count: 1,
+              job_count: 1,
+            },
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.cleanup",
+        environment,
+        { ...credentials, knowledgeBaseId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_DELETE_RESPONSE_INVALID",
+        classification: "product_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("replays cleanup idempotently after the base is missing and its upload ticket retired", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "missing" }, 404))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: false, error: { code: "UPLOAD_TERMINAL" } }, 410),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.cleanup",
+        environment,
+        { ...credentials, knowledgeBaseId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).resolves.toEqual({
+      knowledgeBaseId,
+      cleaned: true,
+      knowledgeDocumentDeleteCount: 0,
+      knowledgeDocumentAlreadyAbsentCount: 0,
+      parserDeleteReceiptCount: 0,
+      parserDeletedCount: 0,
+      parserAlreadyAbsentCount: 0,
+      parserVersionDeleteCount: 0,
+      parserJobDeleteCount: 0,
+      parserCleanupConfirmed: true,
+      rawDocumentDeleted: true,
+      knowledgeBaseArchived: true,
+      alreadyMissing: true,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it("creates an immediate no-Skill automation with only hashed goal evidence", async () => {

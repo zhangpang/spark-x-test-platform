@@ -31,6 +31,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/knowledge-base.wait-ready",
   "adapter:spark-x-agent/knowledge-base.assert-conversation-scope",
   "adapter:spark-x-agent/knowledge-base.query-and-assert-evidence",
+  "adapter:spark-x-agent/knowledge-base.assert-cleaned-state",
   "adapter:spark-x-agent/knowledge-base.cleanup",
   "adapter:spark-x-agent/skill.assert-trusted-publication",
   "adapter:spark-x-agent/automation.create",
@@ -1218,6 +1219,63 @@ export const sparkXAgentActionCapabilities = [
     },
   },
   {
+    key: "knowledge-base.assert-cleaned-state",
+    name: "校验知识库清理无残留",
+    description:
+      "在显式清理后只读校验知识库、活动列表、领域文档、版本、检索范围和原始上传均不可访问。",
+    actionLevel: "read",
+    defaultTimeoutMs: 30_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "knowledgeBaseId",
+        "knowledgeDocumentId",
+        "uploadedDocumentId",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        knowledgeDocumentId: { type: "string", format: "uuid" },
+        uploadedDocumentId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "knowledgeBaseId",
+        "knowledgeDocumentId",
+        "uploadedDocumentId",
+        "baseDetailAbsent",
+        "activeListAbsent",
+        "domainDocumentAbsent",
+        "domainVersionsAbsent",
+        "retrievalRejected",
+        "uploadStatusAbsent",
+        "rawDocumentAbsent",
+        "cleanupClosureMatched",
+      ],
+      properties: {
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        knowledgeDocumentId: { type: "string", format: "uuid" },
+        uploadedDocumentId: { type: "string", format: "uuid" },
+        baseDetailAbsent: { const: true },
+        activeListAbsent: { const: true },
+        domainDocumentAbsent: { const: true },
+        domainVersionsAbsent: { const: true },
+        retrievalRejected: { const: true },
+        uploadStatusAbsent: { const: true },
+        rawDocumentAbsent: { const: true },
+        cleanupClosureMatched: { const: true },
+      },
+    },
+  },
+  {
     key: "knowledge-base.cleanup",
     name: "清理知识库测试资源",
     description: "按已登记知识库 ID 删除其文档与原始上传，并幂等归档知识库。",
@@ -1241,6 +1299,13 @@ export const sparkXAgentActionCapabilities = [
         "knowledgeBaseId",
         "cleaned",
         "knowledgeDocumentDeleteCount",
+        "knowledgeDocumentAlreadyAbsentCount",
+        "parserDeleteReceiptCount",
+        "parserDeletedCount",
+        "parserAlreadyAbsentCount",
+        "parserVersionDeleteCount",
+        "parserJobDeleteCount",
+        "parserCleanupConfirmed",
         "rawDocumentDeleted",
         "knowledgeBaseArchived",
       ],
@@ -1248,6 +1313,13 @@ export const sparkXAgentActionCapabilities = [
         knowledgeBaseId: { type: "string", format: "uuid" },
         cleaned: { const: true },
         knowledgeDocumentDeleteCount: { type: "integer", minimum: 0 },
+        knowledgeDocumentAlreadyAbsentCount: { type: "integer", minimum: 0 },
+        parserDeleteReceiptCount: { type: "integer", minimum: 0 },
+        parserDeletedCount: { type: "integer", minimum: 0 },
+        parserAlreadyAbsentCount: { type: "integer", minimum: 0 },
+        parserVersionDeleteCount: { type: "integer", minimum: 0 },
+        parserJobDeleteCount: { type: "integer", minimum: 0 },
+        parserCleanupConfirmed: { const: true },
         rawDocumentDeleted: { type: "boolean" },
         knowledgeBaseArchived: { type: "boolean" },
         alreadyMissing: { type: "boolean" },
@@ -1669,7 +1741,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.18.0",
+  version: "0.19.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1686,7 +1758,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "full-regression-knowledge-isolation" as const;
+export const sparkXAgentAdapterPhase = "full-regression-knowledge-cleanup" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -1980,6 +2052,23 @@ function acceptedKnowledgeRuntime(response: HttpExecutionResult, code: string): 
     throw environmentFailure(code, `星火 Agent 知识库运行时返回 HTTP ${response.status}。`);
   }
   accepted(response, code);
+}
+
+function requireKnowledgeStatus(
+  response: HttpExecutionResult,
+  expectedStatuses: readonly number[],
+  environmentCode: string,
+  assertionCode: string,
+  message: string,
+): void {
+  if (expectedStatuses.includes(response.status)) return;
+  if (response.status >= 500) {
+    throw environmentFailure(
+      environmentCode,
+      `星火 Agent 知识库运行时返回 HTTP ${response.status}。`,
+    );
+  }
+  throw assertionFailure(assertionCode, message);
 }
 
 interface KnowledgeScopeProjection {
@@ -3188,7 +3277,7 @@ async function recoverUploadedFixture(
       remainingOptions(),
     );
     if (response.status === 200) return uploadedFixtureProjection(response.body, expected);
-    if (response.status === 404) {
+    if (response.status === 404 || (allowMissing && response.status === 410)) {
       if (allowMissing) return null;
       if (attempt >= 3) {
         throw environmentFailure(
@@ -5345,9 +5434,191 @@ export async function executeSparkXAgentAction(
     };
   }
 
+  if (action === "adapter:spark-x-agent/knowledge-base.assert-cleaned-state") {
+    const knowledgeBaseId = requiredUuid(params, "knowledgeBaseId", variables);
+    const knowledgeDocumentId = requiredUuid(params, "knowledgeDocumentId", variables);
+    const uploadedDocumentId = requiredUuid(params, "uploadedDocumentId", variables);
+    if (new Set([knowledgeBaseId, knowledgeDocumentId, uploadedDocumentId]).size !== 3) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "知识库清理验证必须引用三个不同的已登记资源标识。",
+      );
+    }
+
+    const baseResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: domainActionPath(`/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}`),
+      },
+      remainingOptions(),
+    );
+    requireKnowledgeStatus(
+      baseResponse,
+      [404],
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_BASE_CHECK_FAILED",
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_BASE_REMAINS",
+      "已清理知识库仍可从活动详情接口访问。",
+    );
+
+    const listResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: domainActionPath("/knowledge-bases") },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(listResponse, "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_BASE_LIST_FAILED");
+    const listData = dataEnvelope(
+      listResponse.body,
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_BASE_LIST_INVALID",
+    );
+    const activeBases = Array.isArray(listData.items)
+      ? listData.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : null;
+    if (
+      activeBases === null ||
+      activeBases.length !== (Array.isArray(listData.items) ? listData.items.length : -1) ||
+      activeBases.some(
+        (item) =>
+          typeof item.id !== "string" || !uuidPattern.test(item.id) || item.status !== "active",
+      )
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_BASE_LIST_INVALID",
+        "活动知识库清单不是完整结构化数组。",
+      );
+    }
+    if (activeBases.some((item) => item.id === knowledgeBaseId)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_BASE_LIST_REMAINS",
+        "已清理知识库仍残留在活动知识库清单。",
+      );
+    }
+
+    const documentResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: domainActionPath(
+          `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(knowledgeDocumentId)}`,
+        ),
+      },
+      remainingOptions(),
+    );
+    requireKnowledgeStatus(
+      documentResponse,
+      [404],
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_DOCUMENT_CHECK_FAILED",
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_DOCUMENT_REMAINS",
+      "已清理知识文档仍可从领域详情接口访问。",
+    );
+
+    const versionsResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: domainActionPath(
+          `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(knowledgeDocumentId)}/versions`,
+        ),
+      },
+      remainingOptions(),
+    );
+    requireKnowledgeStatus(
+      versionsResponse,
+      [404],
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_VERSION_CHECK_FAILED",
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_VERSION_REMAINS",
+      "已清理知识文档的版本接口仍可访问。",
+    );
+
+    const searchResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: domainActionPath("/knowledge/search"),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          query: "B2C-KB-001",
+          knowledge_base_ids: [knowledgeBaseId],
+          mode: "hybrid",
+          top_k_documents: 1,
+          evidence_per_document: 1,
+        },
+      },
+      remainingOptions(),
+    );
+    requireKnowledgeStatus(
+      searchResponse,
+      [403],
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_SEARCH_CHECK_FAILED",
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_SEARCH_REMAINS",
+      "已清理知识库仍被检索接口接受为活动范围。",
+    );
+
+    const uploadStatusResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(`/documents/upload-status/${encodeURIComponent(knowledgeBaseId)}`),
+      },
+      remainingOptions(),
+    );
+    requireKnowledgeStatus(
+      uploadStatusResponse,
+      [404, 410],
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_UPLOAD_STATUS_CHECK_FAILED",
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_UPLOAD_STATUS_REMAINS",
+      "已清理原始上传仍保留可用上传状态。",
+    );
+
+    const rawDocumentResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(`/documents/${encodeURIComponent(uploadedDocumentId)}`),
+      },
+      remainingOptions(),
+    );
+    requireKnowledgeStatus(
+      rawDocumentResponse,
+      [404],
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_RAW_DOCUMENT_CHECK_FAILED",
+      "SPARK_X_AGENT_KNOWLEDGE_CLEANUP_RAW_DOCUMENT_REMAINS",
+      "已清理原始上传仍可从文档详情接口访问。",
+    );
+
+    return {
+      knowledgeBaseId,
+      knowledgeDocumentId,
+      uploadedDocumentId,
+      baseDetailAbsent: true,
+      activeListAbsent: true,
+      domainDocumentAbsent: true,
+      domainVersionsAbsent: true,
+      retrievalRejected: true,
+      uploadStatusAbsent: true,
+      rawDocumentAbsent: true,
+      cleanupClosureMatched: true,
+    };
+  }
+
   if (action === "adapter:spark-x-agent/knowledge-base.cleanup") {
     const knowledgeBaseId = requiredUuid(params, "knowledgeBaseId", variables);
     let knowledgeDocumentDeleteCount = 0;
+    let knowledgeDocumentAlreadyAbsentCount = 0;
+    let parserDeleteReceiptCount = 0;
+    let parserDeletedCount = 0;
+    let parserAlreadyAbsentCount = 0;
+    let parserVersionDeleteCount = 0;
+    let parserJobDeleteCount = 0;
     let knowledgeBaseArchived = false;
     let alreadyMissing = false;
     const documentsResponse = await authenticatedRequest(
@@ -5423,8 +5694,44 @@ export async function executeSparkXAgentAction(
           },
           remainingOptions(),
         );
-        if (deleted.status !== 404) {
+        if (deleted.status === 404) {
+          knowledgeDocumentAlreadyAbsentCount += 1;
+        } else {
           acceptedKnowledgeRuntime(deleted, "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_DELETE_FAILED");
+          const receipt = objectValue(
+            successfulData(
+              deleted.body,
+              "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_DELETE_RESPONSE_INVALID",
+            ),
+          );
+          const parser = objectValue(receipt?.parser);
+          const parserDeleted = parser?.deleted === true;
+          const parserAlreadyAbsent = parser?.already_absent === true;
+          if (
+            receipt === null ||
+            receipt.document_id !== item.id ||
+            receipt.status !== "deleted" ||
+            receipt.deleted !== true ||
+            parser === null ||
+            typeof parser.document_id !== "string" ||
+            parser.document_id.length < 1 ||
+            !["deleted", "not_found"].includes(String(parser.status)) ||
+            parserDeleted === parserAlreadyAbsent ||
+            !Number.isInteger(parser.version_count) ||
+            Number(parser.version_count) < 0 ||
+            !Number.isInteger(parser.job_count) ||
+            Number(parser.job_count) < 0
+          ) {
+            throw apiFailure(
+              "SPARK_X_AGENT_KNOWLEDGE_DOCUMENT_DELETE_RESPONSE_INVALID",
+              "知识文档删除回执未证明解析索引与任务完成清理。",
+            );
+          }
+          parserDeleteReceiptCount += 1;
+          parserDeletedCount += parserDeleted ? 1 : 0;
+          parserAlreadyAbsentCount += parserAlreadyAbsent ? 1 : 0;
+          parserVersionDeleteCount += Number(parser.version_count);
+          parserJobDeleteCount += Number(parser.job_count);
         }
         knowledgeDocumentDeleteCount += 1;
       }
@@ -5464,6 +5771,16 @@ export async function executeSparkXAgentAction(
         remainingOptions(),
       );
       if (archived.status >= 200 && archived.status < 300) {
+        const archivedBase = dataEnvelope(
+          archived.body,
+          "SPARK_X_AGENT_KNOWLEDGE_BASE_ARCHIVE_RESPONSE_INVALID",
+        );
+        if (archivedBase.id !== knowledgeBaseId || archivedBase.status !== "archived") {
+          throw apiFailure(
+            "SPARK_X_AGENT_KNOWLEDGE_BASE_ARCHIVE_RESPONSE_INVALID",
+            "知识库归档回执未证明目标资源进入归档状态。",
+          );
+        }
         knowledgeBaseArchived = true;
       } else if ([404, 409].includes(archived.status)) {
         const verify = await authenticatedRequest(
@@ -5505,6 +5822,15 @@ export async function executeSparkXAgentAction(
       knowledgeBaseId,
       cleaned: true,
       knowledgeDocumentDeleteCount,
+      knowledgeDocumentAlreadyAbsentCount,
+      parserDeleteReceiptCount,
+      parserDeletedCount,
+      parserAlreadyAbsentCount,
+      parserVersionDeleteCount,
+      parserJobDeleteCount,
+      parserCleanupConfirmed:
+        parserDeleteReceiptCount + knowledgeDocumentAlreadyAbsentCount ===
+        knowledgeDocumentDeleteCount,
       rawDocumentDeleted,
       knowledgeBaseArchived,
       ...(alreadyMissing ? { alreadyMissing: true } : {}),

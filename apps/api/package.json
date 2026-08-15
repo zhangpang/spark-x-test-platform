@@ -9,7 +9,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@spark-x-test/adapter-spark-x-agent": "0.18.0",
+    "@spark-x-test/adapter-spark-x-agent": "0.19.0",
     "@spark-x-test/case-schema": "0.1.0",
     "@spark-x-test/contracts": "0.1.0",
     "@spark-x-test/service-runtime": "0.1.0",

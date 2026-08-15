@@ -1280,7 +1280,7 @@ describe("M2 asset validation", () => {
       inputs,
       execution: {
         stepTimeoutMs: 180_000,
-        caseTimeoutMs: 600_000,
+        caseTimeoutMs: 700_000,
         diagnosticRetries: 0,
       },
       resourceLocks: ["spark-x-agent:admin:knowledge-base"],
@@ -1424,6 +1424,20 @@ describe("M2 asset validation", () => {
             forbiddenResourceMarker: "00000000-0000-4000-8000-000000000098",
             message:
               "自动化回归 ${run.id}：仅根据知识库回答订单 B2C-KB-001 的订单号、客户代码、金额和状态，并保留知识引用。",
+          },
+        },
+        {
+          id: "assert-knowledge-cleaned-state",
+          name: "assert knowledge cleanup closure",
+          kind: "action",
+          action: "adapter:spark-x-agent/knowledge-base.assert-cleaned-state",
+          timeoutMs: 30_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            knowledgeBaseId: "${step.knowledge-base-id}",
+            knowledgeDocumentId: "${step.knowledge-document-id}",
+            uploadedDocumentId: "${step.uploaded-document-id}",
           },
         },
       ],

@@ -363,6 +363,34 @@ function knowledgeBaseFetchMock(failFirstRefresh = false) {
         },
       });
     }
+    if (
+      url.pathname ===
+        `/trade-domain-api/knowledge-bases/${knowledgeBaseId}/documents/${knowledgeDocumentId}` &&
+      method === "DELETE"
+    ) {
+      return json({
+        success: true,
+        data: {
+          document_id: knowledgeDocumentId,
+          status: "deleted",
+          deleted: true,
+          parser: {
+            document_id: knowledgeDocumentId,
+            status: "deleted",
+            deleted: true,
+            already_absent: false,
+            version_count: 1,
+            job_count: 1,
+          },
+        },
+      });
+    }
+    if (
+      url.pathname === `/trade-domain-api/knowledge-bases/${knowledgeBaseId}` &&
+      method === "DELETE"
+    ) {
+      return json({ success: true, data: { id: knowledgeBaseId, status: "archived" } });
+    }
     if (method === "DELETE") return json({ success: true, data: {} });
     throw new Error(`unexpected knowledge-base request ${method} ${url.toString()}`);
   });
@@ -2361,7 +2389,22 @@ describe("run worker", () => {
         success: true,
         data: { items: [{ id: knowledgeDocumentId, status: "completed" }] },
       }),
-      json({ success: true, data: {} }),
+      json({
+        success: true,
+        data: {
+          document_id: knowledgeDocumentId,
+          status: "deleted",
+          deleted: true,
+          parser: {
+            document_id: knowledgeDocumentId,
+            status: "deleted",
+            deleted: true,
+            already_absent: false,
+            version_count: 1,
+            job_count: 1,
+          },
+        },
+      }),
       json({
         success: true,
         data: {
@@ -2372,7 +2415,7 @@ describe("run worker", () => {
         },
       }),
       json({ success: true, data: {} }),
-      json({ success: true, data: {} }),
+      json({ success: true, data: { id: knowledgeBaseId, status: "archived" } }),
     ];
     const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(responses.shift() as Response));
     vi.stubGlobal("fetch", fetchMock);

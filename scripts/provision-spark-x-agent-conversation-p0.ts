@@ -76,6 +76,7 @@ const runKnowledgeRetrievalSmoke =
   process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_RETRIEVAL_SMOKE === "true";
 const runKnowledgeIsolationSmoke =
   process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_ISOLATION_SMOKE === "true";
+const runKnowledgeCleanupSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_CLEANUP_SMOKE === "true";
 const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
 const runMcpSmoke = process.env.SPARK_X_AGENT_RUN_MCP_SMOKE === "true";
 const expectMcpUnavailable = process.env.SPARK_X_AGENT_EXPECT_MCP_UNAVAILABLE === "true";
@@ -2659,6 +2660,184 @@ function knowledgeIsolationDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function knowledgeCleanupDefinition(): Readonly<Record<string, unknown>> {
+  const title = "spark-x-kb-cleanup-${run.id}.pdf";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "KB-005 删除文件与知识库后的清理",
+      description:
+        "创建并解析固定订单 PDF，显式永久删除领域文档、解析索引和原始上传并归档知识库，再从详情、列表、版本、检索和上传接口证明无残留，最后重复清理验证幂等性。",
+      systemKey: "spark-x-agent",
+      moduleKey: "knowledge-base",
+      priority: "P1",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: [
+        "adapter",
+        "knowledge-base",
+        "cleanup",
+        "parser-index",
+        "object-storage",
+        "idempotency",
+        "p1",
+        "full-regression",
+      ],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 180_000,
+      caseTimeoutMs: 1_200_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:knowledge-base"],
+    steps: [
+      {
+        id: "create-cleanup-knowledge-base",
+        name: "创建并登记清理验证知识库",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          name: "spark-x-kb-cleanup-${run.id}",
+          description: "Spark X Test Platform KB-005 cleanup fixture",
+        },
+        capture: { "cleanup-knowledge-base-id": "$.knowledgeBaseId" },
+        resource: {
+          type: "spark-x-agent-knowledge-base",
+          id: "${step.cleanup-knowledge-base-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/knowledge-base.cleanup",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              knowledgeBaseId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "upload-cleanup-fixture",
+        name: "上传适配器内置订单 PDF",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.upload-fixture",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.cleanup-knowledge-base-id}",
+          fixtureKind: "order",
+        },
+        capture: {
+          "cleanup-uploaded-document-id": "$.uploadedDocumentId",
+          "cleanup-fixture-sha256": "$.fixtureSha256",
+        },
+      },
+      {
+        id: "attach-cleanup-fixture",
+        name: "绑定固定订单 PDF 并登记知识文档",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.attach-upload",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.cleanup-knowledge-base-id}",
+          uploadedDocumentId: "${step.cleanup-uploaded-document-id}",
+          title,
+        },
+        capture: { "cleanup-knowledge-document-id": "$.knowledgeDocumentId" },
+      },
+      {
+        id: "wait-cleanup-fixture-ready",
+        name: "等待固定订单文档解析与索引就绪",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.wait-ready",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.cleanup-knowledge-base-id}",
+          knowledgeDocumentId: "${step.cleanup-knowledge-document-id}",
+          expectedFixtureSha256: "${step.cleanup-fixture-sha256}",
+          expectedTitle: title,
+        },
+      },
+      {
+        id: "delete-cleanup-knowledge-base",
+        name: "永久删除文档、解析索引和原始上传并归档知识库",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.cleanup",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.cleanup-knowledge-base-id}",
+        },
+      },
+      {
+        id: "assert-cleanup-closure",
+        name: "校验详情、列表、版本、检索和原始上传无残留",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.assert-cleaned-state",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.cleanup-knowledge-base-id}",
+          knowledgeDocumentId: "${step.cleanup-knowledge-document-id}",
+          uploadedDocumentId: "${step.cleanup-uploaded-document-id}",
+        },
+      },
+      {
+        id: "repeat-cleanup-knowledge-base",
+        name: "重复清理并验证缺失资源幂等成功",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.cleanup",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.cleanup-knowledge-base-id}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "finally-cleanup-knowledge-base",
+        name: "最终再次幂等清理已登记知识库",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.cleanup",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.cleanup-knowledge-base-id}",
+        },
+      },
+    ],
+  };
+}
+
 function mcpConnectorDefinition(): Readonly<Record<string, unknown>> {
   return {
     schemaVersion: "1.0",
@@ -5117,6 +5296,185 @@ async function executeKnowledgeIsolationSmoke(
   return run;
 }
 
+function assertKnowledgeCleanupEvidence(run: RunDetail): void {
+  const upload = run.steps.find((step) => step.stepId === "upload-cleanup-fixture");
+  const attach = run.steps.find((step) => step.stepId === "attach-cleanup-fixture");
+  const ready = run.steps.find((step) => step.stepId === "wait-cleanup-fixture-ready");
+  const deleted = run.steps.find((step) => step.stepId === "delete-cleanup-knowledge-base");
+  const absent = run.steps.find((step) => step.stepId === "assert-cleanup-closure");
+  const replay = run.steps.find((step) => step.stepId === "repeat-cleanup-knowledge-base");
+  const finalCleanup = run.steps.find((step) => step.stepId === "finally-cleanup-knowledge-base");
+  check(
+    upload !== undefined &&
+      upload.outputSummary !== null &&
+      attach !== undefined &&
+      attach.outputSummary !== null &&
+      ready !== undefined &&
+      ready.outputSummary !== null &&
+      deleted !== undefined &&
+      deleted.outputSummary !== null &&
+      absent !== undefined &&
+      absent.outputSummary !== null &&
+      replay !== undefined &&
+      replay.outputSummary !== null &&
+      finalCleanup !== undefined &&
+      finalCleanup.outputSummary !== null,
+    "KB-005 structured step evidence is missing",
+  );
+  check(
+    upload.outputSummary.uploaded === true &&
+      upload.outputSummary.fixtureKind === "order" &&
+      typeof upload.outputSummary.fixtureSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(upload.outputSummary.fixtureSha256) &&
+      attach.outputSummary.knowledgeBaseId === upload.outputSummary.knowledgeBaseId &&
+      ready.outputSummary.knowledgeDocumentId === attach.outputSummary.knowledgeDocumentId &&
+      ready.outputSummary.fixtureSha256 === upload.outputSummary.fixtureSha256 &&
+      ready.outputSummary.ready === true,
+    "KB-005 fixed fixture was not ready before explicit deletion",
+  );
+  check(
+    deleted.outputSummary.knowledgeBaseId === upload.outputSummary.knowledgeBaseId &&
+      deleted.outputSummary.cleaned === true &&
+      deleted.outputSummary.knowledgeDocumentDeleteCount === 1 &&
+      deleted.outputSummary.knowledgeDocumentAlreadyAbsentCount === 0 &&
+      deleted.outputSummary.parserDeleteReceiptCount === 1 &&
+      Number(deleted.outputSummary.parserDeletedCount) +
+        Number(deleted.outputSummary.parserAlreadyAbsentCount) ===
+        1 &&
+      Number(deleted.outputSummary.parserVersionDeleteCount) >= 0 &&
+      Number(deleted.outputSummary.parserJobDeleteCount) >= 0 &&
+      deleted.outputSummary.parserCleanupConfirmed === true &&
+      deleted.outputSummary.rawDocumentDeleted === true &&
+      deleted.outputSummary.knowledgeBaseArchived === true &&
+      deleted.outputSummary.alreadyMissing !== true,
+    "KB-005 first cleanup did not prove domain, parser, upload and base deletion",
+  );
+  check(
+    absent.outputSummary.knowledgeBaseId === upload.outputSummary.knowledgeBaseId &&
+      absent.outputSummary.knowledgeDocumentId === attach.outputSummary.knowledgeDocumentId &&
+      absent.outputSummary.uploadedDocumentId === upload.outputSummary.uploadedDocumentId &&
+      absent.outputSummary.baseDetailAbsent === true &&
+      absent.outputSummary.activeListAbsent === true &&
+      absent.outputSummary.domainDocumentAbsent === true &&
+      absent.outputSummary.domainVersionsAbsent === true &&
+      absent.outputSummary.retrievalRejected === true &&
+      absent.outputSummary.uploadStatusAbsent === true &&
+      absent.outputSummary.rawDocumentAbsent === true &&
+      absent.outputSummary.cleanupClosureMatched === true,
+    "KB-005 post-cleanup detail, list, version, retrieval or upload absence is incomplete",
+  );
+  check(
+    Object.keys(absent.outputSummary).sort().join(",") ===
+      [
+        "activeListAbsent",
+        "baseDetailAbsent",
+        "cleanupClosureMatched",
+        "domainDocumentAbsent",
+        "domainVersionsAbsent",
+        "knowledgeBaseId",
+        "knowledgeDocumentId",
+        "rawDocumentAbsent",
+        "retrievalRejected",
+        "uploadStatusAbsent",
+        "uploadedDocumentId",
+      ]
+        .sort()
+        .join(","),
+    "KB-005 absence evidence contains unregistered content or storage fields",
+  );
+  for (const cleanup of [replay, finalCleanup]) {
+    const summary = cleanup.outputSummary;
+    check(summary !== null, "KB-005 repeated or finally cleanup evidence is missing");
+    check(
+      summary.knowledgeBaseId === upload.outputSummary.knowledgeBaseId &&
+        summary.cleaned === true &&
+        summary.knowledgeDocumentDeleteCount === 0 &&
+        summary.knowledgeDocumentAlreadyAbsentCount === 0 &&
+        summary.parserDeleteReceiptCount === 0 &&
+        summary.parserDeletedCount === 0 &&
+        summary.parserAlreadyAbsentCount === 0 &&
+        summary.parserVersionDeleteCount === 0 &&
+        summary.parserJobDeleteCount === 0 &&
+        summary.parserCleanupConfirmed === true &&
+        summary.rawDocumentDeleted === true &&
+        summary.knowledgeBaseArchived === true &&
+        summary.alreadyMissing === true,
+      "KB-005 repeated or finally cleanup was not idempotent",
+    );
+  }
+  const evidence = JSON.stringify({ upload, attach, ready, deleted, absent, replay, finalCleanup });
+  check(
+    !evidence.includes("source_url") &&
+      !evidence.includes("s3_key") &&
+      !evidence.includes("snippet") &&
+      !evidence.includes("B2C-KB-001") &&
+      !evidence.includes("SPARK-REGRESSION"),
+    "KB-005 source URL, storage key or fixture contents leaked into structured evidence",
+  );
+}
+
+async function executeKnowledgeCleanupSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-knowledge-cleanup-p1-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-knowledge-cleanup-p1-verification",
+      priority: 90,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent KB-005 run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(run.gateResult === "passed", `Spark X Agent KB-005 gate is ${String(run.gateResult)}`);
+  check(run.summary.passed === 1, "Spark X Agent KB-005 case did not pass");
+  check(run.firstFailure === null, "Spark X Agent KB-005 retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent KB-005 case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/knowledge-base.create",
+        "main:adapter:spark-x-agent/knowledge-base.upload-fixture",
+        "main:adapter:spark-x-agent/knowledge-base.attach-upload",
+        "main:adapter:spark-x-agent/knowledge-base.wait-ready",
+        "main:adapter:spark-x-agent/knowledge-base.cleanup",
+        "main:adapter:spark-x-agent/knowledge-base.assert-cleaned-state",
+        "main:adapter:spark-x-agent/knowledge-base.cleanup",
+        "finally:adapter:spark-x-agent/knowledge-base.cleanup",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent KB-005 structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 1 &&
+      run.resources[0]?.resourceType === "spark-x-agent-knowledge-base" &&
+      run.resources[0].cleanupStatus === "passed" &&
+      run.resources[0].cleanupDefinition.action === "adapter:spark-x-agent/knowledge-base.cleanup",
+    "Spark X Agent KB-005 resource ledger or cleanup definition is incomplete",
+  );
+  check(run.cleanupJob === null, "normal KB-005 run unexpectedly required compensation");
+  assertKnowledgeCleanupEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into KB-005 evidence",
+    );
+  }
+  return run;
+}
+
 async function executeSkillSmoke(
   systemId: string,
   environmentId: string,
@@ -5505,6 +5863,14 @@ const knowledgeIsolationCase = await ensureCase(
   knowledgeIsolationDefinition(),
   "新增同名同事实订单文件跨知识库隔离、绑定资源标识正反向校验和完整清理闭环",
 );
+const knowledgeCleanupCase = await ensureCase(
+  system.id,
+  knowledgeBase.id,
+  environment.id,
+  "KB-005 删除文件与知识库后的清理",
+  knowledgeCleanupDefinition(),
+  "新增领域文档、解析索引、版本、检索、原始上传和知识库无残留断言及三次幂等清理 P1 闭环",
+);
 const skillPublicationCase = await ensureCase(
   system.id,
   skills.id,
@@ -5667,16 +6033,24 @@ const knowledgeIsolationSuite = await ensureSuite(
   "KB-004 同名同事实订单文件只命中已绑定知识库，回答、引用和领域证据均排除未绑定资源标识。",
   [knowledgeIsolationCase.testCase.id],
 );
+const knowledgeCleanupSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-knowledge-cleanup-p1",
+  "星火 Agent 知识库清理 P1 纵向切片",
+  "KB-005 显式永久删除、领域/解析/版本/检索/原始上传无残留、重复清理和 finally 幂等闭环。",
+  [knowledgeCleanupCase.testCase.id],
+);
 const knowledgeModuleSuite = await ensureSuite(
   system.id,
   "spark-x-agent-knowledge-base",
   "星火 Agent 知识库回归",
-  "知识库模块 KB-001/002/003/004 固定夹具解析、不可变范围、真实准确检索、跨知识库隔离和完整清理。",
+  "知识库模块 KB-001/002/003/004/005 固定夹具解析、不可变范围、真实准确检索、跨知识库隔离、永久删除无残留和完整清理。",
   [
     knowledgeBaseCase.testCase.id,
     knowledgeScopeCase.testCase.id,
     knowledgeRetrievalCase.testCase.id,
     knowledgeIsolationCase.testCase.id,
+    knowledgeCleanupCase.testCase.id,
   ],
 );
 const skillSuite = await ensureSuite(
@@ -5748,8 +6122,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 22/32）",
-  "手动一键完整回归入口；当前已接入 22/32 条案例，覆盖七个模块的当前 P0、CHAT-003、TOOL-004、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 23/32）",
+  "手动一键完整回归入口；当前已接入 23/32 条案例，覆盖七个模块的当前 P0、CHAT-003、TOOL-004、KB-005、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -5767,6 +6141,7 @@ const fullRegressionSuite = await ensureSuite(
     knowledgeScopeCase.testCase.id,
     knowledgeRetrievalCase.testCase.id,
     knowledgeIsolationCase.testCase.id,
+    knowledgeCleanupCase.testCase.id,
     skillPublicationCase.testCase.id,
     mcpConnectorCase.testCase.id,
     automationCase.testCase.id,
@@ -5786,6 +6161,7 @@ check(
     runKnowledgeSmoke,
     runKnowledgeRetrievalSmoke,
     runKnowledgeIsolationSmoke,
+    runKnowledgeCleanupSmoke,
     runSkillSmoke,
     runMcpSmoke,
     runAutomationSmoke,
@@ -5840,18 +6216,25 @@ const run = runSmoke
                       knowledgeIsolationSuite.id,
                       password,
                     )
-                  : runSkillSmoke
-                    ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
-                    : runMcpSmoke
-                      ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
-                      : runAutomationSmoke
-                        ? await executeAutomationSmoke(
-                            system.id,
-                            environment.id,
-                            automationSuite.id,
-                            password,
-                          )
-                        : undefined;
+                  : runKnowledgeCleanupSmoke
+                    ? await executeKnowledgeCleanupSmoke(
+                        system.id,
+                        environment.id,
+                        knowledgeCleanupSuite.id,
+                        password,
+                      )
+                    : runSkillSmoke
+                      ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
+                      : runMcpSmoke
+                        ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
+                        : runAutomationSmoke
+                          ? await executeAutomationSmoke(
+                              system.id,
+                              environment.id,
+                              automationSuite.id,
+                              password,
+                            )
+                          : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
   : runCancelSmoke
@@ -5868,13 +6251,15 @@ const scenario = runContextSmoke
               ? "spark-x-agent-knowledge-retrieval-p0"
               : runKnowledgeIsolationSmoke
                 ? "spark-x-agent-knowledge-isolation-p0"
-                : runSkillSmoke
-                  ? "spark-x-agent-skills-p0"
-                  : runMcpSmoke
-                    ? "spark-x-agent-mcp-p0"
-                    : runAutomationSmoke
-                      ? "spark-x-agent-automations-p0"
-                      : "spark-x-agent-core-smoke";
+                : runKnowledgeCleanupSmoke
+                  ? "spark-x-agent-knowledge-cleanup-p1"
+                  : runSkillSmoke
+                    ? "spark-x-agent-skills-p0"
+                    : runMcpSmoke
+                      ? "spark-x-agent-mcp-p0"
+                      : runAutomationSmoke
+                        ? "spark-x-agent-automations-p0"
+                        : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -5899,16 +6284,18 @@ console.info(
                       ? 35
                       : runKnowledgeIsolationSmoke
                         ? 36
-                        : runSkillSmoke
-                          ? 12
-                          : runMcpSmoke
-                            ? expectMcpUnavailable
-                              ? 10
-                              : 12
-                            : runAutomationSmoke
-                              ? 20
-                              : 161,
-    caseCount: 22,
+                        : runKnowledgeCleanupSmoke
+                          ? 34
+                          : runSkillSmoke
+                            ? 12
+                            : runMcpSmoke
+                              ? expectMcpUnavailable
+                                ? 10
+                                : 12
+                              : runAutomationSmoke
+                                ? 20
+                                : 161,
+    caseCount: 23,
     coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -5946,6 +6333,8 @@ console.info(
     knowledgeRetrievalCaseVersionId: knowledgeRetrievalCase.version.id,
     knowledgeIsolationCaseId: knowledgeIsolationCase.testCase.id,
     knowledgeIsolationCaseVersionId: knowledgeIsolationCase.version.id,
+    knowledgeCleanupCaseId: knowledgeCleanupCase.testCase.id,
+    knowledgeCleanupCaseVersionId: knowledgeCleanupCase.version.id,
     skillPublicationCaseId: skillPublicationCase.testCase.id,
     skillPublicationCaseVersionId: skillPublicationCase.version.id,
     mcpConnectorCaseId: mcpConnectorCase.testCase.id,
@@ -5972,6 +6361,7 @@ console.info(
     knowledgeBaseSuiteId: knowledgeBaseSuite.id,
     knowledgeRetrievalSuiteId: knowledgeRetrievalSuite.id,
     knowledgeIsolationSuiteId: knowledgeIsolationSuite.id,
+    knowledgeCleanupSuiteId: knowledgeCleanupSuite.id,
     knowledgeModuleSuiteId: knowledgeModuleSuite.id,
     skillSuiteId: skillSuite.id,
     mcpSuiteId: mcpSuite.id,
