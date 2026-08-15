@@ -32,6 +32,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/skill.assert-trusted-publication",
   "adapter:spark-x-agent/automation.create",
   "adapter:spark-x-agent/automation.wait-fired",
+  "adapter:spark-x-agent/automation.assert-lifecycle",
   "adapter:spark-x-agent/automation.cleanup",
 ] as const;
 
@@ -987,8 +988,9 @@ export const sparkXAgentActionCapabilities = [
   },
   {
     key: "automation.create",
-    name: "创建立即触发的自动任务",
-    description: "为已登记测试会话创建固定五分钟周期、无 Skill 的立即触发任务并登记清理资源。",
+    name: "创建受控自动任务",
+    description:
+      "为已登记测试会话创建固定五分钟周期、无 Skill 的任务；默认立即触发，也可在受限延迟内用于生命周期回归。",
     actionLevel: "write",
     defaultTimeoutMs: 20_000,
     producesResource: true,
@@ -1003,6 +1005,7 @@ export const sparkXAgentActionCapabilities = [
         conversationId: { type: "string", format: "uuid" },
         name: { type: "string", minLength: 1, maxLength: 160 },
         goal: { type: "string", minLength: 1, maxLength: 65_536 },
+        firstFireDelaySeconds: { type: "integer", minimum: 0, maximum: 900 },
       },
     },
     outputSchema: {
@@ -1031,6 +1034,7 @@ export const sparkXAgentActionCapabilities = [
         nextFireAt: { type: "string", format: "date-time" },
         nameSha256: { type: "string", minLength: 64, maxLength: 64 },
         goalSha256: { type: "string", minLength: 64, maxLength: 64 },
+        firstFireDelaySeconds: { type: "integer", minimum: 0, maximum: 900 },
       },
     },
   },
@@ -1111,6 +1115,81 @@ export const sparkXAgentActionCapabilities = [
         assistantContentLength: { type: "integer", minimum: 1 },
         assistantFinishReason: { const: "stop" },
         pollAttempts: { type: "integer", minimum: 1, maximum: 120 },
+      },
+    },
+  },
+  {
+    key: "automation.assert-lifecycle",
+    name: "校验自动任务修改、停用与删除",
+    description:
+      "仅操作本次运行登记且尚未触发的自动任务，按乐观版本修改、停用、启用、删除，并确认目标会话无调度消息。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 60_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "automationId",
+        "conversationId",
+        "expectedName",
+        "expectedGoal",
+        "updatedName",
+        "updatedGoal",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        automationId: { type: "string", format: "uuid" },
+        conversationId: { type: "string", format: "uuid" },
+        expectedName: { type: "string", minLength: 1, maxLength: 160 },
+        expectedGoal: { type: "string", minLength: 1, maxLength: 65_536 },
+        updatedName: { type: "string", minLength: 1, maxLength: 160 },
+        updatedGoal: { type: "string", minLength: 1, maxLength: 65_536 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "automationId",
+        "conversationId",
+        "updated",
+        "disabled",
+        "enabledAgain",
+        "deleted",
+        "absentAfterDelete",
+        "noTriggerMessages",
+        "initialStateVersion",
+        "updatedStateVersion",
+        "disabledStateVersion",
+        "enabledStateVersion",
+        "deletedStateVersion",
+        "updatedIntervalSeconds",
+        "selectedSkillAbsent",
+        "updatedNameSha256",
+        "updatedGoalSha256",
+      ],
+      properties: {
+        automationId: { type: "string", format: "uuid" },
+        conversationId: { type: "string", format: "uuid" },
+        updated: { const: true },
+        disabled: { const: true },
+        enabledAgain: { const: true },
+        deleted: { const: true },
+        absentAfterDelete: { const: true },
+        noTriggerMessages: { const: true },
+        initialStateVersion: { type: "integer", minimum: 1 },
+        updatedStateVersion: { type: "integer", minimum: 2 },
+        disabledStateVersion: { type: "integer", minimum: 3 },
+        enabledStateVersion: { type: "integer", minimum: 4 },
+        deletedStateVersion: { type: "integer", minimum: 5 },
+        updatedIntervalSeconds: { const: 600 },
+        selectedSkillAbsent: { const: true },
+        updatedNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        updatedGoalSha256: { type: "string", minLength: 64, maxLength: 64 },
       },
     },
   },
@@ -1235,7 +1314,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.12.0",
+  version: "0.13.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1252,7 +1331,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "full-regression-tool-boundaries" as const;
+export const sparkXAgentAdapterPhase = "full-regression-automation-lifecycle" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -3108,6 +3187,8 @@ export async function executeSparkXAgentAction(
     const conversationId = requiredUuid(params, "conversationId", variables);
     const name = requiredString(params, "name", variables, 160);
     const goal = requiredString(params, "goal", variables, 65_536);
+    const firstFireDelaySeconds =
+      optionalBoundedInteger(params, "firstFireDelaySeconds", 0, 900) ?? 0;
     if (
       name.trim() !== name ||
       goal.includes("\u0000") ||
@@ -3119,7 +3200,7 @@ export async function executeSparkXAgentAction(
         "自动任务名称或目标违反受控文本边界。",
       );
     }
-    const firstFireAt = new Date().toISOString();
+    const firstFireAt = new Date(Date.now() + firstFireDelaySeconds * 1_000).toISOString();
     const response = await authenticatedRequest(
       environment,
       token,
@@ -3166,6 +3247,7 @@ export async function executeSparkXAgentAction(
       nextFireAt: receipt.next_fire_at,
       nameSha256: sha256(name),
       goalSha256: sha256(goal),
+      ...(firstFireDelaySeconds === 0 ? {} : { firstFireDelaySeconds }),
     };
   }
 
@@ -3268,6 +3350,247 @@ export async function executeSparkXAgentAction(
       "SPARK_X_AGENT_AUTOMATION_EXECUTION_TIMEOUT",
       "自动任务调度或模型回复未在有界时间内完成。",
     );
+  }
+
+  if (action === "adapter:spark-x-agent/automation.assert-lifecycle") {
+    const automationId = requiredUuid(params, "automationId", variables);
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const expectedName = requiredString(params, "expectedName", variables, 160);
+    const expectedGoal = requiredString(params, "expectedGoal", variables, 65_536);
+    const updatedName = requiredString(params, "updatedName", variables, 160);
+    const updatedGoal = requiredString(params, "updatedGoal", variables, 65_536);
+    if (
+      updatedName.trim() !== updatedName ||
+      updatedGoal.includes("\u0000") ||
+      updatedGoal.includes("\r") ||
+      new TextEncoder().encode(updatedGoal).byteLength > 65_536
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "自动任务更新名称或目标违反受控文本边界。",
+      );
+    }
+    const list = async (code: string): Promise<AutomationDefinitionProjection | null> => {
+      const response = await authenticatedRequest(
+        environment,
+        token,
+        { method: "GET", path: actionPath("/v5/automations?limit=100") },
+        remainingOptions(),
+      );
+      return listedAutomation(response, automationId, code);
+    };
+    const baseline = await list("SPARK_X_AGENT_AUTOMATION_LIFECYCLE_LIST_FAILED");
+    if (
+      baseline === null ||
+      baseline.conversationId !== conversationId ||
+      baseline.name !== expectedName ||
+      baseline.goal !== expectedGoal ||
+      baseline.intervalSeconds !== 300 ||
+      baseline.status !== "enabled" ||
+      baseline.selectedSkillId !== null
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_PRECONDITION_FAILED",
+        "本次运行登记的自动任务与生命周期测试前置定义不一致。",
+      );
+    }
+    if (baseline.lastFireAt !== null || Date.parse(baseline.nextFireAt) - Date.now() < 300_000) {
+      throw apiFailure(
+        "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_ALREADY_FIRED",
+        "生命周期测试任务已触发或没有保留足够的无触发变更窗口。",
+      );
+    }
+    const updatedNextFireAt = new Date(Date.now() + 600_000).toISOString();
+    const updateResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "PUT",
+        path: actionPath(`/v5/automations/${encodeURIComponent(automationId)}`),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          expected_version: baseline.stateVersion,
+          name: updatedName,
+          goal: updatedGoal,
+          selected_skill_id: null,
+          interval_seconds: 600,
+          next_fire_at: updatedNextFireAt,
+        },
+      },
+      remainingOptions(),
+    );
+    acceptedAutomationRuntime(updateResponse, "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_UPDATE_FAILED");
+    const updateReceipt = objectValue(updateResponse.body);
+    if (
+      updateReceipt === null ||
+      updateReceipt.definition_id !== automationId ||
+      updateReceipt.state_version !== baseline.stateVersion + 1 ||
+      updateReceipt.status !== "enabled" ||
+      !validTimestamp(updateReceipt.next_fire_at) ||
+      Math.abs(Date.parse(updateReceipt.next_fire_at) - Date.parse(updatedNextFireAt)) > 1_000
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_UPDATE_RESPONSE_INVALID",
+        "自动任务修改回执与乐观版本或下一次计划不一致。",
+      );
+    }
+    const updatedVersion = Number(updateReceipt.state_version);
+    const updated = await list("SPARK_X_AGENT_AUTOMATION_LIFECYCLE_LIST_FAILED");
+    if (
+      updated === null ||
+      updated.stateVersion !== updatedVersion ||
+      updated.name !== updatedName ||
+      updated.goal !== updatedGoal ||
+      updated.intervalSeconds !== 600 ||
+      updated.status !== "enabled" ||
+      updated.lastFireAt !== null ||
+      updated.selectedSkillId !== null ||
+      Math.abs(Date.parse(updated.nextFireAt) - Date.parse(updatedNextFireAt)) > 1_000
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_UPDATE_NOT_PERSISTED",
+        "自动任务修改后的定义、周期或下一次计划未精确持久化。",
+      );
+    }
+    const disableResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath(`/v5/automations/${encodeURIComponent(automationId)}/disable`),
+        headers: { "Content-Type": "application/json" },
+        body: { expected_version: updatedVersion },
+      },
+      remainingOptions(),
+    );
+    acceptedAutomationRuntime(disableResponse, "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_DISABLE_FAILED");
+    const disableReceipt = objectValue(disableResponse.body);
+    if (
+      disableReceipt === null ||
+      disableReceipt.definition_id !== automationId ||
+      disableReceipt.state_version !== updatedVersion + 1 ||
+      disableReceipt.status !== "disabled" ||
+      disableReceipt.next_fire_at !== null
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_DISABLE_RESPONSE_INVALID",
+        "自动任务停用回执与乐观版本或停用状态不一致。",
+      );
+    }
+    const disabledVersion = Number(disableReceipt.state_version);
+    const disabled = await list("SPARK_X_AGENT_AUTOMATION_LIFECYCLE_LIST_FAILED");
+    if (
+      disabled === null ||
+      disabled.stateVersion !== disabledVersion ||
+      disabled.status !== "disabled" ||
+      disabled.lastFireAt !== null ||
+      disabled.name !== updatedName ||
+      disabled.goal !== updatedGoal
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_DISABLE_NOT_PERSISTED",
+        "自动任务停用状态或已修改定义未精确持久化。",
+      );
+    }
+    const enableResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath(`/v5/automations/${encodeURIComponent(automationId)}/enable`),
+        headers: { "Content-Type": "application/json" },
+        body: { expected_version: disabledVersion },
+      },
+      remainingOptions(),
+    );
+    acceptedAutomationRuntime(enableResponse, "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_ENABLE_FAILED");
+    const enableReceipt = objectValue(enableResponse.body);
+    if (
+      enableReceipt === null ||
+      enableReceipt.definition_id !== automationId ||
+      enableReceipt.state_version !== disabledVersion + 1 ||
+      enableReceipt.status !== "enabled" ||
+      !validTimestamp(enableReceipt.next_fire_at)
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_ENABLE_RESPONSE_INVALID",
+        "自动任务重新启用回执与乐观版本或下一次计划不一致。",
+      );
+    }
+    const enabledVersion = Number(enableReceipt.state_version);
+    const deleteResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "DELETE",
+        path: actionPath(`/v5/automations/${encodeURIComponent(automationId)}`),
+        headers: { "Content-Type": "application/json" },
+        body: { expected_version: enabledVersion },
+      },
+      remainingOptions(),
+    );
+    acceptedAutomationRuntime(deleteResponse, "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_DELETE_FAILED");
+    const deleteReceipt = objectValue(deleteResponse.body);
+    if (
+      deleteReceipt === null ||
+      deleteReceipt.definition_id !== automationId ||
+      deleteReceipt.state_version !== enabledVersion + 1 ||
+      deleteReceipt.status !== "disabled" ||
+      deleteReceipt.next_fire_at !== null
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_DELETE_RESPONSE_INVALID",
+        "自动任务删除回执与乐观版本或终止状态不一致。",
+      );
+    }
+    const deletedVersion = Number(deleteReceipt.state_version);
+    if ((await list("SPARK_X_AGENT_AUTOMATION_LIFECYCLE_LIST_FAILED")) !== null) {
+      throw apiFailure(
+        "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_DELETE_NOT_PERSISTED",
+        "自动任务删除后仍出现在所有者任务列表。",
+      );
+    }
+    const historyResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+        ),
+      },
+      remainingOptions(),
+    );
+    acceptedAutomationRuntime(historyResponse, "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_HISTORY_FAILED");
+    const history = dataEnvelope(
+      historyResponse.body,
+      "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_HISTORY_RESPONSE_INVALID",
+    );
+    if (!Array.isArray(history.items) || history.items.length !== 0) {
+      throw apiFailure(
+        "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_UNEXPECTED_TRIGGER",
+        "自动任务在修改、停用或删除期间产生了非预期调度消息。",
+      );
+    }
+    return {
+      automationId,
+      conversationId,
+      updated: true,
+      disabled: true,
+      enabledAgain: true,
+      deleted: true,
+      absentAfterDelete: true,
+      noTriggerMessages: true,
+      initialStateVersion: baseline.stateVersion,
+      updatedStateVersion: updatedVersion,
+      disabledStateVersion: disabledVersion,
+      enabledStateVersion: enabledVersion,
+      deletedStateVersion: deletedVersion,
+      updatedIntervalSeconds: 600,
+      selectedSkillAbsent: true,
+      updatedNameSha256: sha256(updatedName),
+      updatedGoalSha256: sha256(updatedGoal),
+    };
   }
 
   if (action === "adapter:spark-x-agent/automation.cleanup") {

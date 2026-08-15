@@ -81,6 +81,7 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/tool.assert-safe-catalog`：校验 `builtin-demo` 三个内置只读工具在普通用户与管理员目录中一致，且用户投影不暴露连接配置；
 - `adapter:spark-x-agent/tool.invoke-safe`：只允许一次白名单内置工具调用，精确匹配工具名、参数、成功结果和最终回复，只输出计数、判定和 SHA-256；
 - `adapter:spark-x-agent/tool.assert-history`：重新登录并校验工具调用消息、工具结果、最终回复及 `public_execution_trace` 与流式哈希一致；
+- `adapter:spark-x-agent/automation.assert-lifecycle`：只操作本次运行登记且尚未触发的任务，按乐观版本修改、停用、重新启用和删除，并确认列表无残留、目标会话零调度消息；
 - `adapter:spark-x-agent/knowledge-base.assert-conversation-scope`：将本次运行的唯一就绪知识库绑定到已登记会话，严格固定文档版本，并校验首次创建、幂等重放和最终范围稳定性；输出仅包含资源 ID、哈希、计数和布尔判定；
 - `adapter:spark-x-agent/conversation.delete`：重新登录并按资源 ID 幂等删除，用于普通 `finally` 和独立补偿任务；
 - 适配器动作只接受清单声明的受限参数，不接受 URL、host、脚本、表达式或任意扩展字段；内部 HTTP 请求及重定向仍执行环境 allowlist 校验；

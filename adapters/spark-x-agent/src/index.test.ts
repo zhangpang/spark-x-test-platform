@@ -141,7 +141,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.12.0",
+      version: "0.13.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -218,6 +218,11 @@ describe("spark-x-agent adapter", () => {
           expect.objectContaining({
             key: "automation.wait-fired",
             actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "automation.assert-lifecycle",
+            actionLevel: "dangerous",
+            producesResource: false,
           }),
           expect.objectContaining({
             key: "automation.cleanup",
@@ -2825,6 +2830,53 @@ describe("spark-x-agent adapter", () => {
     expect(JSON.stringify(output)).not.toContain(variables["case.admin-password"]);
   });
 
+  it("creates a delayed lifecycle fixture without exposing its goal", async () => {
+    const nextFireAt = new Date(Date.now() + 600_000).toISOString();
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          definition_id: automationId,
+          state_version: 1,
+          status: "enabled",
+          next_fire_at: nextFireAt,
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/automation.create",
+      environment,
+      {
+        ...credentials,
+        conversationId,
+        name: "spark-x-auto-${run.id}",
+        goal: "自动任务回归标识 spark-x-auto-${run.id}。请只回复这个标识，不要调用任何工具或 Skill。",
+        firstFireDelaySeconds: 600,
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toMatchObject({
+      automationId,
+      conversationId,
+      created: true,
+      enabled: true,
+      firstFireDelaySeconds: 600,
+      nextFireAt,
+    });
+    const requestBody = fetcher.mock.calls[1]?.[1]?.body;
+    if (typeof requestBody !== "string") throw new Error("expected JSON request body");
+    const body = JSON.parse(requestBody) as Readonly<Record<string, unknown>>;
+    expect(body.interval_seconds).toBe(300);
+    expect(Date.parse(String(body.first_fire_at)) - Date.now()).toBeGreaterThan(598_000);
+    expect(Date.parse(String(body.first_fire_at)) - Date.now()).toBeLessThanOrEqual(600_000);
+    expect(JSON.stringify(output)).not.toContain(automationGoal);
+  });
+
   it("links one scheduler fire to one no-tool conversation turn without returning content", async () => {
     const assistantContent = `已完成：${automationMarker}`;
     const fetcher = vi
@@ -2939,6 +2991,195 @@ describe("spark-x-agent adapter", () => {
         classification: "product_failed",
       },
     });
+  });
+
+  it("updates, disables, enables and deletes an untriggered automation with exact versions", async () => {
+    const updatedName = `${automationName}-updated`;
+    const updatedGoal = `${automationGoal} updated`;
+    const baselineNextFireAt = new Date(Date.now() + 600_000).toISOString();
+    let updatedNextFireAt = baselineNextFireAt;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            automationProjection({
+              state_version: 1,
+              next_fire_at: baselineNextFireAt,
+              last_fire_at: null,
+            }),
+          ],
+        }),
+      )
+      .mockImplementationOnce((_input, init) => {
+        if (typeof init?.body !== "string") throw new Error("expected update JSON body");
+        const body = JSON.parse(init.body) as Readonly<Record<string, unknown>>;
+        updatedNextFireAt = String(body.next_fire_at);
+        return Promise.resolve(
+          jsonResponse({
+            definition_id: automationId,
+            state_version: 2,
+            status: "enabled",
+            next_fire_at: updatedNextFireAt,
+          }),
+        );
+      })
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          jsonResponse({
+            items: [
+              automationProjection({
+                name: updatedName,
+                goal: updatedGoal,
+                interval_seconds: 600,
+                state_version: 2,
+                next_fire_at: updatedNextFireAt,
+                last_fire_at: null,
+              }),
+            ],
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          definition_id: automationId,
+          state_version: 3,
+          status: "disabled",
+          next_fire_at: null,
+        }),
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          jsonResponse({
+            items: [
+              automationProjection({
+                name: updatedName,
+                goal: updatedGoal,
+                interval_seconds: 600,
+                status: "disabled",
+                state_version: 3,
+                next_fire_at: updatedNextFireAt,
+                last_fire_at: null,
+              }),
+            ],
+          }),
+        ),
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          jsonResponse({
+            definition_id: automationId,
+            state_version: 4,
+            status: "enabled",
+            next_fire_at: updatedNextFireAt,
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          definition_id: automationId,
+          state_version: 5,
+          status: "disabled",
+          next_fire_at: null,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: { items: [] } }));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/automation.assert-lifecycle",
+      environment,
+      {
+        ...credentials,
+        automationId,
+        conversationId,
+        expectedName: automationName,
+        expectedGoal: automationGoal,
+        updatedName,
+        updatedGoal,
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      automationId,
+      conversationId,
+      updated: true,
+      disabled: true,
+      enabledAgain: true,
+      deleted: true,
+      absentAfterDelete: true,
+      noTriggerMessages: true,
+      initialStateVersion: 1,
+      updatedStateVersion: 2,
+      disabledStateVersion: 3,
+      enabledStateVersion: 4,
+      deletedStateVersion: 5,
+      updatedIntervalSeconds: 600,
+      selectedSkillAbsent: true,
+      updatedNameSha256: createHash("sha256").update(updatedName).digest("hex"),
+      updatedGoalSha256: createHash("sha256").update(updatedGoal).digest("hex"),
+    });
+    expect(fetcher.mock.calls.slice(2, 9).map((call) => call[1]?.method ?? "GET")).toEqual([
+      "PUT",
+      "GET",
+      "POST",
+      "GET",
+      "POST",
+      "DELETE",
+      "GET",
+    ]);
+    const evidence = JSON.stringify(output);
+    expect(evidence).not.toContain(updatedName);
+    expect(evidence).not.toContain(updatedGoal);
+    expect(evidence).not.toContain("memory-only-access-token-value");
+  });
+
+  it("preserves an already-fired lifecycle fixture before making any mutation", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            automationProjection({
+              state_version: 2,
+              next_fire_at: new Date(Date.now() + 600_000).toISOString(),
+              last_fire_at: new Date().toISOString(),
+            }),
+          ],
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/automation.assert-lifecycle",
+        environment,
+        {
+          ...credentials,
+          automationId,
+          conversationId,
+          expectedName: automationName,
+          expectedGoal: automationGoal,
+          updatedName: `${automationName}-updated`,
+          updatedGoal: `${automationGoal} updated`,
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_AUTOMATION_LIFECYCLE_ALREADY_FIRED",
+        classification: "product_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes the optimistic state version before idempotent automation cleanup", async () => {

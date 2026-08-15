@@ -2151,6 +2151,151 @@ function automationDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function automationLifecycleDefinition(): Readonly<Record<string, unknown>> {
+  const name = "spark-x-auto-lifecycle-${run.id}";
+  const goal =
+    "自动任务生命周期回归标识 spark-x-auto-lifecycle-${run.id}。任务只用于修改、停用和删除，不应触发。";
+  const updatedName = "spark-x-auto-lifecycle-${run.id}-updated";
+  const updatedGoal =
+    "已更新的自动任务生命周期回归标识 spark-x-auto-lifecycle-${run.id}。任务必须在触发前删除。";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "AUTO-003 修改、停用、删除与无触发残留",
+      description:
+        "创建延迟十分钟且带 run_id 的无 Skill 任务，按乐观版本修改、停用、重新启用和删除，确认列表无残留、目标会话无调度消息，并由 finally 再次幂等清理。",
+      systemKey: "spark-x-agent",
+      moduleKey: "automations",
+      priority: "P1",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "automation", "p1", "full-regression", "lifecycle", "no-trigger"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 60_000,
+      caseTimeoutMs: 180_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:automations"],
+    steps: [
+      {
+        id: "create-lifecycle-conversation",
+        name: "创建并登记生命周期目标会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: name,
+        },
+        capture: { "lifecycle-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.lifecycle-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "create-delayed-lifecycle-automation",
+        name: "创建并登记延迟十分钟的无 Skill 任务",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.lifecycle-conversation-id}",
+          name,
+          goal,
+          firstFireDelaySeconds: 600,
+        },
+        capture: { "lifecycle-automation-id": "$.automationId" },
+        resource: {
+          type: "spark-x-agent-automation",
+          id: "${step.lifecycle-automation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/automation.cleanup",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              automationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "assert-automation-lifecycle",
+        name: "按版本修改、停用、重新启用、删除并确认未触发",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.assert-lifecycle",
+        timeoutMs: 60_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          automationId: "${step.lifecycle-automation-id}",
+          conversationId: "${step.lifecycle-conversation-id}",
+          expectedName: name,
+          expectedGoal: goal,
+          updatedName,
+          updatedGoal,
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "cleanup-lifecycle-automation",
+        name: "再次幂等清理生命周期任务",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.cleanup",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          automationId: "${step.lifecycle-automation-id}",
+        },
+      },
+      {
+        id: "delete-lifecycle-conversation",
+        name: "删除生命周期目标会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.lifecycle-conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
 async function ensureCase(
   systemId: string,
   moduleId: string,
@@ -3772,6 +3917,14 @@ const automationCase = await ensureCase(
   automationDefinition(),
   "新增自动任务定义、立即单次调度、无工具结果关联和版本化清理 P0 闭环",
 );
+const automationLifecycleCase = await ensureCase(
+  system.id,
+  automations.id,
+  environment.id,
+  "AUTO-003 修改、停用、删除与无触发残留",
+  automationLifecycleDefinition(),
+  "新增延迟任务修改、停用、重新启用、删除、列表无残留、零调度消息和 finally 幂等清理 P1 闭环",
+);
 const conversationSuite = await ensureSuite(
   system.id,
   "spark-x-agent-conversation-p0",
@@ -3873,6 +4026,13 @@ const automationSuite = await ensureSuite(
   "AUTO-001 立即触发、单次会话结果、无工具证据、资源登记和版本化清理闭环。",
   [automationCase.testCase.id],
 );
+const automationModuleSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-automations",
+  "星火 Agent 自动任务回归",
+  "自动任务模块当前 AUTO-001/003 单次立即调度、版本化修改、停用、重新启用、删除、无触发残留和完整清理。",
+  [automationCase.testCase.id, automationLifecycleCase.testCase.id],
+);
 const suite = await ensureSuite(
   system.id,
   "spark-x-agent-core-smoke",
@@ -3895,8 +4055,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 16/32）",
-  "手动一键完整回归入口；当前已接入 16/32 条案例，覆盖七个模块的当前 P0、CHAT-003 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 17/32）",
+  "手动一键完整回归入口；当前已接入 17/32 条案例，覆盖七个模块的当前 P0、CHAT-003、AUTO-003 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -3914,6 +4074,7 @@ const fullRegressionSuite = await ensureSuite(
     skillPublicationCase.testCase.id,
     mcpConnectorCase.testCase.id,
     automationCase.testCase.id,
+    automationLifecycleCase.testCase.id,
   ],
 );
 check(
@@ -4025,7 +4186,7 @@ console.info(
                         : runAutomationSmoke
                           ? 20
                           : 161,
-    caseCount: 16,
+    caseCount: 17,
     coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -4063,6 +4224,8 @@ console.info(
     mcpConnectorCaseVersionId: mcpConnectorCase.version.id,
     automationCaseId: automationCase.testCase.id,
     automationCaseVersionId: automationCase.version.id,
+    automationLifecycleCaseId: automationLifecycleCase.testCase.id,
+    automationLifecycleCaseVersionId: automationLifecycleCase.version.id,
     conversationSuiteId: conversationSuite.id,
     conversationReopenSuiteId: conversationReopenSuite.id,
     conversationPaginationSuiteId: conversationPaginationSuite.id,
@@ -4076,6 +4239,7 @@ console.info(
     skillSuiteId: skillSuite.id,
     mcpSuiteId: mcpSuite.id,
     automationSuiteId: automationSuite.id,
+    automationModuleSuiteId: automationModuleSuite.id,
     suiteId: suite.id,
     fullRegressionSuiteId: fullRegressionSuite.id,
     ...(run === undefined ? {} : { runId: run.id, gateResult: run.gateResult }),

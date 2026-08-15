@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -1031,8 +1031,8 @@
       },
       {
         "key": "automation.create",
-        "name": "创建立即触发的自动任务",
-        "description": "为已登记测试会话创建固定五分钟周期、无 Skill 的立即触发任务并登记清理资源。",
+        "name": "创建受控自动任务",
+        "description": "为已登记测试会话创建固定五分钟周期、无 Skill 的任务；默认立即触发，也可在受限延迟内用于生命周期回归。",
         "actionLevel": "write",
         "defaultTimeoutMs": 20000,
         "producesResource": true,
@@ -1046,7 +1046,8 @@
             "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
             "conversationId": { "type": "string", "format": "uuid" },
             "name": { "type": "string", "minLength": 1, "maxLength": 160 },
-            "goal": { "type": "string", "minLength": 1, "maxLength": 65536 }
+            "goal": { "type": "string", "minLength": 1, "maxLength": 65536 },
+            "firstFireDelaySeconds": { "type": "integer", "minimum": 0, "maximum": 900 }
           }
         },
         "outputSchema": {
@@ -1074,7 +1075,8 @@
             "selectedSkillAbsent": { "const": true },
             "nextFireAt": { "type": "string", "format": "date-time" },
             "nameSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "goalSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "goalSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "firstFireDelaySeconds": { "type": "integer", "minimum": 0, "maximum": 900 }
           }
         }
       },
@@ -1155,6 +1157,80 @@
             "assistantContentLength": { "type": "integer", "minimum": 1 },
             "assistantFinishReason": { "const": "stop" },
             "pollAttempts": { "type": "integer", "minimum": 1, "maximum": 120 }
+          }
+        }
+      },
+      {
+        "key": "automation.assert-lifecycle",
+        "name": "校验自动任务修改、停用与删除",
+        "description": "仅操作本次运行登记且尚未触发的自动任务，按乐观版本修改、停用、启用、删除，并确认目标会话无调度消息。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 60000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "automationId",
+            "conversationId",
+            "expectedName",
+            "expectedGoal",
+            "updatedName",
+            "updatedGoal"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "automationId": { "type": "string", "format": "uuid" },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "expectedName": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "expectedGoal": { "type": "string", "minLength": 1, "maxLength": 65536 },
+            "updatedName": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "updatedGoal": { "type": "string", "minLength": 1, "maxLength": 65536 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "automationId",
+            "conversationId",
+            "updated",
+            "disabled",
+            "enabledAgain",
+            "deleted",
+            "absentAfterDelete",
+            "noTriggerMessages",
+            "initialStateVersion",
+            "updatedStateVersion",
+            "disabledStateVersion",
+            "enabledStateVersion",
+            "deletedStateVersion",
+            "updatedIntervalSeconds",
+            "selectedSkillAbsent",
+            "updatedNameSha256",
+            "updatedGoalSha256"
+          ],
+          "properties": {
+            "automationId": { "type": "string", "format": "uuid" },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "updated": { "const": true },
+            "disabled": { "const": true },
+            "enabledAgain": { "const": true },
+            "deleted": { "const": true },
+            "absentAfterDelete": { "const": true },
+            "noTriggerMessages": { "const": true },
+            "initialStateVersion": { "type": "integer", "minimum": 1 },
+            "updatedStateVersion": { "type": "integer", "minimum": 2 },
+            "disabledStateVersion": { "type": "integer", "minimum": 3 },
+            "enabledStateVersion": { "type": "integer", "minimum": 4 },
+            "deletedStateVersion": { "type": "integer", "minimum": 5 },
+            "updatedIntervalSeconds": { "const": 600 },
+            "selectedSkillAbsent": { "const": true },
+            "updatedNameSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "updatedGoalSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
           }
         }
       },

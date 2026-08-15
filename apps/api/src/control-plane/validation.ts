@@ -54,10 +54,24 @@ const sparkXAgentActionLevels = new Map<string, ActionLevel>(
     capability.actionLevel,
   ]),
 );
-const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>(
+interface AdapterInputSchemaProjection {
+  readonly required: readonly string[];
+  readonly properties: Readonly<
+    Record<
+      string,
+      Readonly<{
+        type?: unknown;
+        minimum?: unknown;
+        maximum?: unknown;
+      }>
+    >
+  >;
+}
+
+const sparkXAgentActionInputSchemas = new Map<string, AdapterInputSchemaProjection>(
   sparkXAgentActionCapabilities.map((capability) => [
     `adapter:spark-x-agent/${capability.key}`,
-    new Set(Object.keys(capability.inputSchema.properties)),
+    capability.inputSchema as AdapterInputSchemaProjection,
   ]),
 );
 const waitJsonPathPattern = /^\$(?:\.[a-zA-Z0-9_-]+){0,20}$/;
@@ -270,8 +284,10 @@ function validateSparkXAgentAction(
   definition: JsonObject,
   resource: JsonObject | undefined,
 ): ValidationIssue[] {
-  const allowed = sparkXAgentActionParameters.get(action);
-  if (allowed === undefined) return [];
+  const inputSchema = sparkXAgentActionInputSchemas.get(action);
+  if (inputSchema === undefined) return [];
+  const allowed = new Set(Object.keys(inputSchema.properties));
+  const required = new Set(inputSchema.required);
   const issues: ValidationIssue[] = [];
   const metadata = isObject(definition.metadata) ? definition.metadata : undefined;
   if (metadata?.systemKey !== "spark-x-agent") {
@@ -291,30 +307,66 @@ function validateSparkXAgentAction(
       message: `星火 Agent 适配器只接受已注册参数，不允许 ${extra.join("、")}。`,
     });
   }
-  for (const name of allowed) {
-    if (name === "expectedMessageCount") {
-      const value = params[name];
-      if (
-        value !== undefined &&
-        (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 99)
-      ) {
+  for (const [name, propertySchema] of Object.entries(inputSchema.properties)) {
+    const value = params[name];
+    if (value === undefined) {
+      if (required.has(name)) {
         issues.push({
           severity: "error",
           code: "ADAPTER_PARAMETER_INVALID",
           path: `${path}.params.${name}`,
-          message: "星火 Agent 适配器参数 expectedMessageCount 必须是 0 到 99 的整数。",
+          message: `星火 Agent 适配器缺少必需参数 ${name}。`,
         });
       }
       continue;
     }
-    if (typeof params[name] !== "string" || params[name].trim() === "") {
+    if (propertySchema.type === "string") {
+      if (typeof value === "string" && value.trim() !== "") continue;
       issues.push({
         severity: "error",
         code: "ADAPTER_PARAMETER_INVALID",
         path: `${path}.params.${name}`,
         message: `星火 Agent 适配器参数 ${name} 必须是非空字符串。`,
       });
+      continue;
     }
+    if (propertySchema.type === "integer") {
+      const minimum =
+        typeof propertySchema.minimum === "number" ? propertySchema.minimum : undefined;
+      const maximum =
+        typeof propertySchema.maximum === "number" ? propertySchema.maximum : undefined;
+      if (
+        typeof value === "number" &&
+        Number.isInteger(value) &&
+        (minimum === undefined || value >= minimum) &&
+        (maximum === undefined || value <= maximum)
+      ) {
+        continue;
+      }
+      issues.push({
+        severity: "error",
+        code: "ADAPTER_PARAMETER_INVALID",
+        path: `${path}.params.${name}`,
+        message: `星火 Agent 适配器参数 ${name} 必须是清单范围内的整数。`,
+      });
+      continue;
+    }
+    if (propertySchema.type === "boolean") {
+      if (typeof value === "boolean") continue;
+      issues.push({
+        severity: "error",
+        code: "ADAPTER_PARAMETER_INVALID",
+        path: `${path}.params.${name}`,
+        message: `星火 Agent 适配器参数 ${name} 必须是布尔值。`,
+      });
+      continue;
+    }
+    issues.push({
+      severity: "error",
+      code: "ADAPTER_PARAMETER_INVALID",
+      path: `${path}.params.${name}`,
+      message: `星火 Agent 适配器参数 ${name} 使用了未支持的清单类型。`,
+    });
   }
   const requiredLevel = sparkXAgentActionLevels.get(action);
   if (

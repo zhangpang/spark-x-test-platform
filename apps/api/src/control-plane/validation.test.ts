@@ -1568,6 +1568,53 @@ describe("M2 asset validation", () => {
     ).toEqual({ valid: true, issues: [] });
 
     const steps = automationDefinition.steps as readonly JsonObject[];
+    const delayed = {
+      ...automationDefinition,
+      steps: [
+        steps[0],
+        {
+          ...steps[1],
+          params: {
+            ...(steps[1]?.params as JsonObject),
+            firstFireDelaySeconds: 600,
+          },
+        },
+        steps[2],
+      ],
+    } as JsonObject;
+    expect(
+      validateDefinition(delayed, {
+        systemKey: "spark-x-agent",
+        moduleKey: "automations",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+    const invalidDelay = {
+      ...delayed,
+      steps: [
+        steps[0],
+        {
+          ...steps[1],
+          params: {
+            ...(steps[1]?.params as JsonObject),
+            firstFireDelaySeconds: "600",
+          },
+        },
+        steps[2],
+      ],
+    } as JsonObject;
+    expect(
+      validateDefinition(invalidDelay, {
+        systemKey: "spark-x-agent",
+        moduleKey: "automations",
+        environment: sparkEnvironment,
+      }).issues,
+    ).toEqual([
+      expect.objectContaining({
+        code: "ADAPTER_PARAMETER_INVALID",
+        path: "$.steps.create-automation.params.firstFireDelaySeconds",
+      }),
+    ]);
     const unsafe = {
       ...automationDefinition,
       steps: [
