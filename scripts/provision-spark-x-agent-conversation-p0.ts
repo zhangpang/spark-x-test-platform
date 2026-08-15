@@ -1389,6 +1389,197 @@ function toolInvocationDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function toolResultDefinition(): Readonly<Record<string, unknown>> {
+  const marker = "spark-x-tool-result-${run.id}";
+  const message =
+    "自动化回归 ${run.id}：只调用一次 builtin-demo__echo，参数 message 必须精确为 spark-x-tool-result-${run.id}；获得工具结果后，最终回复必须包含 spark-x-tool-result-${run.id}。";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "TOOL-003 工具结果进入最终回答",
+      description:
+        "创建带 run_id 的会话，单次调用内置只读 echo，精确校验参数与结构化结果进入最终回答，并用公开历史轨迹关联全部哈希证据。",
+      systemKey: "spark-x-agent",
+      moduleKey: "tools",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "tool", "p0", "full-regression", "real-model", "result-mapping"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 120_000,
+      caseTimeoutMs: 420_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:tools"],
+    steps: [
+      {
+        id: "create-tool-result-conversation",
+        name: "创建并登记工具结果测试会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: "spark-x-tool-result-${run.id}",
+        },
+        capture: { "tool-result-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.tool-result-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "assert-tool-result-precondition",
+        name: "确认仅有内置只读工具可用",
+        kind: "action",
+        action: "adapter:spark-x-agent/tool.assert-safe-catalog",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+        },
+      },
+      {
+        id: "invoke-echo-tool",
+        name: "单次调用 echo 并校验结果进入最终回答",
+        kind: "action",
+        action: "adapter:spark-x-agent/tool.invoke-safe",
+        timeoutMs: 120_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.tool-result-conversation-id}",
+          message,
+          expectedText: marker,
+          expectedToolName: "builtin-demo__echo",
+          expectedArgumentsJson: '{"message":"spark-x-tool-result-${run.id}"}',
+          expectedResultJson: '{"success":true,"echo":{"message":"spark-x-tool-result-${run.id}"}}',
+        },
+        capture: {
+          "tool-result-assistant-sha256": "$.finalContentSha256",
+          "tool-result-arguments-sha256": "$.argumentsSha256",
+          "tool-result-result-sha256": "$.resultSha256",
+        },
+      },
+      {
+        id: "assert-tool-result-history",
+        name: "校验 echo 结果、最终回答与公开轨迹持久化",
+        kind: "action",
+        action: "adapter:spark-x-agent/tool.assert-history",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.tool-result-conversation-id}",
+          expectedUserText: message,
+          expectedAssistantText: marker,
+          expectedAssistantSha256: "${step.tool-result-assistant-sha256}",
+          expectedToolName: "builtin-demo__echo",
+          expectedArgumentsSha256: "${step.tool-result-arguments-sha256}",
+          expectedResultSha256: "${step.tool-result-result-sha256}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "delete-tool-result-conversation",
+        name: "删除工具结果测试会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.tool-result-conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
+function forbiddenToolDefinition(): Readonly<Record<string, unknown>> {
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "TOOL-005 禁止的工具与写操作",
+      description:
+        "只读核对模型目录精确等于三个受信任工具，管理员登记中无写入、需复核或高风险工具；用例不发起工具调用且不产生资源或副作用。",
+      systemKey: "spark-x-agent",
+      moduleKey: "tools",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "read",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "tool", "p0", "full-regression", "forbidden", "read-only"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 20_000,
+      caseTimeoutMs: 60_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: [],
+    steps: [
+      {
+        id: "assert-forbidden-tool-boundary",
+        name: "校验禁止工具、写操作与私有配置均未暴露",
+        kind: "action",
+        action: "adapter:spark-x-agent/tool.assert-safe-catalog",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+        },
+      },
+    ],
+    finally: [],
+  };
+}
+
 function knowledgeBaseDefinition(): Readonly<Record<string, unknown>> {
   const title = "spark-x-kb-${run.id}.pdf";
   return {
@@ -2210,6 +2401,9 @@ async function executeSmoke(
       toolCatalog.outputSummary.advertisedToolCount === 3 &&
       toolCatalog.outputSummary.enabledDiscoveredToolCount === 3 &&
       toolCatalog.outputSummary.expectedToolsMatched === true &&
+      toolCatalog.outputSummary.writeToolsAbsent === true &&
+      toolCatalog.outputSummary.reviewRequiredToolsAbsent === true &&
+      toolCatalog.outputSummary.unsafeRiskToolsAbsent === true &&
       typeof toolCatalog.outputSummary.catalogSha256 === "string" &&
       /^[0-9a-f]{64}$/u.test(toolCatalog.outputSummary.catalogSha256),
     "TOOL-001 safe catalog evidence is incomplete",
@@ -2877,6 +3071,9 @@ function assertMcpEvidence(run: RunDetail): void {
       summary.advertisedToolCount === 3 &&
       summary.enabledDiscoveredToolCount === 3 &&
       summary.expectedToolsMatched === true &&
+      summary.writeToolsAbsent === true &&
+      summary.reviewRequiredToolsAbsent === true &&
+      summary.unsafeRiskToolsAbsent === true &&
       typeof summary.catalogSha256 === "string" &&
       /^[0-9a-f]{64}$/u.test(summary.catalogSha256),
     "MCP-001 connector registration, running state or discovered-tool evidence is incomplete",
@@ -2889,9 +3086,12 @@ function assertMcpEvidence(run: RunDetail): void {
         "credentialFieldsAbsent",
         "enabledDiscoveredToolCount",
         "expectedToolsMatched",
+        "reviewRequiredToolsAbsent",
         "running",
         "serverName",
+        "unsafeRiskToolsAbsent",
         "visible",
+        "writeToolsAbsent",
       ]
         .sort()
         .join(","),
@@ -3516,6 +3716,22 @@ const toolInvocationCase = await ensureCase(
   toolInvocationDefinition(),
   "新增安全工具调用、结果回填和历史公开轨迹证据闭环",
 );
+const toolResultCase = await ensureCase(
+  system.id,
+  tools.id,
+  environment.id,
+  "TOOL-003 工具结果进入最终回答",
+  toolResultDefinition(),
+  "新增 echo 单次调用、精确结果映射、最终回答和公开轨迹哈希关联 P0 闭环",
+);
+const forbiddenToolCase = await ensureCase(
+  system.id,
+  tools.id,
+  environment.id,
+  "TOOL-005 禁止的工具与写操作",
+  forbiddenToolDefinition(),
+  "新增工具目录精确白名单、无写入、无复核、无高风险工具和零副作用 P0 边界校验",
+);
 const knowledgeBaseCase = await ensureCase(
   system.id,
   knowledgeBase.id,
@@ -3621,8 +3837,13 @@ const toolSuite = await ensureSuite(
   system.id,
   "spark-x-agent-tools-p0",
   "星火 Agent 工具 P0 纵向切片",
-  "TOOL-001/002 内置只读工具目录、调用、结果回填、历史证据与会话清理闭环。",
-  [toolCatalogCase.testCase.id, toolInvocationCase.testCase.id],
+  "TOOL-001/002/003/005 内置只读目录、参数绑定、结果进入最终回答、禁止写工具边界、历史证据与清理闭环。",
+  [
+    toolCatalogCase.testCase.id,
+    toolInvocationCase.testCase.id,
+    toolResultCase.testCase.id,
+    forbiddenToolCase.testCase.id,
+  ],
 );
 const knowledgeBaseSuite = await ensureSuite(
   system.id,
@@ -3674,8 +3895,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 14/32）",
-  "手动一键完整回归入口；当前已接入 14/32 条案例，覆盖七个模块的全部 P0、CHAT-003 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 16/32）",
+  "手动一键完整回归入口；当前已接入 16/32 条案例，覆盖七个模块的当前 P0、CHAT-003 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -3686,6 +3907,8 @@ const fullRegressionSuite = await ensureSuite(
     chatCancelCase.testCase.id,
     toolCatalogCase.testCase.id,
     toolInvocationCase.testCase.id,
+    toolResultCase.testCase.id,
+    forbiddenToolCase.testCase.id,
     knowledgeBaseCase.testCase.id,
     knowledgeScopeCase.testCase.id,
     skillPublicationCase.testCase.id,
@@ -3802,7 +4025,7 @@ console.info(
                         : runAutomationSmoke
                           ? 20
                           : 161,
-    caseCount: 14,
+    caseCount: 16,
     coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -3826,6 +4049,10 @@ console.info(
     toolCatalogCaseVersionId: toolCatalogCase.version.id,
     toolInvocationCaseId: toolInvocationCase.testCase.id,
     toolInvocationCaseVersionId: toolInvocationCase.version.id,
+    toolResultCaseId: toolResultCase.testCase.id,
+    toolResultCaseVersionId: toolResultCase.version.id,
+    forbiddenToolCaseId: forbiddenToolCase.testCase.id,
+    forbiddenToolCaseVersionId: forbiddenToolCase.version.id,
     knowledgeBaseCaseId: knowledgeBaseCase.testCase.id,
     knowledgeBaseCaseVersionId: knowledgeBaseCase.version.id,
     knowledgeScopeCaseId: knowledgeScopeCase.testCase.id,

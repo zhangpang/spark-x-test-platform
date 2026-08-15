@@ -518,6 +518,9 @@ export const sparkXAgentActionCapabilities = [
         "advertisedToolCount",
         "enabledDiscoveredToolCount",
         "expectedToolsMatched",
+        "writeToolsAbsent",
+        "reviewRequiredToolsAbsent",
+        "unsafeRiskToolsAbsent",
         "catalogSha256",
       ],
       properties: {
@@ -528,6 +531,9 @@ export const sparkXAgentActionCapabilities = [
         advertisedToolCount: { const: 3 },
         enabledDiscoveredToolCount: { const: 3 },
         expectedToolsMatched: { const: true },
+        writeToolsAbsent: { const: true },
+        reviewRequiredToolsAbsent: { const: true },
+        unsafeRiskToolsAbsent: { const: true },
         catalogSha256: { type: "string", minLength: 64, maxLength: 64 },
       },
     },
@@ -1229,7 +1235,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.11.0",
+  version: "0.12.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1246,7 +1252,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "full-regression-chat-cancel" as const;
+export const sparkXAgentAdapterPhase = "full-regression-tool-boundaries" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -4396,6 +4402,9 @@ export async function executeSparkXAgentAction(
       advertisedToolCount: visibleServer.tools_count,
       enabledDiscoveredToolCount: enabledTools.length,
       expectedToolsMatched: true,
+      writeToolsAbsent: true,
+      reviewRequiredToolsAbsent: true,
+      unsafeRiskToolsAbsent: true,
       catalogSha256: sha256(canonicalJson(names)),
     };
   }

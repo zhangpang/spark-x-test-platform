@@ -141,7 +141,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.11.0",
+      version: "0.12.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -1693,6 +1693,9 @@ describe("spark-x-agent adapter", () => {
       advertisedToolCount: 3,
       enabledDiscoveredToolCount: 3,
       expectedToolsMatched: true,
+      writeToolsAbsent: true,
+      reviewRequiredToolsAbsent: true,
+      unsafeRiskToolsAbsent: true,
       catalogSha256: hashCanonical(["calculator", "echo", "time"]),
     });
     expect(urlOf(fetcher.mock.calls[1]?.[0] as URL | RequestInfo)).toBe(
@@ -1771,6 +1774,84 @@ describe("spark-x-agent adapter", () => {
       },
     });
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["write", { is_write: true }],
+    ["review-required", { requires_review: true }],
+    ["unsafe-risk", { risk_level: "high" }],
+  ])("fails closed when the administrator catalog exposes a %s tool", async (_label, unsafe) => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                id: "00000000-0000-4000-8000-000000000210",
+                name: "builtin-demo",
+                is_enabled: true,
+                status: "running",
+                tools_count: 3,
+              },
+            ],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              {
+                name: "calculator",
+                is_enabled: true,
+                is_discovered: true,
+                is_write: false,
+                requires_review: false,
+                risk_level: "low",
+                ...unsafe,
+              },
+              {
+                name: "echo",
+                is_enabled: true,
+                is_discovered: true,
+                is_write: false,
+                requires_review: false,
+                risk_level: "low",
+              },
+              {
+                name: "time",
+                is_enabled: true,
+                is_discovered: true,
+                is_write: false,
+                requires_review: false,
+                risk_level: "low",
+              },
+            ],
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/tool.assert-safe-catalog",
+        environment,
+        credentials,
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_SAFE_TOOL_CATALOG_MISMATCH",
+        classification: "test_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
   it("matches one safe tool call, arguments, result and final answer without leaking payloads", async () => {
