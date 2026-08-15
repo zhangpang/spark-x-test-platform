@@ -461,7 +461,8 @@ function validateSparkXAgentAction(
   }
   if (
     (action === "adapter:spark-x-agent/chat.ask" ||
-      action === "adapter:spark-x-agent/tool.invoke-safe") &&
+      action === "adapter:spark-x-agent/tool.invoke-safe" ||
+      action === "adapter:spark-x-agent/tool.invoke-failure-recovery") &&
     typeof params.message === "string" &&
     !params.message.includes("${run.id}")
   ) {

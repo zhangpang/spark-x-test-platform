@@ -1142,6 +1142,76 @@ describe("M2 asset validation", () => {
       }),
     ).toEqual({ valid: true, issues: [] });
 
+    const recoveryDefinition = definition({
+      metadata: {
+        name: "TOOL-004 tool failure recovery",
+        systemKey: "spark-x-agent",
+        moduleKey: "tools",
+        priority: "P1",
+        classification: "blackbox",
+        actionLevel: "dangerous",
+        tags: ["adapter", "full-regression", "tool", "recovery"],
+      },
+      inputs,
+      resourceLocks: ["spark-x-agent:admin:tools"],
+      steps: [
+        ...(invocationDefinition.steps as readonly JsonObject[]).slice(0, 2),
+        {
+          id: "invoke-tool-failure-recovery",
+          name: "invoke tool failure recovery",
+          kind: "action",
+          action: "adapter:spark-x-agent/tool.invoke-failure-recovery",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            message:
+              "自动化回归 ${run.id}：先调用 calculator 计算 7÷0，观察失败后用 echo 恢复 spark-x-tool-recovery-${run.id}。",
+            expectedText: "spark-x-tool-recovery-${run.id}",
+            failureArgumentsJson: '{"operation":"divide","a":7,"b":0}',
+            failureResultJson: '{"success":false,"error":"division by zero"}',
+            recoveryArgumentsJson: '{"message":"spark-x-tool-recovery-${run.id}"}',
+            recoveryResultJson:
+              '{"success":true,"echo":{"message":"spark-x-tool-recovery-${run.id}"}}',
+          },
+          capture: {
+            "assistant-sha256": "$.finalContentSha256",
+            "failure-arguments-sha256": "$.failureArgumentsSha256",
+            "failure-result-sha256": "$.failureResultSha256",
+            "recovery-arguments-sha256": "$.recoveryArgumentsSha256",
+            "recovery-result-sha256": "$.recoveryResultSha256",
+          },
+        },
+        {
+          id: "assert-tool-failure-recovery-history",
+          name: "assert tool failure recovery history",
+          kind: "action",
+          action: "adapter:spark-x-agent/tool.assert-failure-recovery-history",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            expectedUserText:
+              "自动化回归 ${run.id}：先调用 calculator 计算 7÷0，观察失败后用 echo 恢复 spark-x-tool-recovery-${run.id}。",
+            expectedAssistantText: "spark-x-tool-recovery-${run.id}",
+            expectedAssistantSha256: "${step.assistant-sha256}",
+            failureArgumentsSha256: "${step.failure-arguments-sha256}",
+            failureResultSha256: "${step.failure-result-sha256}",
+            recoveryArgumentsSha256: "${step.recovery-arguments-sha256}",
+            recoveryResultSha256: "${step.recovery-result-sha256}",
+          },
+        },
+      ],
+      finally: invocationDefinition.finally as readonly JsonObject[],
+    });
+    expect(
+      validateDefinition(recoveryDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "tools",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
     const unsafeInvocation = {
       ...invocationDefinition,
       steps: [

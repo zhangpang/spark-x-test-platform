@@ -22,7 +22,9 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/chat.assert-context-history",
   "adapter:spark-x-agent/tool.assert-safe-catalog",
   "adapter:spark-x-agent/tool.invoke-safe",
+  "adapter:spark-x-agent/tool.invoke-failure-recovery",
   "adapter:spark-x-agent/tool.assert-history",
+  "adapter:spark-x-agent/tool.assert-failure-recovery-history",
   "adapter:spark-x-agent/knowledge-base.create",
   "adapter:spark-x-agent/knowledge-base.upload-fixture",
   "adapter:spark-x-agent/knowledge-base.attach-upload",
@@ -614,6 +616,91 @@ export const sparkXAgentActionCapabilities = [
     },
   },
   {
+    key: "tool.invoke-failure-recovery",
+    name: "调用失败工具并校验恢复循环",
+    description:
+      "通过受控对话先触发 calculator 除零失败，再调用 echo 恢复，精确校验两次调用、结果顺序和最终回复。",
+    actionLevel: "write",
+    defaultTimeoutMs: 120_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "conversationId",
+        "message",
+        "expectedText",
+        "failureArgumentsJson",
+        "failureResultJson",
+        "recoveryArgumentsJson",
+        "recoveryResultJson",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        message: { type: "string", minLength: 1, maxLength: 20_000 },
+        expectedText: { type: "string", minLength: 1, maxLength: 5_000 },
+        failureArgumentsJson: { type: "string", minLength: 2, maxLength: 20_000 },
+        failureResultJson: { type: "string", minLength: 2, maxLength: 20_000 },
+        recoveryArgumentsJson: { type: "string", minLength: 2, maxLength: 20_000 },
+        recoveryResultJson: { type: "string", minLength: 2, maxLength: 20_000 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "done",
+        "failureObserved",
+        "recoveryObserved",
+        "sequenceMatched",
+        "expectedTextMatched",
+        "toolCallCount",
+        "toolResultCount",
+        "failedToolResultCount",
+        "successfulToolResultCount",
+        "reviewEventCount",
+        "failureCallIdSha256",
+        "recoveryCallIdSha256",
+        "failureArgumentsSha256",
+        "failureResultSha256",
+        "recoveryArgumentsSha256",
+        "recoveryResultSha256",
+        "finalContentLength",
+        "finalContentSha256",
+        "streamBytes",
+        "truncated",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        done: { const: true },
+        failureObserved: { const: true },
+        recoveryObserved: { const: true },
+        sequenceMatched: { const: true },
+        expectedTextMatched: { const: true },
+        toolCallCount: { const: 2 },
+        toolResultCount: { const: 2 },
+        failedToolResultCount: { const: 1 },
+        successfulToolResultCount: { const: 1 },
+        reviewEventCount: { const: 0 },
+        failureCallIdSha256: { type: "string", minLength: 64, maxLength: 64 },
+        recoveryCallIdSha256: { type: "string", minLength: 64, maxLength: 64 },
+        failureArgumentsSha256: { type: "string", minLength: 64, maxLength: 64 },
+        failureResultSha256: { type: "string", minLength: 64, maxLength: 64 },
+        recoveryArgumentsSha256: { type: "string", minLength: 64, maxLength: 64 },
+        recoveryResultSha256: { type: "string", minLength: 64, maxLength: 64 },
+        finalContentLength: { type: "integer", minimum: 1 },
+        finalContentSha256: { type: "string", minLength: 64, maxLength: 64 },
+        streamBytes: { type: "integer", minimum: 1, maximum: 1_000_000 },
+        truncated: { const: false },
+      },
+    },
+  },
+  {
     key: "tool.assert-history",
     name: "校验工具调用历史",
     description: "重新登录并校验工具调用、工具结果、公开执行轨迹和最终助手回复已一致持久化。",
@@ -683,6 +770,85 @@ export const sparkXAgentActionCapabilities = [
         expectedToolNameMatched: { const: true },
         argumentsSha256: { type: "string", minLength: 64, maxLength: 64 },
         resultSha256: { type: "string", minLength: 64, maxLength: 64 },
+        assistantContentLength: { type: "integer", minimum: 1 },
+        assistantContentSha256: { type: "string", minLength: 64, maxLength: 64 },
+        assistantFinishReason: { const: "stop" },
+      },
+    },
+  },
+  {
+    key: "tool.assert-failure-recovery-history",
+    name: "校验失败与恢复工具历史",
+    description:
+      "重新登录并校验 calculator 失败、echo 恢复、两组公开轨迹和最终助手回复已按顺序一致持久化。",
+    actionLevel: "write",
+    defaultTimeoutMs: 20_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "conversationId",
+        "expectedUserText",
+        "expectedAssistantText",
+        "expectedAssistantSha256",
+        "failureArgumentsSha256",
+        "failureResultSha256",
+        "recoveryArgumentsSha256",
+        "recoveryResultSha256",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        expectedUserText: { type: "string", minLength: 1, maxLength: 20_000 },
+        expectedAssistantText: { type: "string", minLength: 1, maxLength: 5_000 },
+        expectedAssistantSha256: { type: "string", minLength: 64, maxLength: 64 },
+        failureArgumentsSha256: { type: "string", minLength: 64, maxLength: 64 },
+        failureResultSha256: { type: "string", minLength: 64, maxLength: 64 },
+        recoveryArgumentsSha256: { type: "string", minLength: 64, maxLength: 64 },
+        recoveryResultSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "messageCount",
+        "userMessageCount",
+        "assistantMessageCount",
+        "toolMessageCount",
+        "toolCallCount",
+        "toolResultCount",
+        "traceToolCallCount",
+        "traceToolResultCount",
+        "failureObserved",
+        "recoveryObserved",
+        "sequenceMatched",
+        "expectedUserTextMatched",
+        "expectedAssistantTextMatched",
+        "assistantContentLength",
+        "assistantContentSha256",
+        "assistantFinishReason",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        messageCount: { const: 6 },
+        userMessageCount: { const: 1 },
+        assistantMessageCount: { const: 3 },
+        toolMessageCount: { const: 2 },
+        toolCallCount: { const: 2 },
+        toolResultCount: { const: 2 },
+        traceToolCallCount: { const: 2 },
+        traceToolResultCount: { const: 2 },
+        failureObserved: { const: true },
+        recoveryObserved: { const: true },
+        sequenceMatched: { const: true },
+        expectedUserTextMatched: { const: true },
+        expectedAssistantTextMatched: { const: true },
         assistantContentLength: { type: "integer", minimum: 1 },
         assistantContentSha256: { type: "string", minLength: 64, maxLength: 64 },
         assistantFinishReason: { const: "stop" },
@@ -1402,7 +1568,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.15.0",
+  version: "0.16.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1419,7 +1585,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "full-regression-automation-idempotency" as const;
+export const sparkXAgentAdapterPhase = "full-regression-tool-failure-recovery" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -2914,6 +3080,13 @@ interface SparkXAgentToolResultTrace {
   readonly success: boolean;
 }
 
+interface SparkXAgentToolSequenceEvent {
+  readonly kind: "call" | "result";
+  readonly id: string;
+  readonly name: string;
+  readonly success?: boolean;
+}
+
 interface SparkXAgentChatResult {
   readonly conversationId: string;
   readonly contentEventCount: number;
@@ -2924,6 +3097,7 @@ interface SparkXAgentChatResult {
   readonly reviewEventCount: number;
   readonly toolCalls: readonly SparkXAgentToolCallTrace[];
   readonly toolResults: readonly SparkXAgentToolResultTrace[];
+  readonly toolSequence: readonly SparkXAgentToolSequenceEvent[];
   readonly streamBytes: number;
   readonly streamedContent: string;
   readonly finalContent: string;
@@ -2946,6 +3120,7 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
   let reviewEventCount = 0;
   const toolCalls: SparkXAgentToolCallTrace[] = [];
   const toolResults: SparkXAgentToolResultTrace[] = [];
+  const toolSequence: SparkXAgentToolSequenceEvent[] = [];
   let stopReason: string | undefined;
   let durationMs: number | undefined;
 
@@ -3012,6 +3187,7 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
           "product_failed",
         ),
       });
+      toolSequence.push({ kind: "call", id: data.id, name: data.name });
     } else if (event === "tool_result") {
       toolEventCount += 1;
       if (
@@ -3037,6 +3213,12 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
           "星火 Agent 工具结果事件缺少受限结构化结果。",
           "product_failed",
         ),
+        success: data.success,
+      });
+      toolSequence.push({
+        kind: "result",
+        id: data.id,
+        name: data.name,
         success: data.success,
       });
     } else if (event === "skill") {
@@ -3098,6 +3280,7 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
     reviewEventCount,
     toolCalls,
     toolResults,
+    toolSequence,
     streamBytes,
     streamedContent,
     finalContent,
@@ -5055,6 +5238,118 @@ export async function executeSparkXAgentAction(
     };
   }
 
+  if (action === "adapter:spark-x-agent/tool.invoke-failure-recovery") {
+    const conversationId = requiredString(params, "conversationId", variables, 100);
+    const message = requiredString(params, "message", variables, 20_000);
+    const expectedText = requiredString(params, "expectedText", variables, 5_000);
+    const failureArguments = expectedJsonObject(params, "failureArgumentsJson", variables);
+    const failureResult = expectedJsonObject(params, "failureResultJson", variables);
+    const recoveryArguments = expectedJsonObject(params, "recoveryArgumentsJson", variables);
+    const recoveryResult = expectedJsonObject(params, "recoveryResultJson", variables);
+    if (message.includes("\u0000")) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "星火 Agent 工具失败恢复消息不能包含空字符。",
+      );
+    }
+    const result = await streamChat(
+      environment,
+      token,
+      conversationId,
+      message,
+      remainingOptions(),
+    );
+    if (!result.finalContent.includes(expectedText)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_RECOVERY_FINAL_RESPONSE_FAILED",
+        "工具失败恢复后的最终回复未包含预期运行标识。",
+      );
+    }
+    if (
+      result.toolCalls.length !== 2 ||
+      result.toolResults.length !== 2 ||
+      result.reviewEventCount !== 0
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_RECOVERY_CARDINALITY_FAILED",
+        "工具失败恢复回归必须产生一次失败调用和一次成功恢复调用。",
+      );
+    }
+    const failureCall = result.toolCalls[0];
+    const failureToolResult = result.toolResults[0];
+    const recoveryCall = result.toolCalls[1];
+    const recoveryToolResult = result.toolResults[1];
+    if (
+      failureCall === undefined ||
+      failureToolResult === undefined ||
+      recoveryCall === undefined ||
+      recoveryToolResult === undefined ||
+      failureCall.name !== "builtin-demo__calculator" ||
+      failureToolResult.name !== "builtin-demo__calculator" ||
+      failureCall.id !== failureToolResult.id ||
+      failureToolResult.success !== false ||
+      recoveryCall.name !== "builtin-demo__echo" ||
+      recoveryToolResult.name !== "builtin-demo__echo" ||
+      recoveryCall.id !== recoveryToolResult.id ||
+      recoveryToolResult.success !== true ||
+      failureCall.id === recoveryCall.id ||
+      result.toolSequence.length !== 4 ||
+      result.toolSequence[0]?.kind !== "call" ||
+      result.toolSequence[0]?.id !== failureCall.id ||
+      result.toolSequence[1]?.kind !== "result" ||
+      result.toolSequence[1]?.id !== failureCall.id ||
+      result.toolSequence[1]?.success !== false ||
+      result.toolSequence[2]?.kind !== "call" ||
+      result.toolSequence[2]?.id !== recoveryCall.id ||
+      result.toolSequence[3]?.kind !== "result" ||
+      result.toolSequence[3]?.id !== recoveryCall.id ||
+      result.toolSequence[3]?.success !== true
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_RECOVERY_SEQUENCE_FAILED",
+        "工具失败与恢复调用的名称、标识、成功状态或执行顺序不一致。",
+      );
+    }
+    const failureArgumentsCanonical = canonicalJson(failureCall.arguments);
+    const failureResultCanonical = canonicalJson(failureToolResult.result);
+    const recoveryArgumentsCanonical = canonicalJson(recoveryCall.arguments);
+    const recoveryResultCanonical = canonicalJson(recoveryToolResult.result);
+    if (
+      failureArgumentsCanonical !== canonicalJson(failureArguments) ||
+      failureResultCanonical !== canonicalJson(failureResult) ||
+      recoveryArgumentsCanonical !== canonicalJson(recoveryArguments) ||
+      recoveryResultCanonical !== canonicalJson(recoveryResult)
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_RECOVERY_PAYLOAD_FAILED",
+        "工具失败或恢复调用的结构化参数与结果不符合精确预期。",
+      );
+    }
+    return {
+      conversationId: result.conversationId,
+      done: true,
+      failureObserved: true,
+      recoveryObserved: true,
+      sequenceMatched: true,
+      expectedTextMatched: true,
+      toolCallCount: result.toolCalls.length,
+      toolResultCount: result.toolResults.length,
+      failedToolResultCount: 1,
+      successfulToolResultCount: 1,
+      reviewEventCount: result.reviewEventCount,
+      failureCallIdSha256: sha256(failureCall.id),
+      recoveryCallIdSha256: sha256(recoveryCall.id),
+      failureArgumentsSha256: sha256(failureArgumentsCanonical),
+      failureResultSha256: sha256(failureResultCanonical),
+      recoveryArgumentsSha256: sha256(recoveryArgumentsCanonical),
+      recoveryResultSha256: sha256(recoveryResultCanonical),
+      finalContentLength: result.finalContent.length,
+      finalContentSha256: sha256(result.finalContent),
+      streamBytes: result.streamBytes,
+      truncated: false,
+    };
+  }
+
   if (action === "adapter:spark-x-agent/chat.ask") {
     const conversationId = requiredString(params, "conversationId", variables, 100);
     const message = requiredString(params, "message", variables, 20_000);
@@ -5495,6 +5790,240 @@ export async function executeSparkXAgentAction(
   }
 
   const conversationId = requiredString(params, "conversationId", variables, 100);
+  if (action === "adapter:spark-x-agent/tool.assert-failure-recovery-history") {
+    const expectedUserText = requiredString(params, "expectedUserText", variables, 20_000);
+    const expectedAssistantText = requiredString(params, "expectedAssistantText", variables, 5_000);
+    const expectedAssistantSha256 = requiredSha256(params, "expectedAssistantSha256", variables);
+    const failureArgumentsSha256 = requiredSha256(params, "failureArgumentsSha256", variables);
+    const failureResultSha256 = requiredSha256(params, "failureResultSha256", variables);
+    const recoveryArgumentsSha256 = requiredSha256(params, "recoveryArgumentsSha256", variables);
+    const recoveryResultSha256 = requiredSha256(params, "recoveryResultSha256", variables);
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+        ),
+      },
+      remainingOptions(),
+    );
+    accepted(response, "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_FAILED");
+    const data = dataEnvelope(
+      response.body,
+      "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_RESPONSE_INVALID",
+    );
+    const items = Array.isArray(data.items)
+      ? data.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    if (items.some((item) => item.payload_truncated === true)) {
+      throw apiFailure(
+        "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_TRUNCATED",
+        "星火 Agent 工具失败恢复历史包含已截断的公开消息。",
+      );
+    }
+    const roles = items.map((item) => item.role).join(",");
+    const userMessages = items.filter((item) => item.role === "user");
+    const assistantMessages = items.filter((item) => item.role === "assistant");
+    const toolMessages = items.filter((item) => item.role === "tool");
+    if (
+      items.length !== 6 ||
+      roles !== "user,assistant,tool,assistant,tool,assistant" ||
+      userMessages.length !== 1 ||
+      assistantMessages.length !== 3 ||
+      toolMessages.length !== 2
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_CARDINALITY_FAILED",
+        "工具失败恢复历史必须依次包含用户、失败调用/结果、恢复调用/结果和最终回复。",
+      );
+    }
+    const failureAssistant = assistantMessages[0];
+    const recoveryAssistant = assistantMessages[1];
+    const finalAssistant = assistantMessages[2];
+    const failureCalls = Array.isArray(failureAssistant?.tool_calls)
+      ? failureAssistant.tool_calls
+          .map(objectValue)
+          .filter((call): call is Readonly<Record<string, unknown>> => call !== null)
+      : [];
+    const recoveryCalls = Array.isArray(recoveryAssistant?.tool_calls)
+      ? recoveryAssistant.tool_calls
+          .map(objectValue)
+          .filter((call): call is Readonly<Record<string, unknown>> => call !== null)
+      : [];
+    const failureCall = failureCalls[0];
+    const recoveryCall = recoveryCalls[0];
+    const failureFunction = objectValue(failureCall?.function);
+    const recoveryFunction = objectValue(recoveryCall?.function);
+    const failureToolMessage = toolMessages[0];
+    const recoveryToolMessage = toolMessages[1];
+    if (
+      userMessages[0]?.content !== expectedUserText ||
+      failureCalls.length !== 1 ||
+      recoveryCalls.length !== 1 ||
+      typeof failureCall?.id !== "string" ||
+      failureFunction?.name !== "builtin-demo__calculator" ||
+      failureToolMessage?.tool_call_id !== failureCall.id ||
+      typeof failureToolMessage.content !== "string" ||
+      typeof recoveryCall?.id !== "string" ||
+      recoveryCall.id === failureCall.id ||
+      recoveryFunction?.name !== "builtin-demo__echo" ||
+      recoveryToolMessage?.tool_call_id !== recoveryCall.id ||
+      typeof recoveryToolMessage.content !== "string" ||
+      finalAssistant?.finish_reason !== "stop" ||
+      typeof finalAssistant.content !== "string" ||
+      !finalAssistant.content.includes(expectedAssistantText) ||
+      (Array.isArray(finalAssistant.tool_calls) && finalAssistant.tool_calls.length !== 0)
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_IDENTITY_FAILED",
+        "工具失败恢复历史的调用身份、结果关联、顺序或最终回复不一致。",
+      );
+    }
+    const failureArguments = structuredObject(
+      failureFunction.arguments,
+      "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_RESPONSE_INVALID",
+      "失败工具历史缺少结构化参数。",
+      "product_failed",
+    );
+    const failureResult = structuredObject(
+      failureToolMessage.content,
+      "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_RESPONSE_INVALID",
+      "失败工具历史缺少结构化结果。",
+      "product_failed",
+    );
+    const recoveryArguments = structuredObject(
+      recoveryFunction.arguments,
+      "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_RESPONSE_INVALID",
+      "恢复工具历史缺少结构化参数。",
+      "product_failed",
+    );
+    const recoveryResult = structuredObject(
+      recoveryToolMessage.content,
+      "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_RESPONSE_INVALID",
+      "恢复工具历史缺少结构化结果。",
+      "product_failed",
+    );
+    const assistantContentSha256 = sha256(finalAssistant.content);
+    if (
+      sha256(canonicalJson(failureArguments)) !== failureArgumentsSha256 ||
+      sha256(canonicalJson(failureResult)) !== failureResultSha256 ||
+      sha256(canonicalJson(recoveryArguments)) !== recoveryArgumentsSha256 ||
+      sha256(canonicalJson(recoveryResult)) !== recoveryResultSha256 ||
+      assistantContentSha256 !== expectedAssistantSha256
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_HASH_MISMATCH",
+        "工具失败、恢复或最终回复的持久化哈希与流式证据不一致。",
+      );
+    }
+    const traceEvents = items.flatMap((item) =>
+      Array.isArray(item.public_execution_trace)
+        ? item.public_execution_trace
+            .map(objectValue)
+            .filter((event): event is Readonly<Record<string, unknown>> => event !== null)
+        : [],
+    );
+    const traceCalls = traceEvents.filter((event) => event.kind === "tool_call");
+    const traceResults = traceEvents.filter((event) => event.kind === "tool_result");
+    if (
+      traceCalls.length !== 2 ||
+      traceResults.length !== 2 ||
+      traceCalls[0]?.id !== failureCall.id ||
+      traceCalls[0]?.name !== "builtin-demo__calculator" ||
+      traceResults[0]?.id !== failureCall.id ||
+      traceResults[0]?.name !== "builtin-demo__calculator" ||
+      traceResults[0]?.success !== false ||
+      traceCalls[1]?.id !== recoveryCall.id ||
+      traceCalls[1]?.name !== "builtin-demo__echo" ||
+      traceResults[1]?.id !== recoveryCall.id ||
+      traceResults[1]?.name !== "builtin-demo__echo" ||
+      traceResults[1]?.success !== true
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_TRACE_FAILED",
+        "工具失败恢复的公开执行轨迹与消息历史不一致。",
+      );
+    }
+    const tracePayloadHashes = [
+      sha256(
+        canonicalJson(
+          structuredObject(
+            traceCalls[0]?.arguments,
+            "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_RESPONSE_INVALID",
+            "失败工具公开轨迹缺少结构化参数。",
+            "product_failed",
+          ),
+        ),
+      ),
+      sha256(
+        canonicalJson(
+          structuredObject(
+            traceResults[0]?.result,
+            "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_RESPONSE_INVALID",
+            "失败工具公开轨迹缺少结构化结果。",
+            "product_failed",
+          ),
+        ),
+      ),
+      sha256(
+        canonicalJson(
+          structuredObject(
+            traceCalls[1]?.arguments,
+            "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_RESPONSE_INVALID",
+            "恢复工具公开轨迹缺少结构化参数。",
+            "product_failed",
+          ),
+        ),
+      ),
+      sha256(
+        canonicalJson(
+          structuredObject(
+            traceResults[1]?.result,
+            "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_RESPONSE_INVALID",
+            "恢复工具公开轨迹缺少结构化结果。",
+            "product_failed",
+          ),
+        ),
+      ),
+    ];
+    if (
+      tracePayloadHashes.join(",") !==
+      [
+        failureArgumentsSha256,
+        failureResultSha256,
+        recoveryArgumentsSha256,
+        recoveryResultSha256,
+      ].join(",")
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_TRACE_FAILED",
+        "工具失败恢复的公开执行轨迹与消息历史不一致。",
+      );
+    }
+    return {
+      conversationId,
+      messageCount: items.length,
+      userMessageCount: userMessages.length,
+      assistantMessageCount: assistantMessages.length,
+      toolMessageCount: toolMessages.length,
+      toolCallCount: 2,
+      toolResultCount: toolMessages.length,
+      traceToolCallCount: traceCalls.length,
+      traceToolResultCount: traceResults.length,
+      failureObserved: true,
+      recoveryObserved: true,
+      sequenceMatched: true,
+      expectedUserTextMatched: true,
+      expectedAssistantTextMatched: true,
+      assistantContentLength: finalAssistant.content.length,
+      assistantContentSha256,
+      assistantFinishReason: "stop",
+    };
+  }
   if (action === "adapter:spark-x-agent/tool.assert-history") {
     const expectedUserText = requiredString(params, "expectedUserText", variables, 20_000);
     const expectedAssistantText = requiredString(params, "expectedAssistantText", variables, 5_000);

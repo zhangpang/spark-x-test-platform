@@ -81,6 +81,8 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/tool.assert-safe-catalog`：校验 `builtin-demo` 三个内置只读工具在普通用户与管理员目录中一致，且用户投影不暴露连接配置；
 - `adapter:spark-x-agent/tool.invoke-safe`：只允许一次白名单内置工具调用，精确匹配工具名、参数、成功结果和最终回复，只输出计数、判定和 SHA-256；
 - `adapter:spark-x-agent/tool.assert-history`：重新登录并校验工具调用消息、工具结果、最终回复及 `public_execution_trace` 与流式哈希一致；
+- `adapter:spark-x-agent/tool.invoke-failure-recovery`：固定执行一次 calculator 除零失败和一次 echo 恢复，要求失败在前、恢复在后、调用 ID 独立且无额外工具，只输出计数、判定和两段 SHA-256；
+- `adapter:spark-x-agent/tool.assert-failure-recovery-history`：重新登录并校验六条有序消息、两次调用/结果、失败与成功标志、最终回复及两段 `public_execution_trace` 与流式哈希一致；
 - `adapter:spark-x-agent/automation.assert-lifecycle`：只操作本次运行登记且尚未触发的任务，按乐观版本修改、停用、重新启用和删除，并确认列表无残留、目标会话零调度消息；
 - `adapter:spark-x-agent/automation.wait-fired`：可引用创建回执的首次触发时间，校验真实调度误差以及 UTC/`Asia/Shanghai` 下一次计划均精确推进五分钟；
 - `adapter:spark-x-agent/automation.assert-no-duplicate-delivery`：一次调度完成后固定三次核对状态版本、触发游标和唯一消息对，任何第二次投递或内容漂移立即失败；

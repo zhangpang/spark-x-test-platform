@@ -141,7 +141,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.15.0",
+      version: "0.16.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -182,7 +182,15 @@ describe("spark-x-agent adapter", () => {
             actionLevel: "write",
           }),
           expect.objectContaining({
+            key: "tool.invoke-failure-recovery",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
             key: "tool.assert-history",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "tool.assert-failure-recovery-history",
             actionLevel: "write",
           }),
           expect.objectContaining({
@@ -2000,6 +2008,265 @@ describe("spark-x-agent adapter", () => {
     });
   });
 
+  it("records one calculator failure followed by one echo recovery without payload leakage", async () => {
+    const marker = `spark-x-tool-recovery-${variables["run.id"]}`;
+    const message = `回归 ${variables["run.id"]}：先调用计算器做 7÷0；确认失败后调用 echo 回显 ${marker}，最终回复 ${marker}`;
+    const failureArguments = { operation: "divide", a: 7, b: 0 };
+    const failureResult = { success: false, error: "division by zero" };
+    const recoveryArguments = { message: marker };
+    const recoveryResult = { success: true, echo: { message: marker } };
+    const finalContent = `计算失败已恢复：${marker}`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          { event: "conversation_id", data: { conversation_id: conversationId } },
+          {
+            event: "tool_call",
+            data: {
+              id: "call-failure-1",
+              name: "builtin-demo__calculator",
+              arguments: JSON.stringify({ b: 0, operation: "divide", a: 7 }),
+            },
+          },
+          {
+            event: "tool_result",
+            data: {
+              id: "call-failure-1",
+              name: "builtin-demo__calculator",
+              result: failureResult,
+              success: false,
+            },
+          },
+          {
+            event: "tool_call",
+            data: {
+              id: "call-recovery-2",
+              name: "builtin-demo__echo",
+              arguments: recoveryArguments,
+            },
+          },
+          {
+            event: "tool_result",
+            data: {
+              id: "call-recovery-2",
+              name: "builtin-demo__echo",
+              result: recoveryResult,
+              success: true,
+            },
+          },
+          { event: "content", data: { content: finalContent } },
+          {
+            event: "done",
+            data: { final_content: finalContent, truncated: false, stop_reason: "stop" },
+          },
+        ]),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/tool.invoke-failure-recovery",
+      environment,
+      {
+        ...credentials,
+        conversationId,
+        message,
+        expectedText: marker,
+        failureArgumentsJson: JSON.stringify(failureArguments),
+        failureResultJson: JSON.stringify(failureResult),
+        recoveryArgumentsJson: JSON.stringify(recoveryArguments),
+        recoveryResultJson: JSON.stringify(recoveryResult),
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      conversationId,
+      done: true,
+      failureObserved: true,
+      recoveryObserved: true,
+      sequenceMatched: true,
+      expectedTextMatched: true,
+      toolCallCount: 2,
+      toolResultCount: 2,
+      failedToolResultCount: 1,
+      successfulToolResultCount: 1,
+      reviewEventCount: 0,
+      failureCallIdSha256: createHash("sha256").update("call-failure-1").digest("hex"),
+      recoveryCallIdSha256: createHash("sha256").update("call-recovery-2").digest("hex"),
+      failureArgumentsSha256: hashCanonical(failureArguments),
+      failureResultSha256: hashCanonical(failureResult),
+      recoveryArgumentsSha256: hashCanonical(recoveryArguments),
+      recoveryResultSha256: hashCanonical(recoveryResult),
+      finalContentLength: finalContent.length,
+      finalContentSha256: createHash("sha256").update(finalContent).digest("hex"),
+      streamBytes: output.streamBytes,
+      truncated: false,
+    });
+    const evidence = JSON.stringify(output);
+    expect(evidence).not.toContain("division by zero");
+    expect(evidence).not.toContain(marker);
+    expect(evidence).not.toContain(finalContent);
+    expect(evidence).not.toContain("memory-only-access-token-value");
+  });
+
+  it("rejects a recovery tool result that remains failed", async () => {
+    const failureArguments = { operation: "divide", a: 7, b: 0 };
+    const failureResult = { success: false, error: "division by zero" };
+    const recoveryArguments = { message: "recover" };
+    const recoveryResult = { success: false, error: "echo unavailable" };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          { event: "conversation_id", data: { conversation_id: conversationId } },
+          {
+            event: "tool_call",
+            data: {
+              id: "call-failure-1",
+              name: "builtin-demo__calculator",
+              arguments: failureArguments,
+            },
+          },
+          {
+            event: "tool_result",
+            data: {
+              id: "call-failure-1",
+              name: "builtin-demo__calculator",
+              result: failureResult,
+              success: false,
+            },
+          },
+          {
+            event: "tool_call",
+            data: {
+              id: "call-recovery-2",
+              name: "builtin-demo__echo",
+              arguments: recoveryArguments,
+            },
+          },
+          {
+            event: "tool_result",
+            data: {
+              id: "call-recovery-2",
+              name: "builtin-demo__echo",
+              result: recoveryResult,
+              success: false,
+            },
+          },
+          { event: "content", data: { content: "recover" } },
+          { event: "done", data: { final_content: "recover", truncated: false } },
+        ]),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/tool.invoke-failure-recovery",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          message: "回归 ${run.id} 先失败再恢复",
+          expectedText: "recover",
+          failureArgumentsJson: JSON.stringify(failureArguments),
+          failureResultJson: JSON.stringify(failureResult),
+          recoveryArgumentsJson: JSON.stringify(recoveryArguments),
+          recoveryResultJson: JSON.stringify(recoveryResult),
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_TOOL_RECOVERY_SEQUENCE_FAILED",
+        classification: "test_failed",
+      },
+    });
+  });
+
+  it("rejects a recovery call emitted before the failed result was observed", async () => {
+    const failureArguments = { operation: "divide", a: 7, b: 0 };
+    const failureResult = { success: false, error: "division by zero" };
+    const recoveryArguments = { message: "recover" };
+    const recoveryResult = { success: true, echo: { message: "recover" } };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        sseResponse([
+          { event: "conversation_id", data: { conversation_id: conversationId } },
+          {
+            event: "tool_call",
+            data: {
+              id: "call-failure-1",
+              name: "builtin-demo__calculator",
+              arguments: failureArguments,
+            },
+          },
+          {
+            event: "tool_call",
+            data: {
+              id: "call-recovery-2",
+              name: "builtin-demo__echo",
+              arguments: recoveryArguments,
+            },
+          },
+          {
+            event: "tool_result",
+            data: {
+              id: "call-failure-1",
+              name: "builtin-demo__calculator",
+              result: failureResult,
+              success: false,
+            },
+          },
+          {
+            event: "tool_result",
+            data: {
+              id: "call-recovery-2",
+              name: "builtin-demo__echo",
+              result: recoveryResult,
+              success: true,
+            },
+          },
+          { event: "content", data: { content: "recover" } },
+          { event: "done", data: { final_content: "recover", truncated: false } },
+        ]),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/tool.invoke-failure-recovery",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          message: "回归 ${run.id} 先失败再恢复",
+          expectedText: "recover",
+          failureArgumentsJson: JSON.stringify(failureArguments),
+          failureResultJson: JSON.stringify(failureResult),
+          recoveryArgumentsJson: JSON.stringify(recoveryArguments),
+          recoveryResultJson: JSON.stringify(recoveryResult),
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_TOOL_RECOVERY_SEQUENCE_FAILED",
+        classification: "test_failed",
+      },
+    });
+  });
+
   it("links persisted tool history and public trace to the stream hashes", async () => {
     const marker = `spark-x-tool-${variables["run.id"]}:42`;
     const userContent = `回归 ${variables["run.id"]} 调用计算器并回复 ${marker}`;
@@ -2105,6 +2372,252 @@ describe("spark-x-agent adapter", () => {
       assistantContentLength: assistantContent.length,
       assistantContentSha256: assistantHash,
       assistantFinishReason: "stop",
+    });
+  });
+
+  it("links failed and recovered tool history to both streamed evidence pairs", async () => {
+    const marker = `spark-x-tool-recovery-${variables["run.id"]}`;
+    const userContent = `回归 ${variables["run.id"]} 先计算 7÷0，再用 echo 恢复 ${marker}`;
+    const assistantContent = `已从失败中恢复：${marker}`;
+    const failureArguments = { operation: "divide", a: 7, b: 0 };
+    const failureResult = { success: false, error: "division by zero" };
+    const recoveryArguments = { message: marker };
+    const recoveryResult = { success: true, echo: { message: marker } };
+    const failureArgumentsHash = hashCanonical(failureArguments);
+    const failureResultHash = hashCanonical(failureResult);
+    const recoveryArgumentsHash = hashCanonical(recoveryArguments);
+    const recoveryResultHash = hashCanonical(recoveryResult);
+    const assistantHash = createHash("sha256").update(assistantContent).digest("hex");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { role: "user", content: userContent, payload_truncated: false },
+              {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call-failure-1",
+                    function: {
+                      name: "builtin-demo__calculator",
+                      arguments: failureArguments,
+                    },
+                  },
+                ],
+                payload_truncated: false,
+                public_execution_trace: [
+                  {
+                    kind: "tool_call",
+                    id: "call-failure-1",
+                    name: "builtin-demo__calculator",
+                    arguments: failureArguments,
+                  },
+                ],
+              },
+              {
+                role: "tool",
+                content: JSON.stringify(failureResult),
+                tool_call_id: "call-failure-1",
+                payload_truncated: false,
+                public_execution_trace: [
+                  {
+                    kind: "tool_result",
+                    id: "call-failure-1",
+                    name: "builtin-demo__calculator",
+                    result: failureResult,
+                    success: false,
+                  },
+                ],
+              },
+              {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call-recovery-2",
+                    function: {
+                      name: "builtin-demo__echo",
+                      arguments: recoveryArguments,
+                    },
+                  },
+                ],
+                payload_truncated: false,
+                public_execution_trace: [
+                  {
+                    kind: "tool_call",
+                    id: "call-recovery-2",
+                    name: "builtin-demo__echo",
+                    arguments: recoveryArguments,
+                  },
+                ],
+              },
+              {
+                role: "tool",
+                content: JSON.stringify(recoveryResult),
+                tool_call_id: "call-recovery-2",
+                payload_truncated: false,
+                public_execution_trace: [
+                  {
+                    kind: "tool_result",
+                    id: "call-recovery-2",
+                    name: "builtin-demo__echo",
+                    result: recoveryResult,
+                    success: true,
+                  },
+                ],
+              },
+              {
+                role: "assistant",
+                content: assistantContent,
+                finish_reason: "stop",
+                tool_calls: [],
+                payload_truncated: false,
+              },
+            ],
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/tool.assert-failure-recovery-history",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          expectedUserText: userContent,
+          expectedAssistantText: marker,
+          expectedAssistantSha256: assistantHash,
+          failureArgumentsSha256: failureArgumentsHash,
+          failureResultSha256: failureResultHash,
+          recoveryArgumentsSha256: recoveryArgumentsHash,
+          recoveryResultSha256: recoveryResultHash,
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).resolves.toEqual({
+      conversationId,
+      messageCount: 6,
+      userMessageCount: 1,
+      assistantMessageCount: 3,
+      toolMessageCount: 2,
+      toolCallCount: 2,
+      toolResultCount: 2,
+      traceToolCallCount: 2,
+      traceToolResultCount: 2,
+      failureObserved: true,
+      recoveryObserved: true,
+      sequenceMatched: true,
+      expectedUserTextMatched: true,
+      expectedAssistantTextMatched: true,
+      assistantContentLength: assistantContent.length,
+      assistantContentSha256: assistantHash,
+      assistantFinishReason: "stop",
+    });
+  });
+
+  it("reports a stable trace mismatch when recovery history omits public trace events", async () => {
+    const marker = `spark-x-tool-recovery-${variables["run.id"]}`;
+    const userContent = `回归 ${variables["run.id"]} 先计算 7÷0，再用 echo 恢复 ${marker}`;
+    const assistantContent = `已从失败中恢复：${marker}`;
+    const failureArguments = { operation: "divide", a: 7, b: 0 };
+    const failureResult = { success: false, error: "division by zero" };
+    const recoveryArguments = { message: marker };
+    const recoveryResult = { success: true, echo: { message: marker } };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { role: "user", content: userContent, payload_truncated: false },
+              {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call-failure-1",
+                    function: {
+                      name: "builtin-demo__calculator",
+                      arguments: failureArguments,
+                    },
+                  },
+                ],
+                payload_truncated: false,
+              },
+              {
+                role: "tool",
+                content: JSON.stringify(failureResult),
+                tool_call_id: "call-failure-1",
+                payload_truncated: false,
+              },
+              {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call-recovery-2",
+                    function: {
+                      name: "builtin-demo__echo",
+                      arguments: recoveryArguments,
+                    },
+                  },
+                ],
+                payload_truncated: false,
+              },
+              {
+                role: "tool",
+                content: JSON.stringify(recoveryResult),
+                tool_call_id: "call-recovery-2",
+                payload_truncated: false,
+              },
+              {
+                role: "assistant",
+                content: assistantContent,
+                finish_reason: "stop",
+                tool_calls: [],
+                payload_truncated: false,
+              },
+            ],
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/tool.assert-failure-recovery-history",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          expectedUserText: userContent,
+          expectedAssistantText: marker,
+          expectedAssistantSha256: createHash("sha256").update(assistantContent).digest("hex"),
+          failureArgumentsSha256: hashCanonical(failureArguments),
+          failureResultSha256: hashCanonical(failureResult),
+          recoveryArgumentsSha256: hashCanonical(recoveryArguments),
+          recoveryResultSha256: hashCanonical(recoveryResult),
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_TOOL_RECOVERY_HISTORY_TRACE_FAILED",
+        classification: "test_failed",
+      },
     });
   });
 
