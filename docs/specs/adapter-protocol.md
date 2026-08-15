@@ -215,6 +215,12 @@ SHA-256。参数、结果、最终回答、凭据和 Token 均不进入平台证
 登记会话资源后、模型调用前重复执行该前置检查，既避免把环境缺口误报为模型或产品失败，也保证失败后
 `finally` 已持有可清理的会话 ID。
 
+MCP-001 以独立 `mcp` 模块用例复用 `tool.assert-safe-catalog` 的受信任连接器投影，因为该动作本身同时验证
+MCP Server 用户可见状态、管理员发现工具、只读风险策略和私有连接字段缺失。独立诊断套件支持显式声明
+`SPARK_X_AGENT_EXPECT_MCP_UNAVAILABLE=true`：管理员停用 `builtin-demo` 时，必须保留
+`SPARK_X_AGENT_SAFE_TOOL_CATALOG_UNAVAILABLE` 首次失败并返回 `inconclusive`，不会自动启动服务或把环境缺口
+记为产品失败；服务上线后则要求同一用例完整通过。
+
 KNOWLEDGE-BASE 动作不接受文件路径、文件内容、URL 或脚本参数；上传内容只能由适配器仓库代码生成固定的
 小型 PDF，并以知识库 UUID 作为幂等键。短期签名解析源只在 Worker 内存中从原始文档接口传递给知识库接口，
 不会进入输出或证据。完成判定同时核对知识库文档计数、解析终态、单一当前版本、Parser 版本和原始 PDF

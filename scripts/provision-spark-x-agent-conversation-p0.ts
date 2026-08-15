@@ -68,6 +68,8 @@ const runConversationReopenSmoke =
   process.env.SPARK_X_AGENT_RUN_CONVERSATION_REOPEN_SMOKE === "true";
 const runKnowledgeSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_SMOKE === "true";
 const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
+const runMcpSmoke = process.env.SPARK_X_AGENT_RUN_MCP_SMOKE === "true";
+const expectMcpUnavailable = process.env.SPARK_X_AGENT_EXPECT_MCP_UNAVAILABLE === "true";
 const runAutomationSmoke = process.env.SPARK_X_AGENT_RUN_AUTOMATION_SMOKE === "true";
 const useExistingSecrets = process.env.SPARK_X_AGENT_USE_EXISTING_SECRETS === "true";
 const testedVersion = process.env.SPARK_X_AGENT_TESTED_VERSION?.trim() || "test-environment";
@@ -1294,6 +1296,61 @@ function knowledgeScopeDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function mcpConnectorDefinition(): Readonly<Record<string, unknown>> {
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "MCP-001 内置连接器注册、连接与工具发现",
+      description:
+        "只读核对 builtin-demo 连接器的用户可见投影、运行状态、管理员工具发现结果和凭据边界；停用时稳定归类为环境前置条件失败。",
+      systemKey: "spark-x-agent",
+      moduleKey: "mcp",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "read",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "mcp", "p0", "core-smoke", "connector", "tool-discovery", "read-only"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 20_000,
+      caseTimeoutMs: 60_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: [],
+    steps: [
+      {
+        id: "assert-mcp-connector",
+        name: "校验内置连接器连接状态、工具发现与凭据边界",
+        kind: "action",
+        action: "adapter:spark-x-agent/tool.assert-safe-catalog",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+        },
+      },
+    ],
+    finally: [],
+  };
+}
+
 function skillPublicationDefinition(): Readonly<Record<string, unknown>> {
   return {
     schemaVersion: "1.0",
@@ -1620,9 +1677,9 @@ async function executeSmoke(
   check(accepted.status === 202, "Spark X Agent core smoke run was not newly accepted");
   const run = await waitForRun(accepted.body.id);
   check(run.gateResult === "passed", `Spark X Agent core smoke gate is ${String(run.gateResult)}`);
-  check(run.summary.passed === 10, "Spark X Agent core smoke cases did not all pass");
+  check(run.summary.passed === 11, "Spark X Agent core smoke cases did not all pass");
   check(run.firstFailure === null, "Spark X Agent core smoke retained an unexpected first failure");
-  check(run.cases.length === 10, "Spark X Agent core smoke run case linkage is incomplete");
+  check(run.cases.length === 11, "Spark X Agent core smoke run case linkage is incomplete");
   check(
     run.cases.every((item) => item.result === "passed"),
     "Spark X Agent core smoke case failed",
@@ -1632,8 +1689,8 @@ async function executeSmoke(
     "Spark X Agent core smoke cleanup status is invalid",
   );
   check(
-    run.steps.length === 46,
-    "Spark X Agent core smoke did not record thirty-five main steps and eleven finally steps",
+    run.steps.length === 47,
+    "Spark X Agent core smoke did not record thirty-six main steps and eleven finally steps",
   );
   check(
     run.steps.every((step) => step.status === "passed"),
@@ -1683,6 +1740,7 @@ async function executeSmoke(
         "finally:adapter:spark-x-agent/conversation.delete",
         "finally:adapter:spark-x-agent/knowledge-base.cleanup",
         "main:adapter:spark-x-agent/skill.assert-trusted-publication",
+        "main:adapter:spark-x-agent/tool.assert-safe-catalog",
         "main:adapter:spark-x-agent/conversation.create",
         "main:adapter:spark-x-agent/automation.create",
         "main:adapter:spark-x-agent/automation.wait-fired",
@@ -1783,6 +1841,7 @@ async function executeSmoke(
   assertKnowledgeEvidence(run);
   assertKnowledgeScopeEvidence(run);
   assertSkillEvidence(run);
+  assertMcpEvidence(run);
   assertAutomationEvidence(run);
   const evidence = JSON.stringify(run);
   if (password !== undefined) {
@@ -2040,6 +2099,39 @@ async function executeConversationReopenSmoke(
     );
   }
   return run;
+}
+
+function assertMcpEvidence(run: RunDetail): void {
+  const connector = run.steps.find((step) => step.stepId === "assert-mcp-connector");
+  const summary = connector?.outputSummary;
+  check(
+    summary?.serverName === "builtin-demo" &&
+      summary.visible === true &&
+      summary.running === true &&
+      summary.credentialFieldsAbsent === true &&
+      summary.advertisedToolCount === 3 &&
+      summary.enabledDiscoveredToolCount === 3 &&
+      summary.expectedToolsMatched === true &&
+      typeof summary.catalogSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(summary.catalogSha256),
+    "MCP-001 connector registration, running state or discovered-tool evidence is incomplete",
+  );
+  check(
+    Object.keys(summary).sort().join(",") ===
+      [
+        "advertisedToolCount",
+        "catalogSha256",
+        "credentialFieldsAbsent",
+        "enabledDiscoveredToolCount",
+        "expectedToolsMatched",
+        "running",
+        "serverName",
+        "visible",
+      ]
+        .sort()
+        .join(","),
+    "MCP-001 evidence contains unregistered fields that could expose connector configuration",
+  );
 }
 
 function assertSkillEvidence(run: RunDetail): void {
@@ -2376,6 +2468,79 @@ async function executeSkillSmoke(
   return run;
 }
 
+async function executeMcpSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-mcp-p0-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-mcp-p0-verification",
+      priority: 95,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent MCP run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  if (expectMcpUnavailable) {
+    check(run.gateResult === "inconclusive", "stopped MCP fixture did not make gate inconclusive");
+    check(run.summary.environment_failed === 1, "stopped MCP fixture was not environment_failed");
+    check(
+      run.firstFailure?.code === "SPARK_X_AGENT_SAFE_TOOL_CATALOG_UNAVAILABLE",
+      "stopped MCP fixture did not preserve its stable environment root cause",
+    );
+    check(
+      run.cases.length === 1 &&
+        run.cases[0]?.result === "environment_failed" &&
+        run.cases[0].cleanupStatus === "not_required",
+      "stopped MCP fixture case result or cleanup status is incorrect",
+    );
+    check(
+      run.steps.length === 1 &&
+        run.steps[0]?.stepId === "assert-mcp-connector" &&
+        run.steps[0].phase === "main" &&
+        run.steps[0].action === "adapter:spark-x-agent/tool.assert-safe-catalog" &&
+        run.steps[0].status === "failed",
+      "stopped MCP fixture structured failure evidence is incomplete",
+    );
+  } else {
+    check(run.gateResult === "passed", `Spark X Agent MCP gate is ${String(run.gateResult)}`);
+    check(run.summary.passed === 1, "Spark X Agent MCP case did not pass");
+    check(run.firstFailure === null, "Spark X Agent MCP run retained an unexpected failure");
+    check(
+      run.cases.length === 1 &&
+        run.cases[0]?.result === "passed" &&
+        run.cases[0].cleanupStatus === "not_required",
+      "Spark X Agent MCP case failed",
+    );
+    check(
+      run.steps.length === 1 &&
+        run.steps[0]?.stepId === "assert-mcp-connector" &&
+        run.steps[0].phase === "main" &&
+        run.steps[0].action === "adapter:spark-x-agent/tool.assert-safe-catalog" &&
+        run.steps[0].status === "passed",
+      "Spark X Agent MCP structured step sequence is incomplete",
+    );
+    assertMcpEvidence(run);
+  }
+  check(run.resources.length === 0, "read-only MCP assertion unexpectedly registered a resource");
+  check(run.cleanupJob === null, "read-only MCP assertion unexpectedly required compensation");
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into MCP evidence",
+    );
+  }
+  return run;
+}
+
 function assertAutomationEvidence(run: RunDetail): void {
   const create = run.steps.find(
     (step) => step.action === "adapter:spark-x-agent/automation.create",
@@ -2508,6 +2673,8 @@ const knowledgeBase = modules.get("knowledge-base");
 check(knowledgeBase !== undefined, "knowledge-base module was not provisioned");
 const skills = modules.get("skills");
 check(skills !== undefined, "skills module was not provisioned");
+const mcp = modules.get("mcp");
+check(mcp !== undefined, "mcp module was not provisioned");
 const automations = modules.get("automations");
 check(automations !== undefined, "automations module was not provisioned");
 const environment = await ensureEnvironment(system.id);
@@ -2584,6 +2751,14 @@ const skillPublicationCase = await ensureCase(
   skillPublicationDefinition(),
   "新增受信任 Skill 用户/管理员投影、有效能力、主资产和精确哈希 P0 校验",
 );
+const mcpConnectorCase = await ensureCase(
+  system.id,
+  mcp.id,
+  environment.id,
+  "MCP-001 内置连接器注册、连接与工具发现",
+  mcpConnectorDefinition(),
+  "新增内置连接器用户投影、运行前置条件、工具发现、只读风险策略和凭据边界 P0 校验",
+);
 const automationCase = await ensureCase(
   system.id,
   automations.id,
@@ -2634,6 +2809,13 @@ const skillSuite = await ensureSuite(
   "SKILL-001 受信任 Skill 发布清单、有效能力、主资产和精确内容哈希只读证据闭环。",
   [skillPublicationCase.testCase.id],
 );
+const mcpSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-mcp-p0",
+  "星火 Agent MCP P0 纵向切片",
+  "MCP-001 内置连接器注册、运行状态、工具发现、只读风险策略和凭据边界证据闭环。",
+  [mcpConnectorCase.testCase.id],
+);
 const automationSuite = await ensureSuite(
   system.id,
   "spark-x-agent-automations-p0",
@@ -2645,7 +2827,7 @@ const suite = await ensureSuite(
   system.id,
   "spark-x-agent-core-smoke",
   "星火 Agent 核心冒烟",
-  "发布后核心冒烟套件；当前包含 CONV-001/002、CHAT-001/002、TOOL-001/002、KB-001/002、SKILL-001 与 AUTO-001，后续按模块扩充到 10～12 条 P0。",
+  "发布后核心冒烟套件；当前包含 CONV-001/002、CHAT-001/002、TOOL-001/002、KB-001/002、SKILL-001、MCP-001 与 AUTO-001，共 11 条 P0 覆盖七个核心模块。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -2656,6 +2838,7 @@ const suite = await ensureSuite(
     knowledgeBaseCase.testCase.id,
     knowledgeScopeCase.testCase.id,
     skillPublicationCase.testCase.id,
+    mcpConnectorCase.testCase.id,
     automationCase.testCase.id,
   ],
 );
@@ -2666,6 +2849,7 @@ check(
     runConversationReopenSmoke,
     runKnowledgeSmoke,
     runSkillSmoke,
+    runMcpSmoke,
     runAutomationSmoke,
   ].filter(Boolean).length <= 1,
   "only one Spark X Agent smoke mode can be true",
@@ -2685,9 +2869,16 @@ const run = runSmoke
         ? await executeKnowledgeSmoke(system.id, environment.id, knowledgeBaseSuite.id, password)
         : runSkillSmoke
           ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
-          : runAutomationSmoke
-            ? await executeAutomationSmoke(system.id, environment.id, automationSuite.id, password)
-            : undefined;
+          : runMcpSmoke
+            ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
+            : runAutomationSmoke
+              ? await executeAutomationSmoke(
+                  system.id,
+                  environment.id,
+                  automationSuite.id,
+                  password,
+                )
+              : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
   : runConversationReopenSmoke
@@ -2696,13 +2887,15 @@ const scenario = runContextSmoke
       ? "spark-x-agent-knowledge-base-p0"
       : runSkillSmoke
         ? "spark-x-agent-skills-p0"
-        : runAutomationSmoke
-          ? "spark-x-agent-automations-p0"
-          : "spark-x-agent-core-smoke";
+        : runMcpSmoke
+          ? "spark-x-agent-mcp-p0"
+          : runAutomationSmoke
+            ? "spark-x-agent-automations-p0"
+            : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
-    status: run === undefined ? "provisioned" : "passed",
+    status: run === undefined ? "provisioned" : run.gateResult,
     scenario,
     assertions:
       run === undefined
@@ -2715,10 +2908,14 @@ console.info(
               ? 32
               : runSkillSmoke
                 ? 12
-                : runAutomationSmoke
-                  ? 20
-                  : 149,
-    caseCount: 10,
+                : runMcpSmoke
+                  ? expectMcpUnavailable
+                    ? 10
+                    : 12
+                  : runAutomationSmoke
+                    ? 20
+                    : 161,
+    caseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
     systemId: system.id,
@@ -2741,6 +2938,8 @@ console.info(
     knowledgeScopeCaseVersionId: knowledgeScopeCase.version.id,
     skillPublicationCaseId: skillPublicationCase.testCase.id,
     skillPublicationCaseVersionId: skillPublicationCase.version.id,
+    mcpConnectorCaseId: mcpConnectorCase.testCase.id,
+    mcpConnectorCaseVersionId: mcpConnectorCase.version.id,
     automationCaseId: automationCase.testCase.id,
     automationCaseVersionId: automationCase.version.id,
     conversationSuiteId: conversationSuite.id,
@@ -2749,6 +2948,7 @@ console.info(
     toolSuiteId: toolSuite.id,
     knowledgeBaseSuiteId: knowledgeBaseSuite.id,
     skillSuiteId: skillSuite.id,
+    mcpSuiteId: mcpSuite.id,
     automationSuiteId: automationSuite.id,
     suiteId: suite.id,
     ...(run === undefined ? {} : { runId: run.id, gateResult: run.gateResult }),
