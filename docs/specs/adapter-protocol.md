@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -188,17 +188,17 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.21.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+当前 `0.22.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
 `conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
-`chat.cancel-and-resume`、`chat.assert-provider-failure-retry`、`chat.assert-history`、`chat.assert-context-history`、
-`provider.create-transient-failure-fixture`、`provider.cleanup-transient-failure-fixture`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
+`chat.cancel-and-resume`、`chat.assert-provider-failure-retry`、`chat.assert-context-compaction-continuity`、`chat.assert-history`、`chat.assert-context-history`、
+`provider.create-transient-failure-fixture`、`provider.create-context-compaction-fixture`、`provider.cleanup-transient-failure-fixture`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
 `tool.invoke-failure-recovery`、`tool.assert-history`、`tool.assert-failure-recovery-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-large-table-continuation`、`knowledge-base.assert-conversation-scope`、
 `knowledge-base.query-and-assert-evidence`、`knowledge-base.assert-cleaned-state`、`knowledge-base.cleanup` 和
 `skill.assert-trusted-publication`，以及 `automation.create`、`automation.wait-fired`、`automation.assert-no-duplicate-delivery`、`automation.assert-lifecycle` 和
 `automation.cleanup`。动作只调用适配器内固定的 `/trade/api`、`/trade-domain-api` 路径、KB-006 所需且与被测环境同主机的固定
-`http://<environment-host>:18121/mcp/document` 解析检索端点，以及 CHAT-004 固定的同主机不可达 Provider 故障端点；所有目标必须先命中
+`http://<environment-host>:18121/mcp/document` 解析检索端点、CHAT-004 固定的同主机不可达 Provider 故障端点，以及 CHAT-005 固定的同主机端口 4173 上下文压缩夹具；所有目标必须先命中
 环境 allowlist，所有实际请求与
 重定向执行环境 allowlist 校验；登录 Token、用户密码和模型回答正文都不进入输出、日志、资源台账或
 结构化证据。`conversation.assert-recent` 不把列表响应缺失的 `message_count` 当作零，而是通过会话历史接口
@@ -235,6 +235,11 @@ SHA-256、长度、Turn ID 和状态计数。
 必须使用派生的新幂等键、新 Turn 和新消息标识，以 `completed/stop` 完成。最终历史严格为失败输入、重试输入、成功助手回复三条且无工具消息。
 固定故障不使用平台诊断重试；原 Provider 恢复失败不覆盖更早的入队首错。`provider.cleanup-transient-failure-fixture` 可被普通 `finally` 和独立补偿调用，
 总是先激活登记的原 Provider，再删除临时夹具并验证唯一活跃 Provider，输出不含 Provider URL、哨兵、消息正文或凭据。
+`provider.create-context-compaction-fixture` 固定构造同环境主机端口 4173、版本化夹具路径、OpenAI 协议、固定模型和无真实权限 Bearer，不接受 URL、host、模型或 API Key 参数。
+夹具 API 仅在 `PLATFORM_CONTEXT_COMPACTION_FIXTURE_ENABLED=true` 时注册，拒绝额外顶层字段、非固定模型、超过 96 条消息或 900,000 字节文本，不转发请求、不安装或执行依赖、不记录消息正文。
+`chat.assert-context-compaction-continuity` 激活夹具后先产生唯一 `document_search` 调用/结果，再用最多 24 轮受控消息触发语义压缩；必须恰好按序观察 `context_compacting/context_ready`。
+摘要夹具只有在被压缩区包含运行锚点、扁平工具调用和匹配结果时才登记固定工具状态。后续独立请求必须通过持久化摘要恢复成功标识且不立即重复压缩；完整历史、公开轨迹、调用 ID、参数、结果和动态消息基数再次逐项核对。
+任何首次失败直接保留并进入 `finally`；普通清理和独立补偿都先恢复原 Provider，再删除夹具及会话。填充消息、摘要正文、Provider URL、非凭据 Bearer、工具参数/结果原文和登录凭据不进入结构化证据。
 
 TOOL 动作仅允许仓库内置的 `builtin-demo__calculator`、`builtin-demo__echo` 和 `builtin-demo__time` 只读
 工具。目录校验同时检查普通用户投影不含连接命令、环境变量、地址、工作目录或错误详情，以及管理员登记

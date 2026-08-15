@@ -100,6 +100,8 @@ npm run compose:down
 
 四项全部为空时回调入口以稳定的 `RELEASE_HOOK_DISABLED` 返回 `503`；部分配置、弱密钥或非法 UUID 会阻止 API 启动。签名和联动约定见[发布回调协议](../operations/spark-x-agent-release-hook.md)。
 
+CHAT-005 的确定性 Provider 夹具只用于受控测试环境。API 容器必须显式设置 `PLATFORM_CONTEXT_COMPACTION_FIXTURE_ENABLED=true` 才注册固定端点；默认值为 `false`。夹具不使用真实密钥、不转发 Provider 请求，也不能作为通用模型接口。
+
 ## 7. 当前实施边界
 
 - Scheduler继续通过内部控制队列维护心跳；Worker另消费优先级运行队列；

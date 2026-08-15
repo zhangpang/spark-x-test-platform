@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -31,9 +31,21 @@
           "additionalProperties": false,
           "required": ["username", "password", "title"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
           }
         },
         "outputSchema": {
@@ -41,8 +53,13 @@
           "additionalProperties": false,
           "required": ["conversationId", "title"],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "title": { "type": "string" }
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "title": {
+              "type": "string"
+            }
           }
         }
       },
@@ -58,11 +75,30 @@
           "additionalProperties": false,
           "required": ["username", "password", "conversationId", "title"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "title": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "expectedMessageCount": { "type": "integer", "minimum": 0, "maximum": 99 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "expectedMessageCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 99
+            }
           }
         },
         "outputSchema": {
@@ -77,12 +113,27 @@
             "messageCountSource"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "listed": { "const": true },
-            "occurrenceCount": { "const": 1 },
-            "recentPosition": { "type": "integer", "minimum": 0 },
-            "messageCount": { "type": "integer", "minimum": 0 },
-            "messageCountSource": { "const": "conversation-history" }
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "listed": {
+              "const": true
+            },
+            "occurrenceCount": {
+              "const": 1
+            },
+            "recentPosition": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "messageCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "messageCountSource": {
+              "const": "conversation-history"
+            }
           }
         }
       },
@@ -98,16 +149,34 @@
           "additionalProperties": false,
           "required": ["username", "password", "conversationId", "title", "expectedOrder"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
             "expectedOrder": {
               "type": "array",
               "minItems": 3,
               "maxItems": 3,
               "uniqueItems": true,
-              "items": { "type": "string", "format": "uuid" }
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
             }
           }
         },
@@ -130,19 +199,54 @@
             "orderStable"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "renamed": { "const": true },
-            "titleSource": { "const": "manual" },
-            "titleSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "pageSize": { "const": 2 },
-            "expectedConversationCount": { "const": 3 },
-            "firstSweepPages": { "type": "integer", "minimum": 2, "maximum": 100 },
-            "secondSweepPages": { "type": "integer", "minimum": 2, "maximum": 100 },
-            "distinctExpectedPages": { "type": "integer", "minimum": 2, "maximum": 3 },
-            "duplicateCount": { "const": 0 },
-            "missingCount": { "const": 0 },
-            "crossPage": { "const": true },
-            "orderStable": { "const": true }
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "renamed": {
+              "const": true
+            },
+            "titleSource": {
+              "const": "manual"
+            },
+            "titleSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "pageSize": {
+              "const": 2
+            },
+            "expectedConversationCount": {
+              "const": 3
+            },
+            "firstSweepPages": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 100
+            },
+            "secondSweepPages": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 100
+            },
+            "distinctExpectedPages": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 3
+            },
+            "duplicateCount": {
+              "const": 0
+            },
+            "missingCount": {
+              "const": 0
+            },
+            "crossPage": {
+              "const": true
+            },
+            "orderStable": {
+              "const": true
+            }
           }
         }
       },
@@ -158,9 +262,20 @@
           "additionalProperties": false,
           "required": ["username", "password", "conversationId"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         },
         "outputSchema": {
@@ -176,13 +291,32 @@
             "uniqueDeletedRecord"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "detailState": { "enum": ["deleted", "missing"] },
-            "activeOccurrences": { "const": 0 },
-            "deletedOccurrences": { "const": 1 },
-            "activePagesScanned": { "type": "integer", "minimum": 1, "maximum": 10 },
-            "deletedPagesScanned": { "type": "integer", "minimum": 1, "maximum": 10 },
-            "uniqueDeletedRecord": { "const": true }
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "detailState": {
+              "enum": ["deleted", "missing"]
+            },
+            "activeOccurrences": {
+              "const": 0
+            },
+            "deletedOccurrences": {
+              "const": 1
+            },
+            "activePagesScanned": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "deletedPagesScanned": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "uniqueDeletedRecord": {
+              "const": true
+            }
           }
         }
       },
@@ -199,9 +333,21 @@
           "additionalProperties": false,
           "required": ["username", "password", "name"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "name": { "type": "string", "minLength": 1, "maxLength": 200 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
           }
         },
         "outputSchema": {
@@ -218,14 +364,38 @@
             "nameSha256"
           ],
           "properties": {
-            "providerFixtureResourceId": { "type": "string", "minLength": 73, "maxLength": 73 },
-            "fixtureProviderId": { "type": "string", "format": "uuid" },
-            "originalProviderId": { "type": "string", "format": "uuid" },
-            "fixtureCreated": { "const": true },
-            "originalProviderActive": { "const": true },
-            "faultTargetAllowed": { "const": true },
-            "faultBaseUrlSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "nameSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "providerFixtureResourceId": {
+              "type": "string",
+              "minLength": 73,
+              "maxLength": 73
+            },
+            "fixtureProviderId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "originalProviderId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "fixtureCreated": {
+              "const": true
+            },
+            "originalProviderActive": {
+              "const": true
+            },
+            "faultTargetAllowed": {
+              "const": true
+            },
+            "faultBaseUrlSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "nameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         }
       },
@@ -241,8 +411,16 @@
           "additionalProperties": false,
           "required": ["username", "password", "providerFixtureResourceId"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
             "providerFixtureResourceId": {
               "type": "string",
               "minLength": 73,
@@ -265,9 +443,94 @@
               "minLength": 64,
               "maxLength": 64
             },
-            "originalProviderActive": { "const": true },
-            "fixtureDeleted": { "const": true },
-            "activeProviderCount": { "const": 1 }
+            "originalProviderActive": {
+              "const": true
+            },
+            "fixtureDeleted": {
+              "const": true
+            },
+            "activeProviderCount": {
+              "const": 1
+            }
+          }
+        }
+      },
+      {
+        "key": "provider.create-context-compaction-fixture",
+        "name": "创建上下文压缩 Provider 夹具",
+        "description": "登记固定、受限且不转发请求的 OpenAI 兼容 Provider 夹具，并冻结原活跃 Provider 标识供 finally 与中断补偿。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 20000,
+        "producesResource": true,
+        "cleanupAction": "provider.cleanup-transient-failure-fixture",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "name"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "providerFixtureResourceId",
+            "fixtureProviderId",
+            "originalProviderId",
+            "fixtureCreated",
+            "originalProviderActive",
+            "contextFixtureTargetAllowed",
+            "contextBaseUrlSha256",
+            "nameSha256"
+          ],
+          "properties": {
+            "providerFixtureResourceId": {
+              "type": "string",
+              "minLength": 73,
+              "maxLength": 73
+            },
+            "fixtureProviderId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "originalProviderId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "fixtureCreated": {
+              "const": true
+            },
+            "originalProviderActive": {
+              "const": true
+            },
+            "contextFixtureTargetAllowed": {
+              "const": true
+            },
+            "contextBaseUrlSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "nameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         }
       },
@@ -283,10 +546,25 @@
           "additionalProperties": false,
           "required": ["username", "password", "conversationId", "message", "expectedText"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "message": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
             "expectedText": {
               "type": "string",
               "minLength": 1,
@@ -314,30 +592,68 @@
             "truncated"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "done": { "const": true },
-            "expectedTextMatched": { "const": true },
-            "contentEventCount": { "type": "integer", "minimum": 1 },
-            "statusEventCount": { "type": "integer", "minimum": 0 },
-            "assistantPreviewEventCount": { "type": "integer", "minimum": 0 },
-            "toolEventCount": { "type": "integer", "minimum": 0 },
-            "skillEventCount": { "type": "integer", "minimum": 0 },
-            "reviewEventCount": { "type": "integer", "minimum": 0 },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "done": {
+              "const": true
+            },
+            "expectedTextMatched": {
+              "const": true
+            },
+            "contentEventCount": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "statusEventCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "assistantPreviewEventCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "toolEventCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "skillEventCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reviewEventCount": {
+              "type": "integer",
+              "minimum": 0
+            },
             "streamBytes": {
               "type": "integer",
               "minimum": 1,
               "maximum": 1000000
             },
-            "streamedContentLength": { "type": "integer", "minimum": 1 },
-            "finalContentLength": { "type": "integer", "minimum": 1 },
+            "streamedContentLength": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "finalContentLength": {
+              "type": "integer",
+              "minimum": 1
+            },
             "finalContentSha256": {
               "type": "string",
               "minLength": 64,
               "maxLength": 64
             },
-            "truncated": { "const": false },
-            "stopReason": { "type": "string" },
-            "durationMs": { "type": "number", "minimum": 0 }
+            "truncated": {
+              "const": false
+            },
+            "stopReason": {
+              "type": "string"
+            },
+            "durationMs": {
+              "type": "number",
+              "minimum": 0
+            }
           }
         }
       },
@@ -362,18 +678,44 @@
             "expectedText"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
             "providerFixtureResourceId": {
               "type": "string",
               "minLength": 73,
               "maxLength": 73
             },
-            "requestId": { "type": "string", "format": "uuid" },
-            "failureMessage": { "type": "string", "minLength": 1, "maxLength": 20000 },
-            "retryMessage": { "type": "string", "minLength": 1, "maxLength": 20000 },
-            "expectedText": { "type": "string", "minLength": 1, "maxLength": 5000 }
+            "requestId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "failureMessage": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
+            "retryMessage": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
+            "expectedText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            }
           }
         },
         "outputSchema": {
@@ -404,28 +746,233 @@
             "retryPollAttempts"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "failedTurnId": { "type": "string", "format": "uuid" },
-            "retryTurnId": { "type": "string", "format": "uuid" },
-            "firstFailureVisible": { "const": true },
-            "failureCode": { "const": "provider_unavailable" },
-            "failureRetryable": { "const": true },
-            "failedAssistantAbsent": { "const": true },
-            "retryCompleted": { "const": true },
-            "independentAttempts": { "const": true },
-            "messageCardinalityMatched": { "const": true },
-            "messageCount": { "const": 3 },
-            "failedUserMessageCount": { "const": 1 },
-            "retryUserMessageCount": { "const": 1 },
-            "retryAssistantMessageCount": { "const": 1 },
-            "toolMessageCount": { "const": 0 },
-            "expectedTextMatched": { "const": true },
-            "failureInputSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "retryInputSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "retryAssistantSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "retryAssistantContentLength": { "type": "integer", "minimum": 1 },
-            "failurePollAttempts": { "type": "integer", "minimum": 1, "maximum": 300 },
-            "retryPollAttempts": { "type": "integer", "minimum": 1, "maximum": 600 }
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "failedTurnId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "retryTurnId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "firstFailureVisible": {
+              "const": true
+            },
+            "failureCode": {
+              "const": "provider_unavailable"
+            },
+            "failureRetryable": {
+              "const": true
+            },
+            "failedAssistantAbsent": {
+              "const": true
+            },
+            "retryCompleted": {
+              "const": true
+            },
+            "independentAttempts": {
+              "const": true
+            },
+            "messageCardinalityMatched": {
+              "const": true
+            },
+            "messageCount": {
+              "const": 3
+            },
+            "failedUserMessageCount": {
+              "const": 1
+            },
+            "retryUserMessageCount": {
+              "const": 1
+            },
+            "retryAssistantMessageCount": {
+              "const": 1
+            },
+            "toolMessageCount": {
+              "const": 0
+            },
+            "expectedTextMatched": {
+              "const": true
+            },
+            "failureInputSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "retryInputSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "retryAssistantSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "retryAssistantContentLength": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "failurePollAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            },
+            "retryPollAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            }
+          }
+        }
+      },
+      {
+        "key": "chat.assert-context-compaction-continuity",
+        "name": "校验长上下文压缩续接",
+        "description": "通过受限 Provider 夹具和内置只读 document_search 产生真实工具历史，触发语义压缩后以独立请求验证关键事实、工具状态与持久化游标连续。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 240000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "conversationId", "providerFixtureResourceId"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "providerFixtureResourceId": {
+              "type": "string",
+              "minLength": 73,
+              "maxLength": 73
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "compactionObserved",
+            "contextCompactingCount",
+            "contextReadyCount",
+            "phaseOrderMatched",
+            "durableContinuation",
+            "durableCursorContinued",
+            "toolStatePreserved",
+            "toolCallCount",
+            "toolResultCount",
+            "toolCallIdSha256",
+            "toolArgumentsSha256",
+            "toolResultSha256",
+            "triggerRound",
+            "continuationRecompactionCount",
+            "messageCount",
+            "userMessageCount",
+            "assistantMessageCount",
+            "toolMessageCount",
+            "traceToolCallCount",
+            "traceToolResultCount",
+            "continuationContentSha256"
+          ],
+          "properties": {
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "compactionObserved": {
+              "const": true
+            },
+            "contextCompactingCount": {
+              "const": 1
+            },
+            "contextReadyCount": {
+              "const": 1
+            },
+            "phaseOrderMatched": {
+              "const": true
+            },
+            "durableContinuation": {
+              "const": true
+            },
+            "durableCursorContinued": {
+              "const": true
+            },
+            "toolStatePreserved": {
+              "const": true
+            },
+            "toolCallCount": {
+              "const": 1
+            },
+            "toolResultCount": {
+              "const": 1
+            },
+            "toolCallIdSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "toolArgumentsSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "toolResultSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "triggerRound": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 24
+            },
+            "continuationRecompactionCount": {
+              "const": 0
+            },
+            "messageCount": {
+              "type": "integer",
+              "minimum": 8,
+              "maximum": 60
+            },
+            "userMessageCount": {
+              "type": "integer",
+              "minimum": 3,
+              "maximum": 26
+            },
+            "assistantMessageCount": {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 27
+            },
+            "toolMessageCount": {
+              "const": 1
+            },
+            "traceToolCallCount": {
+              "const": 1
+            },
+            "traceToolResultCount": {
+              "const": 1
+            },
+            "continuationContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         }
       },
@@ -449,13 +996,39 @@
             "expectedText"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "requestId": { "type": "string", "format": "uuid" },
-            "cancelMessage": { "type": "string", "minLength": 1, "maxLength": 20000 },
-            "resumeMessage": { "type": "string", "minLength": 1, "maxLength": 20000 },
-            "expectedText": { "type": "string", "minLength": 1, "maxLength": 5000 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "cancelMessage": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
+            "resumeMessage": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
+            "expectedText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            }
           }
         },
         "outputSchema": {
@@ -486,28 +1059,88 @@
             "resumePollAttempts"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "cancelledTurnId": { "type": "string", "format": "uuid" },
-            "resumedTurnId": { "type": "string", "format": "uuid" },
-            "cancelRequested": { "const": true },
-            "cancelActionBoundary": { "const": "none" },
-            "cancelledStatus": { "const": "cancelled" },
-            "cancelledAssistantAbsent": { "const": true },
-            "resumeCompleted": { "const": true },
-            "messageCount": { "const": 3 },
-            "cancelledUserMessageCount": { "const": 1 },
-            "resumedUserMessageCount": { "const": 1 },
-            "resumedAssistantMessageCount": { "const": 1 },
-            "toolMessageCount": { "const": 0 },
-            "ghostAssistantCount": { "const": 0 },
-            "expectedTextMatched": { "const": true },
-            "cancelInputSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "resumeInputSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "resumeAssistantSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "resumeAssistantContentLength": { "type": "integer", "minimum": 1 },
-            "activePollAttempts": { "type": "integer", "minimum": 1, "maximum": 200 },
-            "cancelPollAttempts": { "type": "integer", "minimum": 1, "maximum": 300 },
-            "resumePollAttempts": { "type": "integer", "minimum": 1, "maximum": 600 }
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "cancelledTurnId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "resumedTurnId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "cancelRequested": {
+              "const": true
+            },
+            "cancelActionBoundary": {
+              "const": "none"
+            },
+            "cancelledStatus": {
+              "const": "cancelled"
+            },
+            "cancelledAssistantAbsent": {
+              "const": true
+            },
+            "resumeCompleted": {
+              "const": true
+            },
+            "messageCount": {
+              "const": 3
+            },
+            "cancelledUserMessageCount": {
+              "const": 1
+            },
+            "resumedUserMessageCount": {
+              "const": 1
+            },
+            "resumedAssistantMessageCount": {
+              "const": 1
+            },
+            "toolMessageCount": {
+              "const": 0
+            },
+            "ghostAssistantCount": {
+              "const": 0
+            },
+            "expectedTextMatched": {
+              "const": true
+            },
+            "cancelInputSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "resumeInputSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "resumeAssistantSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "resumeAssistantContentLength": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "activePollAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "cancelPollAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            },
+            "resumePollAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            }
           }
         }
       },
@@ -530,9 +1163,20 @@
             "expectedAssistantSha256"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
             "expectedUserText": {
               "type": "string",
               "minLength": 1,
@@ -565,20 +1209,41 @@
             "assistantFinishReason"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "messageCount": { "type": "integer", "minimum": 2 },
-            "userMessageCount": { "const": 1 },
-            "assistantMessageCount": { "const": 1 },
-            "expectedUserTextMatched": { "const": true },
-            "expectedAssistantTextMatched": { "const": true },
-            "assistantContentLength": { "type": "integer", "minimum": 1 },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "messageCount": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "userMessageCount": {
+              "const": 1
+            },
+            "assistantMessageCount": {
+              "const": 1
+            },
+            "expectedUserTextMatched": {
+              "const": true
+            },
+            "expectedAssistantTextMatched": {
+              "const": true
+            },
+            "assistantContentLength": {
+              "type": "integer",
+              "minimum": 1
+            },
             "assistantContentSha256": {
               "type": "string",
               "minLength": 64,
               "maxLength": 64
             },
-            "assistantFinishReason": { "const": "stop" },
-            "assistantTurnStatus": { "type": "string" }
+            "assistantFinishReason": {
+              "const": "stop"
+            },
+            "assistantTurnStatus": {
+              "type": "string"
+            }
           }
         }
       },
@@ -604,16 +1269,35 @@
             "forbiddenText"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "firstUserText": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "firstUserText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
             "firstAssistantSha256": {
               "type": "string",
               "minLength": 64,
               "maxLength": 64
             },
-            "secondUserText": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "secondUserText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
             "secondExpectedText": {
               "type": "string",
               "minLength": 1,
@@ -624,7 +1308,11 @@
               "minLength": 64,
               "maxLength": 64
             },
-            "forbiddenText": { "type": "string", "minLength": 1, "maxLength": 5000 }
+            "forbiddenText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            }
           }
         },
         "outputSchema": {
@@ -646,16 +1334,37 @@
             "assistantFinishReasonsMatched"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "messageCount": { "const": 4 },
-            "userMessageCount": { "const": 2 },
-            "assistantMessageCount": { "const": 2 },
-            "toolMessageCount": { "const": 0 },
-            "expectedOrderMatched": { "const": true },
-            "firstAssistantHashMatched": { "const": true },
-            "secondAssistantHashMatched": { "const": true },
-            "secondExpectedTextMatched": { "const": true },
-            "forbiddenTextAbsent": { "const": true },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "messageCount": {
+              "const": 4
+            },
+            "userMessageCount": {
+              "const": 2
+            },
+            "assistantMessageCount": {
+              "const": 2
+            },
+            "toolMessageCount": {
+              "const": 0
+            },
+            "expectedOrderMatched": {
+              "const": true
+            },
+            "firstAssistantHashMatched": {
+              "const": true
+            },
+            "secondAssistantHashMatched": {
+              "const": true
+            },
+            "secondExpectedTextMatched": {
+              "const": true
+            },
+            "forbiddenTextAbsent": {
+              "const": true
+            },
             "firstAssistantContentSha256": {
               "type": "string",
               "minLength": 64,
@@ -666,7 +1375,9 @@
               "minLength": 64,
               "maxLength": 64
             },
-            "assistantFinishReasonsMatched": { "const": true }
+            "assistantFinishReasonsMatched": {
+              "const": true
+            }
           }
         }
       },
@@ -682,8 +1393,16 @@
           "additionalProperties": false,
           "required": ["username", "password"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
           }
         },
         "outputSchema": {
@@ -703,17 +1422,41 @@
             "catalogSha256"
           ],
           "properties": {
-            "serverName": { "const": "builtin-demo" },
-            "visible": { "const": true },
-            "running": { "const": true },
-            "credentialFieldsAbsent": { "const": true },
-            "advertisedToolCount": { "const": 3 },
-            "enabledDiscoveredToolCount": { "const": 3 },
-            "expectedToolsMatched": { "const": true },
-            "writeToolsAbsent": { "const": true },
-            "reviewRequiredToolsAbsent": { "const": true },
-            "unsafeRiskToolsAbsent": { "const": true },
-            "catalogSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "serverName": {
+              "const": "builtin-demo"
+            },
+            "visible": {
+              "const": true
+            },
+            "running": {
+              "const": true
+            },
+            "credentialFieldsAbsent": {
+              "const": true
+            },
+            "advertisedToolCount": {
+              "const": 3
+            },
+            "enabledDiscoveredToolCount": {
+              "const": 3
+            },
+            "expectedToolsMatched": {
+              "const": true
+            },
+            "writeToolsAbsent": {
+              "const": true
+            },
+            "reviewRequiredToolsAbsent": {
+              "const": true
+            },
+            "unsafeRiskToolsAbsent": {
+              "const": true
+            },
+            "catalogSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         }
       },
@@ -738,12 +1481,35 @@
             "expectedResultJson"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "message": { "type": "string", "minLength": 1, "maxLength": 20000 },
-            "expectedText": { "type": "string", "minLength": 1, "maxLength": 5000 },
-            "expectedToolName": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
+            "expectedText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "expectedToolName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
             "expectedArgumentsJson": {
               "type": "string",
               "minLength": 2,
@@ -778,26 +1544,66 @@
             "truncated"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "done": { "const": true },
-            "expectedTextMatched": { "const": true },
-            "expectedToolNameMatched": { "const": true },
-            "argumentsMatched": { "const": true },
-            "resultMatched": { "const": true },
-            "toolCallCount": { "const": 1 },
-            "toolResultCount": { "const": 1 },
-            "reviewEventCount": { "const": 0 },
-            "toolCallIdSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "argumentsSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "resultSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "finalContentLength": { "type": "integer", "minimum": 1 },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "done": {
+              "const": true
+            },
+            "expectedTextMatched": {
+              "const": true
+            },
+            "expectedToolNameMatched": {
+              "const": true
+            },
+            "argumentsMatched": {
+              "const": true
+            },
+            "resultMatched": {
+              "const": true
+            },
+            "toolCallCount": {
+              "const": 1
+            },
+            "toolResultCount": {
+              "const": 1
+            },
+            "reviewEventCount": {
+              "const": 0
+            },
+            "toolCallIdSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "argumentsSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "resultSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "finalContentLength": {
+              "type": "integer",
+              "minimum": 1
+            },
             "finalContentSha256": {
               "type": "string",
               "minLength": 64,
               "maxLength": 64
             },
-            "streamBytes": { "type": "integer", "minimum": 1, "maximum": 1000000 },
-            "truncated": { "const": false }
+            "streamBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "truncated": {
+              "const": false
+            }
           }
         }
       },
@@ -823,15 +1629,50 @@
             "recoveryResultJson"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "message": { "type": "string", "minLength": 1, "maxLength": 20000 },
-            "expectedText": { "type": "string", "minLength": 1, "maxLength": 5000 },
-            "failureArgumentsJson": { "type": "string", "minLength": 2, "maxLength": 20000 },
-            "failureResultJson": { "type": "string", "minLength": 2, "maxLength": 20000 },
-            "recoveryArgumentsJson": { "type": "string", "minLength": 2, "maxLength": 20000 },
-            "recoveryResultJson": { "type": "string", "minLength": 2, "maxLength": 20000 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
+            "expectedText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "failureArgumentsJson": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 20000
+            },
+            "failureResultJson": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 20000
+            },
+            "recoveryArgumentsJson": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 20000
+            },
+            "recoveryResultJson": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 20000
+            }
           }
         },
         "outputSchema": {
@@ -861,27 +1702,87 @@
             "truncated"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "done": { "const": true },
-            "failureObserved": { "const": true },
-            "recoveryObserved": { "const": true },
-            "sequenceMatched": { "const": true },
-            "expectedTextMatched": { "const": true },
-            "toolCallCount": { "const": 2 },
-            "toolResultCount": { "const": 2 },
-            "failedToolResultCount": { "const": 1 },
-            "successfulToolResultCount": { "const": 1 },
-            "reviewEventCount": { "const": 0 },
-            "failureCallIdSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "recoveryCallIdSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "failureArgumentsSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "failureResultSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "recoveryArgumentsSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "recoveryResultSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "finalContentLength": { "type": "integer", "minimum": 1 },
-            "finalContentSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "streamBytes": { "type": "integer", "minimum": 1, "maximum": 1000000 },
-            "truncated": { "const": false }
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "done": {
+              "const": true
+            },
+            "failureObserved": {
+              "const": true
+            },
+            "recoveryObserved": {
+              "const": true
+            },
+            "sequenceMatched": {
+              "const": true
+            },
+            "expectedTextMatched": {
+              "const": true
+            },
+            "toolCallCount": {
+              "const": 2
+            },
+            "toolResultCount": {
+              "const": 2
+            },
+            "failedToolResultCount": {
+              "const": 1
+            },
+            "successfulToolResultCount": {
+              "const": 1
+            },
+            "reviewEventCount": {
+              "const": 0
+            },
+            "failureCallIdSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "recoveryCallIdSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "failureArgumentsSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "failureResultSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "recoveryArgumentsSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "recoveryResultSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "finalContentLength": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "finalContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "streamBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "truncated": {
+              "const": false
+            }
           }
         }
       },
@@ -907,10 +1808,25 @@
             "expectedResultSha256"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "expectedUserText": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expectedUserText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
             "expectedAssistantText": {
               "type": "string",
               "minLength": 1,
@@ -921,7 +1837,11 @@
               "minLength": 64,
               "maxLength": 64
             },
-            "expectedToolName": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "expectedToolName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
             "expectedArgumentsSha256": {
               "type": "string",
               "minLength": 64,
@@ -957,27 +1877,66 @@
             "assistantFinishReason"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "messageCount": { "type": "integer", "minimum": 4 },
-            "userMessageCount": { "const": 1 },
-            "assistantMessageCount": { "const": 2 },
-            "toolMessageCount": { "const": 1 },
-            "toolCallCount": { "const": 1 },
-            "toolResultCount": { "const": 1 },
-            "traceToolCallCount": { "const": 1 },
-            "traceToolResultCount": { "const": 1 },
-            "expectedUserTextMatched": { "const": true },
-            "expectedAssistantTextMatched": { "const": true },
-            "expectedToolNameMatched": { "const": true },
-            "argumentsSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "resultSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "assistantContentLength": { "type": "integer", "minimum": 1 },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "messageCount": {
+              "type": "integer",
+              "minimum": 4
+            },
+            "userMessageCount": {
+              "const": 1
+            },
+            "assistantMessageCount": {
+              "const": 2
+            },
+            "toolMessageCount": {
+              "const": 1
+            },
+            "toolCallCount": {
+              "const": 1
+            },
+            "toolResultCount": {
+              "const": 1
+            },
+            "traceToolCallCount": {
+              "const": 1
+            },
+            "traceToolResultCount": {
+              "const": 1
+            },
+            "expectedUserTextMatched": {
+              "const": true
+            },
+            "expectedAssistantTextMatched": {
+              "const": true
+            },
+            "expectedToolNameMatched": {
+              "const": true
+            },
+            "argumentsSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "resultSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "assistantContentLength": {
+              "type": "integer",
+              "minimum": 1
+            },
             "assistantContentSha256": {
               "type": "string",
               "minLength": 64,
               "maxLength": 64
             },
-            "assistantFinishReason": { "const": "stop" }
+            "assistantFinishReason": {
+              "const": "stop"
+            }
           }
         }
       },
@@ -1004,16 +1963,55 @@
             "recoveryResultSha256"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "expectedUserText": { "type": "string", "minLength": 1, "maxLength": 20000 },
-            "expectedAssistantText": { "type": "string", "minLength": 1, "maxLength": 5000 },
-            "expectedAssistantSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "failureArgumentsSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "failureResultSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "recoveryArgumentsSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "recoveryResultSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expectedUserText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            },
+            "expectedAssistantText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "expectedAssistantSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "failureArgumentsSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "failureResultSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "recoveryArgumentsSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "recoveryResultSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         },
         "outputSchema": {
@@ -1039,23 +2037,61 @@
             "assistantFinishReason"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "messageCount": { "const": 6 },
-            "userMessageCount": { "const": 1 },
-            "assistantMessageCount": { "const": 3 },
-            "toolMessageCount": { "const": 2 },
-            "toolCallCount": { "const": 2 },
-            "toolResultCount": { "const": 2 },
-            "traceToolCallCount": { "const": 2 },
-            "traceToolResultCount": { "const": 2 },
-            "failureObserved": { "const": true },
-            "recoveryObserved": { "const": true },
-            "sequenceMatched": { "const": true },
-            "expectedUserTextMatched": { "const": true },
-            "expectedAssistantTextMatched": { "const": true },
-            "assistantContentLength": { "type": "integer", "minimum": 1 },
-            "assistantContentSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "assistantFinishReason": { "const": "stop" }
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "messageCount": {
+              "const": 6
+            },
+            "userMessageCount": {
+              "const": 1
+            },
+            "assistantMessageCount": {
+              "const": 3
+            },
+            "toolMessageCount": {
+              "const": 2
+            },
+            "toolCallCount": {
+              "const": 2
+            },
+            "toolResultCount": {
+              "const": 2
+            },
+            "traceToolCallCount": {
+              "const": 2
+            },
+            "traceToolResultCount": {
+              "const": 2
+            },
+            "failureObserved": {
+              "const": true
+            },
+            "recoveryObserved": {
+              "const": true
+            },
+            "sequenceMatched": {
+              "const": true
+            },
+            "expectedUserTextMatched": {
+              "const": true
+            },
+            "expectedAssistantTextMatched": {
+              "const": true
+            },
+            "assistantContentLength": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "assistantContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "assistantFinishReason": {
+              "const": "stop"
+            }
           }
         }
       },
@@ -1072,10 +2108,26 @@
           "additionalProperties": false,
           "required": ["username", "password", "name", "description"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "name": { "type": "string", "minLength": 1, "maxLength": 256 },
-            "description": { "type": "string", "minLength": 1, "maxLength": 4000 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            }
           }
         },
         "outputSchema": {
@@ -1083,10 +2135,21 @@
           "additionalProperties": false,
           "required": ["knowledgeBaseId", "created", "active", "nameSha256"],
           "properties": {
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "created": { "const": true },
-            "active": { "const": true },
-            "nameSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "created": {
+              "const": true
+            },
+            "active": {
+              "const": true
+            },
+            "nameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         }
       },
@@ -1102,10 +2165,24 @@
           "additionalProperties": false,
           "required": ["username", "password", "knowledgeBaseId"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "fixtureKind": { "type": "string", "enum": ["order", "account-chart", "large-table"] }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "fixtureKind": {
+              "type": "string",
+              "enum": ["order", "account-chart", "large-table"]
+            }
           }
         },
         "outputSchema": {
@@ -1121,13 +2198,36 @@
             "fileNameSha256"
           ],
           "properties": {
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "uploadedDocumentId": { "type": "string", "format": "uuid" },
-            "uploaded": { "const": true },
-            "fixtureKind": { "type": "string", "enum": ["order", "account-chart", "large-table"] },
-            "fixtureSizeBytes": { "type": "integer", "minimum": 1, "maximum": 1000000 },
-            "fixtureSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "fileNameSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "uploadedDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "uploaded": {
+              "const": true
+            },
+            "fixtureKind": {
+              "type": "string",
+              "enum": ["order", "account-chart", "large-table"]
+            },
+            "fixtureSizeBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "fixtureSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "fileNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         }
       },
@@ -1143,11 +2243,29 @@
           "additionalProperties": false,
           "required": ["username", "password", "knowledgeBaseId", "uploadedDocumentId", "title"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "uploadedDocumentId": { "type": "string", "format": "uuid" },
-            "title": { "type": "string", "minLength": 1, "maxLength": 512 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "uploadedDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
           }
         },
         "outputSchema": {
@@ -1163,16 +2281,33 @@
             "titleSha256"
           ],
           "properties": {
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
-            "uploadedDocumentId": { "type": "string", "format": "uuid" },
-            "attached": { "const": true },
-            "parseJobPresent": { "type": "boolean" },
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "uploadedDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "attached": {
+              "const": true
+            },
+            "parseJobPresent": {
+              "type": "boolean"
+            },
             "documentStatus": {
               "type": "string",
               "enum": ["pending", "processing", "completed", "failed"]
             },
-            "titleSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "titleSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         }
       },
@@ -1195,16 +2330,34 @@
             "expectedTitle"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
             "expectedFixtureSha256": {
               "type": "string",
               "minLength": 64,
               "maxLength": 64
             },
-            "expectedTitle": { "type": "string", "minLength": 1, "maxLength": 512 }
+            "expectedTitle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
           }
         },
         "outputSchema": {
@@ -1226,19 +2379,51 @@
             "pollAttempts"
           ],
           "properties": {
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
-            "ready": { "const": true },
-            "documentStatus": { "const": "completed" },
-            "documentCount": { "const": 1 },
-            "readyDocumentCount": { "const": 1 },
-            "currentVersionNumber": { "const": 1 },
-            "versionCount": { "const": 1 },
-            "parserVersionPresent": { "const": true },
-            "contentHashMatched": { "const": true },
-            "titleMatched": { "const": true },
-            "fixtureSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "pollAttempts": { "type": "integer", "minimum": 1, "maximum": 120 }
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "ready": {
+              "const": true
+            },
+            "documentStatus": {
+              "const": "completed"
+            },
+            "documentCount": {
+              "const": 1
+            },
+            "readyDocumentCount": {
+              "const": 1
+            },
+            "currentVersionNumber": {
+              "const": 1
+            },
+            "versionCount": {
+              "const": 1
+            },
+            "parserVersionPresent": {
+              "const": true
+            },
+            "contentHashMatched": {
+              "const": true
+            },
+            "titleMatched": {
+              "const": true
+            },
+            "fixtureSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "pollAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120
+            }
           }
         }
       },
@@ -1260,11 +2445,29 @@
             "expectedFixtureSha256"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
-            "expectedFixtureSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expectedFixtureSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         },
         "outputSchema": {
@@ -1292,25 +2495,79 @@
             "reconstructedTableSha256"
           ],
           "properties": {
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
-            "fixtureSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "parserDocumentIdSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "parserVersionIdSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "pageCount": { "type": "integer", "minimum": 2, "maximum": 64 },
-            "cursorCount": { "type": "integer", "minimum": 1, "maximum": 63 },
-            "tableUnitCount": { "const": 1 },
-            "expectedRowCount": { "const": 96 },
-            "recoveredRowCount": { "const": 96 },
-            "headerDetected": { "const": true },
-            "segmentsContiguous": { "const": true },
-            "cursorChainUnique": { "const": true },
-            "sourceComplete": { "const": true },
-            "documentBindingMatched": { "const": true },
-            "versionBindingMatched": { "const": true },
-            "fixtureMarkerMatched": { "const": true },
-            "cursorChainSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "reconstructedTableSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "fixtureSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "parserDocumentIdSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "parserVersionIdSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "pageCount": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 64
+            },
+            "cursorCount": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 63
+            },
+            "tableUnitCount": {
+              "const": 1
+            },
+            "expectedRowCount": {
+              "const": 96
+            },
+            "recoveredRowCount": {
+              "const": 96
+            },
+            "headerDetected": {
+              "const": true
+            },
+            "segmentsContiguous": {
+              "const": true
+            },
+            "cursorChainUnique": {
+              "const": true
+            },
+            "sourceComplete": {
+              "const": true
+            },
+            "documentBindingMatched": {
+              "const": true
+            },
+            "versionBindingMatched": {
+              "const": true
+            },
+            "fixtureMarkerMatched": {
+              "const": true
+            },
+            "cursorChainSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "reconstructedTableSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         }
       },
@@ -1334,17 +2591,37 @@
             "clientRequestId"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
             "expectedFixtureSha256": {
               "type": "string",
               "minLength": 64,
               "maxLength": 64
             },
-            "clientRequestId": { "type": "string", "format": "uuid" }
+            "clientRequestId": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         },
         "outputSchema": {
@@ -1376,29 +2653,83 @@
             "scopeStable"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
-            "retrievalPolicy": { "const": "required" },
-            "scopeRevision": { "const": 1 },
-            "scopeHash": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "scopeKnowledgeBaseCount": { "const": 1 },
-            "scopeDocumentCount": { "const": 1 },
-            "scopeReadyDocumentCount": { "const": 1 },
-            "snapshotId": { "type": "string", "format": "uuid" },
-            "snapshotStatus": { "const": "prepared" },
-            "snapshotHash": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "snapshotKnowledgeBaseCount": { "const": 1 },
-            "snapshotReadyDocumentCount": { "const": 1 },
-            "snapshotExcludedDocumentCount": { "const": 0 },
-            "snapshotDocumentCount": { "const": 1 },
-            "scopeMatched": { "const": true },
-            "documentMatched": { "const": true },
-            "contentHashMatched": { "const": true },
-            "firstCreated": { "const": true },
-            "idempotentReplay": { "const": true },
-            "snapshotIdentityMatched": { "const": true },
-            "scopeStable": { "const": true }
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "retrievalPolicy": {
+              "const": "required"
+            },
+            "scopeRevision": {
+              "const": 1
+            },
+            "scopeHash": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "scopeKnowledgeBaseCount": {
+              "const": 1
+            },
+            "scopeDocumentCount": {
+              "const": 1
+            },
+            "scopeReadyDocumentCount": {
+              "const": 1
+            },
+            "snapshotId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "snapshotStatus": {
+              "const": "prepared"
+            },
+            "snapshotHash": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "snapshotKnowledgeBaseCount": {
+              "const": 1
+            },
+            "snapshotReadyDocumentCount": {
+              "const": 1
+            },
+            "snapshotExcludedDocumentCount": {
+              "const": 0
+            },
+            "snapshotDocumentCount": {
+              "const": 1
+            },
+            "scopeMatched": {
+              "const": true
+            },
+            "documentMatched": {
+              "const": true
+            },
+            "contentHashMatched": {
+              "const": true
+            },
+            "firstCreated": {
+              "const": true
+            },
+            "idempotentReplay": {
+              "const": true
+            },
+            "snapshotIdentityMatched": {
+              "const": true
+            },
+            "scopeStable": {
+              "const": true
+            }
           }
         }
       },
@@ -1426,19 +2757,64 @@
             "message"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "requestId": { "type": "string", "format": "uuid" },
-            "snapshotId": { "type": "string", "format": "uuid" },
-            "snapshotHash": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
-            "forbiddenKnowledgeDocumentId": { "type": "string", "format": "uuid" },
-            "expectedFixtureSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "expectedTitle": { "type": "string", "minLength": 1, "maxLength": 512 },
-            "expectedResourceMarker": { "type": "string", "format": "uuid" },
-            "forbiddenResourceMarker": { "type": "string", "format": "uuid" },
-            "message": { "type": "string", "minLength": 1, "maxLength": 20000 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "requestId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "snapshotId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "snapshotHash": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "knowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "forbiddenKnowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expectedFixtureSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "expectedTitle": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "expectedResourceMarker": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "forbiddenResourceMarker": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20000
+            }
           }
         },
         "outputSchema": {
@@ -1471,30 +2847,99 @@
             "pollAttempts"
           ],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "turnId": { "type": "string", "format": "uuid" },
-            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
-            "snapshotId": { "type": "string", "format": "uuid" },
-            "snapshotHash": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "retrievalId": { "type": "string", "format": "uuid" },
-            "packetHash": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "completed": { "const": true },
-            "expectedFactsMatched": { "const": true },
-            "resourceMarkerChecked": { "type": "boolean" },
-            "resourceMarkerMatched": { "const": true },
-            "citationSetMatched": { "const": true },
-            "forbiddenEvidenceAbsent": { "const": true },
-            "messageCount": { "const": 2 },
-            "userMessageCount": { "const": 1 },
-            "assistantMessageCount": { "const": 1 },
-            "toolMessageCount": { "const": 0 },
-            "evidenceCount": { "type": "integer", "minimum": 1, "maximum": 20 },
-            "citedRefCount": { "type": "integer", "minimum": 1, "maximum": 20 },
-            "retrievalMode": { "type": "string", "enum": ["keyword", "semantic", "hybrid"] },
-            "answerLength": { "type": "integer", "minimum": 1 },
-            "answerSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "evidenceSetSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "pollAttempts": { "type": "integer", "minimum": 1, "maximum": 600 }
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "turnId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "snapshotId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "snapshotHash": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "retrievalId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "packetHash": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "completed": {
+              "const": true
+            },
+            "expectedFactsMatched": {
+              "const": true
+            },
+            "resourceMarkerChecked": {
+              "type": "boolean"
+            },
+            "resourceMarkerMatched": {
+              "const": true
+            },
+            "citationSetMatched": {
+              "const": true
+            },
+            "forbiddenEvidenceAbsent": {
+              "const": true
+            },
+            "messageCount": {
+              "const": 2
+            },
+            "userMessageCount": {
+              "const": 1
+            },
+            "assistantMessageCount": {
+              "const": 1
+            },
+            "toolMessageCount": {
+              "const": 0
+            },
+            "evidenceCount": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "citedRefCount": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "retrievalMode": {
+              "type": "string",
+              "enum": ["keyword", "semantic", "hybrid"]
+            },
+            "answerLength": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "answerSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "evidenceSetSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "pollAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            }
           }
         }
       },
@@ -1516,11 +2961,28 @@
             "uploadedDocumentId"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
-            "uploadedDocumentId": { "type": "string", "format": "uuid" }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "uploadedDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         },
         "outputSchema": {
@@ -1540,17 +3002,42 @@
             "cleanupClosureMatched"
           ],
           "properties": {
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
-            "uploadedDocumentId": { "type": "string", "format": "uuid" },
-            "baseDetailAbsent": { "const": true },
-            "activeListAbsent": { "const": true },
-            "domainDocumentAbsent": { "const": true },
-            "domainVersionsAbsent": { "const": true },
-            "retrievalRejected": { "const": true },
-            "uploadStatusAbsent": { "const": true },
-            "rawDocumentAbsent": { "const": true },
-            "cleanupClosureMatched": { "const": true }
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "knowledgeDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "uploadedDocumentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "baseDetailAbsent": {
+              "const": true
+            },
+            "activeListAbsent": {
+              "const": true
+            },
+            "domainDocumentAbsent": {
+              "const": true
+            },
+            "domainVersionsAbsent": {
+              "const": true
+            },
+            "retrievalRejected": {
+              "const": true
+            },
+            "uploadStatusAbsent": {
+              "const": true
+            },
+            "rawDocumentAbsent": {
+              "const": true
+            },
+            "cleanupClosureMatched": {
+              "const": true
+            }
           }
         }
       },
@@ -1566,9 +3053,20 @@
           "additionalProperties": false,
           "required": ["username", "password", "knowledgeBaseId"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "knowledgeBaseId": { "type": "string", "format": "uuid" }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         },
         "outputSchema": {
@@ -1589,19 +3087,53 @@
             "knowledgeBaseArchived"
           ],
           "properties": {
-            "knowledgeBaseId": { "type": "string", "format": "uuid" },
-            "cleaned": { "const": true },
-            "knowledgeDocumentDeleteCount": { "type": "integer", "minimum": 0 },
-            "knowledgeDocumentAlreadyAbsentCount": { "type": "integer", "minimum": 0 },
-            "parserDeleteReceiptCount": { "type": "integer", "minimum": 0 },
-            "parserDeletedCount": { "type": "integer", "minimum": 0 },
-            "parserAlreadyAbsentCount": { "type": "integer", "minimum": 0 },
-            "parserVersionDeleteCount": { "type": "integer", "minimum": 0 },
-            "parserJobDeleteCount": { "type": "integer", "minimum": 0 },
-            "parserCleanupConfirmed": { "const": true },
-            "rawDocumentDeleted": { "type": "boolean" },
-            "knowledgeBaseArchived": { "type": "boolean" },
-            "alreadyMissing": { "type": "boolean" }
+            "knowledgeBaseId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "cleaned": {
+              "const": true
+            },
+            "knowledgeDocumentDeleteCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "knowledgeDocumentAlreadyAbsentCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "parserDeleteReceiptCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "parserDeletedCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "parserAlreadyAbsentCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "parserVersionDeleteCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "parserJobDeleteCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "parserCleanupConfirmed": {
+              "const": true
+            },
+            "rawDocumentDeleted": {
+              "type": "boolean"
+            },
+            "knowledgeBaseArchived": {
+              "type": "boolean"
+            },
+            "alreadyMissing": {
+              "type": "boolean"
+            }
           }
         }
       },
@@ -1618,12 +3150,35 @@
           "additionalProperties": false,
           "required": ["username", "password", "conversationId", "name", "goal"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "name": { "type": "string", "minLength": 1, "maxLength": 160 },
-            "goal": { "type": "string", "minLength": 1, "maxLength": 65536 },
-            "firstFireDelaySeconds": { "type": "integer", "minimum": 0, "maximum": 900 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "goal": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "firstFireDelaySeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 900
+            }
           }
         },
         "outputSchema": {
@@ -1642,17 +3197,49 @@
             "goalSha256"
           ],
           "properties": {
-            "automationId": { "type": "string", "format": "uuid" },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "created": { "const": true },
-            "enabled": { "const": true },
-            "stateVersion": { "type": "integer", "minimum": 1 },
-            "intervalSeconds": { "const": 300 },
-            "selectedSkillAbsent": { "const": true },
-            "nextFireAt": { "type": "string", "format": "date-time" },
-            "nameSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "goalSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "firstFireDelaySeconds": { "type": "integer", "minimum": 0, "maximum": 900 }
+            "automationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "created": {
+              "const": true
+            },
+            "enabled": {
+              "const": true
+            },
+            "stateVersion": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "intervalSeconds": {
+              "const": 300
+            },
+            "selectedSkillAbsent": {
+              "const": true
+            },
+            "nextFireAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "nameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "goalSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "firstFireDelaySeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 900
+            }
           }
         }
       },
@@ -1676,14 +3263,44 @@
             "expectedAssistantText"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "automationId": { "type": "string", "format": "uuid" },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "expectedName": { "type": "string", "minLength": 1, "maxLength": 160 },
-            "expectedGoal": { "type": "string", "minLength": 1, "maxLength": 65536 },
-            "expectedAssistantText": { "type": "string", "minLength": 1, "maxLength": 5000 },
-            "expectedFirstFireAt": { "type": "string", "minLength": 20, "maxLength": 100 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "automationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expectedName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "expectedGoal": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "expectedAssistantText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "expectedFirstFireAt": {
+              "type": "string",
+              "minLength": 20,
+              "maxLength": 100
+            }
           }
         },
         "outputSchema": {
@@ -1713,36 +3330,114 @@
             "pollAttempts"
           ],
           "properties": {
-            "automationId": { "type": "string", "format": "uuid" },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "fired": { "const": true },
-            "singleFireObserved": { "const": true },
-            "enabled": { "const": true },
-            "stateVersion": { "type": "integer", "minimum": 2 },
-            "lastFireAt": { "type": "string", "format": "date-time" },
-            "nextFireAt": { "type": "string", "format": "date-time" },
-            "scheduleAdvancedBySeconds": { "const": 300 },
-            "userMessageCount": { "const": 1 },
-            "assistantMessageCount": { "const": 1 },
-            "toolMessageCount": { "const": 0 },
-            "toolCallCount": { "const": 0 },
-            "toolTraceEventCount": { "const": 0 },
-            "selectedSkillAbsent": { "const": true },
-            "expectedAssistantTextMatched": { "const": true },
-            "userContentSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "assistantContentSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "assistantContentLength": { "type": "integer", "minimum": 1 },
-            "assistantFinishReason": { "const": "stop" },
-            "pollAttempts": { "type": "integer", "minimum": 1, "maximum": 120 },
-            "timezone": { "const": "Asia/Shanghai" },
-            "utcOffsetMinutes": { "const": 480 },
-            "scheduledFirstFireAt": { "type": "string", "format": "date-time" },
-            "observedFirstFireAt": { "type": "string", "format": "date-time" },
-            "observedFirstFireLocal": { "type": "string", "format": "date-time" },
-            "nextFireLocal": { "type": "string", "format": "date-time" },
-            "firstFireScheduleMatched": { "const": true },
-            "firstFireDriftSeconds": { "type": "number", "minimum": 0, "maximum": 60 },
-            "localScheduleAdvancedBySeconds": { "const": 300 }
+            "automationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "fired": {
+              "const": true
+            },
+            "singleFireObserved": {
+              "const": true
+            },
+            "enabled": {
+              "const": true
+            },
+            "stateVersion": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "lastFireAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "nextFireAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "scheduleAdvancedBySeconds": {
+              "const": 300
+            },
+            "userMessageCount": {
+              "const": 1
+            },
+            "assistantMessageCount": {
+              "const": 1
+            },
+            "toolMessageCount": {
+              "const": 0
+            },
+            "toolCallCount": {
+              "const": 0
+            },
+            "toolTraceEventCount": {
+              "const": 0
+            },
+            "selectedSkillAbsent": {
+              "const": true
+            },
+            "expectedAssistantTextMatched": {
+              "const": true
+            },
+            "userContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "assistantContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "assistantContentLength": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "assistantFinishReason": {
+              "const": "stop"
+            },
+            "pollAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120
+            },
+            "timezone": {
+              "const": "Asia/Shanghai"
+            },
+            "utcOffsetMinutes": {
+              "const": 480
+            },
+            "scheduledFirstFireAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "observedFirstFireAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "observedFirstFireLocal": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "nextFireLocal": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "firstFireScheduleMatched": {
+              "const": true
+            },
+            "firstFireDriftSeconds": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 60
+            },
+            "localScheduleAdvancedBySeconds": {
+              "const": 300
+            }
           }
         }
       },
@@ -1769,16 +3464,54 @@
             "expectedAssistantSha256"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "automationId": { "type": "string", "format": "uuid" },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "expectedName": { "type": "string", "minLength": 1, "maxLength": 160 },
-            "expectedGoal": { "type": "string", "minLength": 1, "maxLength": 65536 },
-            "expectedAssistantText": { "type": "string", "minLength": 1, "maxLength": 5000 },
-            "expectedLastFireAt": { "type": "string", "minLength": 20, "maxLength": 100 },
-            "expectedNextFireAt": { "type": "string", "minLength": 20, "maxLength": 100 },
-            "expectedAssistantSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "automationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expectedName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "expectedGoal": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "expectedAssistantText": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "expectedLastFireAt": {
+              "type": "string",
+              "minLength": 20,
+              "maxLength": 100
+            },
+            "expectedNextFireAt": {
+              "type": "string",
+              "minLength": 20,
+              "maxLength": 100
+            },
+            "expectedAssistantSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         },
         "outputSchema": {
@@ -1803,22 +3536,63 @@
             "assistantContentSha256"
           ],
           "properties": {
-            "automationId": { "type": "string", "format": "uuid" },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "duplicateDeliveryAbsent": { "const": true },
-            "stableScheduleObserved": { "const": true },
-            "observationCount": { "const": 3 },
-            "stateVersion": { "type": "integer", "minimum": 2 },
-            "lastFireAt": { "type": "string", "format": "date-time" },
-            "nextFireAt": { "type": "string", "format": "date-time" },
-            "userMessageCount": { "const": 1 },
-            "assistantMessageCount": { "const": 1 },
-            "toolMessageCount": { "const": 0 },
-            "toolCallCount": { "const": 0 },
-            "toolTraceEventCount": { "const": 0 },
-            "expectedAssistantHashMatched": { "const": true },
-            "userContentSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "assistantContentSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "automationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "duplicateDeliveryAbsent": {
+              "const": true
+            },
+            "stableScheduleObserved": {
+              "const": true
+            },
+            "observationCount": {
+              "const": 3
+            },
+            "stateVersion": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "lastFireAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "nextFireAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "userMessageCount": {
+              "const": 1
+            },
+            "assistantMessageCount": {
+              "const": 1
+            },
+            "toolMessageCount": {
+              "const": 0
+            },
+            "toolCallCount": {
+              "const": 0
+            },
+            "toolTraceEventCount": {
+              "const": 0
+            },
+            "expectedAssistantHashMatched": {
+              "const": true
+            },
+            "userContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "assistantContentSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         }
       },
@@ -1843,14 +3617,44 @@
             "updatedGoal"
           ],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "automationId": { "type": "string", "format": "uuid" },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "expectedName": { "type": "string", "minLength": 1, "maxLength": 160 },
-            "expectedGoal": { "type": "string", "minLength": 1, "maxLength": 65536 },
-            "updatedName": { "type": "string", "minLength": 1, "maxLength": 160 },
-            "updatedGoal": { "type": "string", "minLength": 1, "maxLength": 65536 }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "automationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expectedName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "expectedGoal": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "updatedName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "updatedGoal": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            }
           }
         },
         "outputSchema": {
@@ -1876,23 +3680,68 @@
             "updatedGoalSha256"
           ],
           "properties": {
-            "automationId": { "type": "string", "format": "uuid" },
-            "conversationId": { "type": "string", "format": "uuid" },
-            "updated": { "const": true },
-            "disabled": { "const": true },
-            "enabledAgain": { "const": true },
-            "deleted": { "const": true },
-            "absentAfterDelete": { "const": true },
-            "noTriggerMessages": { "const": true },
-            "initialStateVersion": { "type": "integer", "minimum": 1 },
-            "updatedStateVersion": { "type": "integer", "minimum": 2 },
-            "disabledStateVersion": { "type": "integer", "minimum": 3 },
-            "enabledStateVersion": { "type": "integer", "minimum": 4 },
-            "deletedStateVersion": { "type": "integer", "minimum": 5 },
-            "updatedIntervalSeconds": { "const": 600 },
-            "selectedSkillAbsent": { "const": true },
-            "updatedNameSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "updatedGoalSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "automationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "updated": {
+              "const": true
+            },
+            "disabled": {
+              "const": true
+            },
+            "enabledAgain": {
+              "const": true
+            },
+            "deleted": {
+              "const": true
+            },
+            "absentAfterDelete": {
+              "const": true
+            },
+            "noTriggerMessages": {
+              "const": true
+            },
+            "initialStateVersion": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "updatedStateVersion": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "disabledStateVersion": {
+              "type": "integer",
+              "minimum": 3
+            },
+            "enabledStateVersion": {
+              "type": "integer",
+              "minimum": 4
+            },
+            "deletedStateVersion": {
+              "type": "integer",
+              "minimum": 5
+            },
+            "updatedIntervalSeconds": {
+              "const": 600
+            },
+            "selectedSkillAbsent": {
+              "const": true
+            },
+            "updatedNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "updatedGoalSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         }
       },
@@ -1908,9 +3757,20 @@
           "additionalProperties": false,
           "required": ["username", "password", "automationId"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "automationId": { "type": "string", "format": "uuid" }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "automationId": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         },
         "outputSchema": {
@@ -1918,12 +3778,28 @@
           "additionalProperties": false,
           "required": ["automationId", "cleaned", "deleted", "conflictCount"],
           "properties": {
-            "automationId": { "type": "string", "format": "uuid" },
-            "cleaned": { "const": true },
-            "deleted": { "type": "boolean" },
-            "conflictCount": { "type": "integer", "minimum": 0, "maximum": 2 },
-            "alreadyMissing": { "type": "boolean" },
-            "deletedStateVersion": { "type": "integer", "minimum": 2 }
+            "automationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "cleaned": {
+              "const": true
+            },
+            "deleted": {
+              "type": "boolean"
+            },
+            "conflictCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2
+            },
+            "alreadyMissing": {
+              "type": "boolean"
+            },
+            "deletedStateVersion": {
+              "type": "integer",
+              "minimum": 2
+            }
           }
         }
       },
@@ -1939,8 +3815,16 @@
           "additionalProperties": false,
           "required": ["username", "password", "expectedPublicationSha256"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
             "expectedPublicationSha256": {
               "type": "string",
               "minLength": 64,
@@ -1967,19 +3851,52 @@
             "mainFileSha256"
           ],
           "properties": {
-            "skillId": { "type": "string", "format": "uuid" },
-            "skillName": { "const": "trade-port-daily-brief" },
-            "available": { "const": true },
-            "enabled": { "const": true },
-            "builtin": { "const": false },
-            "durableAgentTask": { "const": true },
-            "userAdminProjectionMatched": { "const": true },
-            "publicationHashMatched": { "const": true },
-            "promptSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
-            "promptSizeBytes": { "type": "integer", "minimum": 1, "maximum": 65536 },
-            "assetRootPresent": { "type": "boolean" },
-            "mainAssetPresent": { "type": "boolean" },
-            "mainFileSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+            "skillId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "skillName": {
+              "const": "trade-port-daily-brief"
+            },
+            "available": {
+              "const": true
+            },
+            "enabled": {
+              "const": true
+            },
+            "builtin": {
+              "const": false
+            },
+            "durableAgentTask": {
+              "const": true
+            },
+            "userAdminProjectionMatched": {
+              "const": true
+            },
+            "publicationHashMatched": {
+              "const": true
+            },
+            "promptSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "promptSizeBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65536
+            },
+            "assetRootPresent": {
+              "type": "boolean"
+            },
+            "mainAssetPresent": {
+              "type": "boolean"
+            },
+            "mainFileSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
           }
         }
       },
@@ -1995,9 +3912,20 @@
           "additionalProperties": false,
           "required": ["username", "password", "conversationId"],
           "properties": {
-            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
-            "conversationId": { "type": "string", "format": "uuid" }
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         },
         "outputSchema": {
@@ -2005,9 +3933,16 @@
           "additionalProperties": false,
           "required": ["conversationId", "deleted"],
           "properties": {
-            "conversationId": { "type": "string", "format": "uuid" },
-            "deleted": { "type": "boolean" },
-            "alreadyMissing": { "type": "boolean" }
+            "conversationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "deleted": {
+              "type": "boolean"
+            },
+            "alreadyMissing": {
+              "type": "boolean"
+            }
           }
         }
       }

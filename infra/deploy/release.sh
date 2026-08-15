@@ -70,6 +70,10 @@ if ! grep -Eq '^PLATFORM_SECRET_ENCRYPTION_KEY=[A-Za-z0-9+/]{43}=$' "$ENV_FILE";
   chmod 600 "$ENV_FILE"
 fi
 
+if ! grep -q '^PLATFORM_CONTEXT_COMPACTION_FIXTURE_ENABLED=' "$ENV_FILE"; then
+  printf 'PLATFORM_CONTEXT_COMPACTION_FIXTURE_ENABLED=true\n' >> "$ENV_FILE"
+fi
+
 if grep -q "change-me-local-only" "$ENV_FILE"; then
   echo "runtime environment still contains an example secret" >&2
   exit 67

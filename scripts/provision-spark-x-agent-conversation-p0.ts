@@ -66,6 +66,7 @@ const runSmoke = process.env.SPARK_X_AGENT_RUN_SMOKE === "true";
 const runContextSmoke = process.env.SPARK_X_AGENT_RUN_CONTEXT_SMOKE === "true";
 const runCancelSmoke = process.env.SPARK_X_AGENT_RUN_CANCEL_SMOKE === "true";
 const runProviderRetrySmoke = process.env.SPARK_X_AGENT_RUN_PROVIDER_RETRY_SMOKE === "true";
+const runContextCompactionSmoke = process.env.SPARK_X_AGENT_RUN_CONTEXT_COMPACTION_SMOKE === "true";
 const runConversationReopenSmoke =
   process.env.SPARK_X_AGENT_RUN_CONVERSATION_REOPEN_SMOKE === "true";
 const runConversationPaginationSmoke =
@@ -224,6 +225,12 @@ async function ensureEnvironment(systemId: string): Promise<EnvironmentRecord> {
         host: "192.168.110.136",
         ports: [9],
         pathPrefixes: ["/spark-x-test-platform-provider-fault"],
+      },
+      {
+        protocol: "http",
+        host: "192.168.110.136",
+        ports: [4173],
+        pathPrefixes: ["/api/v1/fixtures/openai/context-compaction"],
       },
     ],
     timezone: "Asia/Shanghai",
@@ -1365,6 +1372,149 @@ function chatProviderRetryDefinition(): Readonly<Record<string, unknown>> {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
           conversationId: "${step.provider-retry-conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
+function chatContextCompactionDefinition(): Readonly<Record<string, unknown>> {
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "CHAT-005 长上下文压缩后续接",
+      description:
+        "用固定受限 Provider 夹具、真实内置只读 document_search、语义摘要和独立续接请求，校验压缩阶段、关键事实、工具状态、持久化游标和权威历史闭环。",
+      systemKey: "spark-x-agent",
+      moduleKey: "chat",
+      priority: "P1",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: [
+        "adapter",
+        "chat",
+        "p1",
+        "full-regression",
+        "context-compaction",
+        "durable-cursor",
+        "read-only-tool",
+        "fixed-fixture",
+      ],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 240_000,
+      caseTimeoutMs: 600_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:provider-config", "spark-x-agent:admin:chat"],
+    steps: [
+      {
+        id: "create-context-compaction-provider-fixture",
+        name: "创建并登记上下文压缩 Provider 夹具",
+        kind: "action",
+        action: "adapter:spark-x-agent/provider.create-context-compaction-fixture",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          name: "spark-x-context-compaction-${run.id}",
+        },
+        capture: {
+          "context-provider-fixture-resource-id": "$.providerFixtureResourceId",
+        },
+        resource: {
+          type: "spark-x-agent-provider-fixture",
+          id: "${step.context-provider-fixture-resource-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              providerFixtureResourceId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "create-context-compaction-conversation",
+        name: "创建并登记上下文压缩回归会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: "spark-x-context-compaction-${run.id}",
+        },
+        capture: { "context-compaction-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.context-compaction-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "assert-context-compaction-continuity",
+        name: "触发压缩并校验关键事实、工具状态和游标续接",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.assert-context-compaction-continuity",
+        timeoutMs: 240_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.context-compaction-conversation-id}",
+          providerFixtureResourceId: "${step.context-provider-fixture-resource-id}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "cleanup-context-compaction-provider-fixture",
+        name: "恢复原 Provider 并删除上下文压缩夹具",
+        kind: "action",
+        action: "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          providerFixtureResourceId: "${step.context-provider-fixture-resource-id}",
+        },
+      },
+      {
+        id: "delete-context-compaction-conversation",
+        name: "删除上下文压缩回归会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.context-compaction-conversation-id}",
         },
       },
     ],
@@ -4564,6 +4714,158 @@ async function executeProviderRetrySmoke(
   return run;
 }
 
+function assertContextCompactionEvidence(run: RunDetail): void {
+  const fixture = run.steps.find(
+    (step) => step.stepId === "create-context-compaction-provider-fixture",
+  );
+  const continuity = run.steps.find(
+    (step) => step.stepId === "assert-context-compaction-continuity",
+  );
+  const cleanup = run.steps.find(
+    (step) => step.stepId === "cleanup-context-compaction-provider-fixture",
+  );
+  check(
+    fixture?.outputSummary?.fixtureCreated === true &&
+      fixture.outputSummary.originalProviderActive === true &&
+      fixture.outputSummary.contextFixtureTargetAllowed === true &&
+      typeof fixture.outputSummary.providerFixtureResourceId === "string" &&
+      /^[0-9a-f-]{36}:[0-9a-f-]{36}$/iu.test(fixture.outputSummary.providerFixtureResourceId) &&
+      typeof fixture.outputSummary.fixtureProviderId === "string" &&
+      typeof fixture.outputSummary.originalProviderId === "string" &&
+      fixture.outputSummary.fixtureProviderId !== fixture.outputSummary.originalProviderId &&
+      typeof fixture.outputSummary.contextBaseUrlSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(fixture.outputSummary.contextBaseUrlSha256) &&
+      typeof fixture.outputSummary.nameSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(fixture.outputSummary.nameSha256),
+    "CHAT-005 context Provider fixture registration or fixed-target evidence is incomplete",
+  );
+  const summary = continuity?.outputSummary;
+  check(
+    summary !== null &&
+      summary !== undefined &&
+      typeof summary.conversationId === "string" &&
+      summary.compactionObserved === true &&
+      summary.contextCompactingCount === 1 &&
+      summary.contextReadyCount === 1 &&
+      summary.phaseOrderMatched === true &&
+      summary.durableContinuation === true &&
+      summary.durableCursorContinued === true &&
+      summary.toolStatePreserved === true &&
+      summary.toolCallCount === 1 &&
+      summary.toolResultCount === 1 &&
+      typeof summary.toolCallIdSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(summary.toolCallIdSha256) &&
+      typeof summary.toolArgumentsSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(summary.toolArgumentsSha256) &&
+      typeof summary.toolResultSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(summary.toolResultSha256) &&
+      typeof summary.triggerRound === "number" &&
+      summary.triggerRound >= 1 &&
+      summary.triggerRound <= 24 &&
+      summary.continuationRecompactionCount === 0 &&
+      summary.messageCount === summary.triggerRound * 2 + 6 &&
+      summary.userMessageCount === summary.triggerRound + 2 &&
+      summary.assistantMessageCount === summary.triggerRound + 3 &&
+      summary.toolMessageCount === 1 &&
+      summary.traceToolCallCount === 1 &&
+      summary.traceToolResultCount === 1 &&
+      typeof summary.continuationContentSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(summary.continuationContentSha256),
+    "CHAT-005 compaction phases, durable cursor, tool state or authoritative history evidence is incomplete",
+  );
+  check(
+    cleanup?.outputSummary?.originalProviderActive === true &&
+      cleanup.outputSummary.fixtureDeleted === true &&
+      cleanup.outputSummary.activeProviderCount === 1 &&
+      cleanup.outputSummary.providerFixtureResourceIdSha256 ===
+        createHash("sha256")
+          .update(String(fixture?.outputSummary?.providerFixtureResourceId))
+          .digest("hex"),
+    "CHAT-005 did not prove original Provider restoration and fixture deletion",
+  );
+  const evidence = JSON.stringify({ fixture, continuity, cleanup });
+  check(
+    !evidence.includes("CHAT005_TOOL") &&
+      !evidence.includes("CHAT005_FILL") &&
+      !evidence.includes("CHAT005_CONTINUE") &&
+      !evidence.includes("CHAT005_CONTINUITY_OK") &&
+      !evidence.includes("spark-x-chat005-") &&
+      !evidence.includes("spark-x-test-platform-noncredential-context-compaction-fixture") &&
+      !evidence.includes("/api/v1/fixtures/openai/context-compaction") &&
+      !evidence.includes("memory-only-access-token"),
+    "CHAT-005 prompts, fixed fixture target, noncredential sentinel or in-memory token leaked into evidence",
+  );
+}
+
+async function executeContextCompactionSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-chat-context-compaction-p1-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-chat-context-compaction-p1-verification",
+      priority: 90,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent context compaction run was not accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(
+    run.gateResult === "passed",
+    `Spark X Agent context compaction gate is ${String(run.gateResult)}`,
+  );
+  check(run.summary.passed === 1, "Spark X Agent context compaction case did not pass");
+  check(run.firstFailure === null, "Spark X Agent context compaction retained a run failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent context compaction case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/provider.create-context-compaction-fixture",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/chat.assert-context-compaction-continuity",
+        "finally:adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+        "finally:adapter:spark-x-agent/conversation.delete",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent context compaction structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 2 &&
+      run.resources[0]?.resourceType === "spark-x-agent-provider-fixture" &&
+      run.resources[0].cleanupDefinition.action ===
+        "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture" &&
+      run.resources[0].cleanupStatus === "passed" &&
+      run.resources[1]?.resourceType === "spark-x-agent-conversation" &&
+      run.resources[1].cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete" &&
+      run.resources[1].cleanupStatus === "passed",
+    "Spark X Agent context compaction resource ledger or cleanup order is incomplete",
+  );
+  check(
+    run.cleanupJob === null,
+    "normal context compaction run unexpectedly required compensation",
+  );
+  assertContextCompactionEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into CHAT-005 evidence",
+    );
+  }
+  return run;
+}
+
 function assertConversationPaginationEvidence(run: RunDetail): void {
   const createSteps = run.steps.filter(
     (step) => step.phase === "main" && step.action === "adapter:spark-x-agent/conversation.create",
@@ -6431,6 +6733,14 @@ const chatProviderRetryCase = await ensureCase(
   chatProviderRetryDefinition(),
   "新增固定不可达 Provider 夹具、可见首次失败、独立用户重试、消息基数和 Provider 恢复补偿 P1 闭环",
 );
+const chatContextCompactionCase = await ensureCase(
+  system.id,
+  chat.id,
+  environment.id,
+  "CHAT-005 长上下文压缩后续接",
+  chatContextCompactionDefinition(),
+  "新增固定受限 Provider、真实只读工具状态、语义压缩阶段、持久化游标、独立续接、权威历史和 Provider 恢复补偿 P1 闭环",
+);
 const toolCatalogCase = await ensureCase(
   system.id,
   tools.id,
@@ -6628,16 +6938,24 @@ const chatProviderRetrySuite = await ensureSuite(
   "CHAT-004 固定不可达 Provider 首次失败可见，恢复原 Provider 后独立重试成功，消息无额外重复且夹具完整清理。",
   [chatProviderRetryCase.testCase.id],
 );
+const chatContextCompactionSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-chat-context-compaction-p1",
+  "星火 Agent 长上下文压缩续接 P1 纵向切片",
+  "CHAT-005 固定受限 Provider、真实内置只读工具、语义压缩阶段、关键事实与工具状态、持久化游标和完整清理闭环。",
+  [chatContextCompactionCase.testCase.id],
+);
 const chatSuite = await ensureSuite(
   system.id,
   "spark-x-agent-chat",
   "星火 Agent 聊天回归",
-  "聊天模块当前 CHAT-001/002/003/004 流式首轮、两轮上下文隔离、用户取消、Provider 失败和明确重试。",
+  "聊天模块 CHAT-001/002/003/004/005 流式首轮、两轮上下文隔离、用户取消、Provider 失败明确重试与长上下文压缩续接。",
   [
     chatCase.testCase.id,
     chatContextCase.testCase.id,
     chatCancelCase.testCase.id,
     chatProviderRetryCase.testCase.id,
+    chatContextCompactionCase.testCase.id,
   ],
 );
 const toolSuite = await ensureSuite(
@@ -6790,8 +7108,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 25/32）",
-  "手动一键完整回归入口；当前已接入 25/32 条案例，覆盖七个模块的当前 P0、CHAT-003/004、TOOL-004、KB-005/006、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 26/32）",
+  "手动一键完整回归入口；当前已接入 26/32 条案例，覆盖七个模块的当前 P0、CHAT-003/004/005、TOOL-004、KB-005/006、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -6801,6 +7119,7 @@ const fullRegressionSuite = await ensureSuite(
     chatContextCase.testCase.id,
     chatCancelCase.testCase.id,
     chatProviderRetryCase.testCase.id,
+    chatContextCompactionCase.testCase.id,
     toolCatalogCase.testCase.id,
     toolInvocationCase.testCase.id,
     toolResultCase.testCase.id,
@@ -6826,6 +7145,7 @@ check(
     runContextSmoke,
     runCancelSmoke,
     runProviderRetrySmoke,
+    runContextCompactionSmoke,
     runConversationReopenSmoke,
     runConversationPaginationSmoke,
     runConversationDeleteSmoke,
@@ -6853,113 +7173,122 @@ const run = runSmoke
             chatProviderRetrySuite.id,
             password,
           )
-        : runConversationReopenSmoke
-          ? await executeConversationReopenSmoke(
+        : runContextCompactionSmoke
+          ? await executeContextCompactionSmoke(
               system.id,
               environment.id,
-              conversationReopenSuite.id,
+              chatContextCompactionSuite.id,
               password,
             )
-          : runConversationPaginationSmoke
-            ? await executeConversationPaginationSmoke(
+          : runConversationReopenSmoke
+            ? await executeConversationReopenSmoke(
                 system.id,
                 environment.id,
-                conversationPaginationSuite.id,
+                conversationReopenSuite.id,
                 password,
               )
-            : runConversationDeleteSmoke
-              ? await executeConversationDeleteSmoke(
+            : runConversationPaginationSmoke
+              ? await executeConversationPaginationSmoke(
                   system.id,
                   environment.id,
-                  conversationDeleteSuite.id,
+                  conversationPaginationSuite.id,
                   password,
                 )
-              : runKnowledgeSmoke
-                ? await executeKnowledgeSmoke(
+              : runConversationDeleteSmoke
+                ? await executeConversationDeleteSmoke(
                     system.id,
                     environment.id,
-                    knowledgeBaseSuite.id,
+                    conversationDeleteSuite.id,
                     password,
                   )
-                : runKnowledgeRetrievalSmoke
-                  ? await executeKnowledgeRetrievalSmoke(
+                : runKnowledgeSmoke
+                  ? await executeKnowledgeSmoke(
                       system.id,
                       environment.id,
-                      knowledgeRetrievalSuite.id,
+                      knowledgeBaseSuite.id,
                       password,
                     )
-                  : runKnowledgeIsolationSmoke
-                    ? await executeKnowledgeIsolationSmoke(
+                  : runKnowledgeRetrievalSmoke
+                    ? await executeKnowledgeRetrievalSmoke(
                         system.id,
                         environment.id,
-                        knowledgeIsolationSuite.id,
+                        knowledgeRetrievalSuite.id,
                         password,
                       )
-                    : runKnowledgeCleanupSmoke
-                      ? await executeKnowledgeCleanupSmoke(
+                    : runKnowledgeIsolationSmoke
+                      ? await executeKnowledgeIsolationSmoke(
                           system.id,
                           environment.id,
-                          knowledgeCleanupSuite.id,
+                          knowledgeIsolationSuite.id,
                           password,
                         )
-                      : runKnowledgeLargeTableSmoke
-                        ? await executeKnowledgeLargeTableSmoke(
+                      : runKnowledgeCleanupSmoke
+                        ? await executeKnowledgeCleanupSmoke(
                             system.id,
                             environment.id,
-                            knowledgeLargeTableSuite.id,
+                            knowledgeCleanupSuite.id,
                             password,
                           )
-                        : runSkillSmoke
-                          ? await executeSkillSmoke(
+                        : runKnowledgeLargeTableSmoke
+                          ? await executeKnowledgeLargeTableSmoke(
                               system.id,
                               environment.id,
-                              skillSuite.id,
+                              knowledgeLargeTableSuite.id,
                               password,
                             )
-                          : runMcpSmoke
-                            ? await executeMcpSmoke(
+                          : runSkillSmoke
+                            ? await executeSkillSmoke(
                                 system.id,
                                 environment.id,
-                                mcpSuite.id,
+                                skillSuite.id,
                                 password,
                               )
-                            : runAutomationSmoke
-                              ? await executeAutomationSmoke(
+                            : runMcpSmoke
+                              ? await executeMcpSmoke(
                                   system.id,
                                   environment.id,
-                                  automationSuite.id,
+                                  mcpSuite.id,
                                   password,
                                 )
-                              : undefined;
+                              : runAutomationSmoke
+                                ? await executeAutomationSmoke(
+                                    system.id,
+                                    environment.id,
+                                    automationSuite.id,
+                                    password,
+                                  )
+                                : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
   : runCancelSmoke
     ? "spark-x-agent-chat-cancel-p1"
     : runProviderRetrySmoke
       ? "spark-x-agent-chat-provider-retry-p1"
-      : runConversationReopenSmoke
-        ? "spark-x-agent-conversation-reopen-p0"
-        : runConversationPaginationSmoke
-          ? "spark-x-agent-conversation-pagination-p1"
-          : runConversationDeleteSmoke
-            ? "spark-x-agent-conversation-delete-p1"
-            : runKnowledgeSmoke
-              ? "spark-x-agent-knowledge-base-p0"
-              : runKnowledgeRetrievalSmoke
-                ? "spark-x-agent-knowledge-retrieval-p0"
-                : runKnowledgeIsolationSmoke
-                  ? "spark-x-agent-knowledge-isolation-p0"
-                  : runKnowledgeCleanupSmoke
-                    ? "spark-x-agent-knowledge-cleanup-p1"
-                    : runKnowledgeLargeTableSmoke
-                      ? "spark-x-agent-knowledge-large-table-p1"
-                      : runSkillSmoke
-                        ? "spark-x-agent-skills-p0"
-                        : runMcpSmoke
-                          ? "spark-x-agent-mcp-p0"
-                          : runAutomationSmoke
-                            ? "spark-x-agent-automations-p0"
-                            : "spark-x-agent-core-smoke";
+      : runContextCompactionSmoke
+        ? "spark-x-agent-chat-context-compaction-p1"
+        : runConversationReopenSmoke
+          ? "spark-x-agent-conversation-reopen-p0"
+          : runConversationPaginationSmoke
+            ? "spark-x-agent-conversation-pagination-p1"
+            : runConversationDeleteSmoke
+              ? "spark-x-agent-conversation-delete-p1"
+              : runKnowledgeSmoke
+                ? "spark-x-agent-knowledge-base-p0"
+                : runKnowledgeRetrievalSmoke
+                  ? "spark-x-agent-knowledge-retrieval-p0"
+                  : runKnowledgeIsolationSmoke
+                    ? "spark-x-agent-knowledge-isolation-p0"
+                    : runKnowledgeCleanupSmoke
+                      ? "spark-x-agent-knowledge-cleanup-p1"
+                      : runKnowledgeLargeTableSmoke
+                        ? "spark-x-agent-knowledge-large-table-p1"
+                        : runSkillSmoke
+                          ? "spark-x-agent-skills-p0"
+                          : runMcpSmoke
+                            ? "spark-x-agent-mcp-p0"
+                            : runAutomationSmoke
+                              ? "spark-x-agent-automations-p0"
+                              : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -6974,32 +7303,34 @@ console.info(
             ? 30
             : runProviderRetrySmoke
               ? 32
-              : runConversationReopenSmoke
-                ? 23
-                : runConversationPaginationSmoke
-                  ? 24
-                  : runConversationDeleteSmoke
+              : runContextCompactionSmoke
+                ? 34
+                : runConversationReopenSmoke
+                  ? 23
+                  : runConversationPaginationSmoke
                     ? 24
-                    : runKnowledgeSmoke
-                      ? 32
-                      : runKnowledgeRetrievalSmoke
-                        ? 35
-                        : runKnowledgeIsolationSmoke
-                          ? 36
-                          : runKnowledgeCleanupSmoke
-                            ? 34
-                            : runKnowledgeLargeTableSmoke
-                              ? 30
-                              : runSkillSmoke
-                                ? 12
-                                : runMcpSmoke
-                                  ? expectMcpUnavailable
-                                    ? 10
-                                    : 12
-                                  : runAutomationSmoke
-                                    ? 20
-                                    : 161,
-    caseCount: 25,
+                    : runConversationDeleteSmoke
+                      ? 24
+                      : runKnowledgeSmoke
+                        ? 32
+                        : runKnowledgeRetrievalSmoke
+                          ? 35
+                          : runKnowledgeIsolationSmoke
+                            ? 36
+                            : runKnowledgeCleanupSmoke
+                              ? 34
+                              : runKnowledgeLargeTableSmoke
+                                ? 30
+                                : runSkillSmoke
+                                  ? 12
+                                  : runMcpSmoke
+                                    ? expectMcpUnavailable
+                                      ? 10
+                                      : 12
+                                    : runAutomationSmoke
+                                      ? 20
+                                      : 161,
+    caseCount: 26,
     coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -7021,6 +7352,8 @@ console.info(
     chatCancelCaseVersionId: chatCancelCase.version.id,
     chatProviderRetryCaseId: chatProviderRetryCase.testCase.id,
     chatProviderRetryCaseVersionId: chatProviderRetryCase.version.id,
+    chatContextCompactionCaseId: chatContextCompactionCase.testCase.id,
+    chatContextCompactionCaseVersionId: chatContextCompactionCase.version.id,
     toolCatalogCaseId: toolCatalogCase.testCase.id,
     toolCatalogCaseVersionId: toolCatalogCase.version.id,
     toolInvocationCaseId: toolInvocationCase.testCase.id,
@@ -7062,6 +7395,8 @@ console.info(
     recentConversationSuiteId: recentConversationSuite.id,
     chatContextSuiteId: chatContextSuite.id,
     chatCancelSuiteId: chatCancelSuite.id,
+    chatProviderRetrySuiteId: chatProviderRetrySuite.id,
+    chatContextCompactionSuiteId: chatContextCompactionSuite.id,
     chatSuiteId: chatSuite.id,
     toolSuiteId: toolSuite.id,
     toolFailureRecoverySuiteId: toolFailureRecoverySuite.id,

@@ -32,6 +32,12 @@ const environment: HttpExecutionEnvironment = {
       ports: [9],
       pathPrefixes: ["/spark-x-test-platform-provider-fault"],
     },
+    {
+      protocol: "http",
+      host: "192.168.110.136",
+      ports: [4173],
+      pathPrefixes: ["/api/v1/fixtures/openai/context-compaction"],
+    },
   ],
 };
 
@@ -250,7 +256,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.21.0",
+      version: "0.22.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -278,9 +284,18 @@ describe("spark-x-agent adapter", () => {
             key: "provider.cleanup-transient-failure-fixture",
             actionLevel: "dangerous",
           }),
+          expect.objectContaining({
+            key: "provider.create-context-compaction-fixture",
+            producesResource: true,
+            cleanupAction: "provider.cleanup-transient-failure-fixture",
+          }),
           expect.objectContaining({ key: "chat.ask", producesResource: false }),
           expect.objectContaining({
             key: "chat.assert-provider-failure-retry",
+            actionLevel: "dangerous",
+          }),
+          expect.objectContaining({
+            key: "chat.assert-context-compaction-continuity",
             actionLevel: "dangerous",
           }),
           expect.objectContaining({
@@ -493,6 +508,324 @@ describe("spark-x-agent adapter", () => {
     expect(serialized).not.toContain("spark-x-test-platform-provider-fault");
     expect(serialized).not.toContain("memory-only-access-token-value");
     expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("registers the fixed context-compaction Provider fixture without exposing its sentinel", async () => {
+    const name = `spark-x-context-compaction-${variables["run.id"]}`;
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      true,
+    );
+    const fixtureBaseUrl = "http://192.168.110.136:4173/api/v1/fixtures/openai/context-compaction";
+    const fixture = providerProjection(
+      fixtureProviderId,
+      name,
+      fixtureBaseUrl,
+      false,
+      "spark-x-test-platform-context-compaction-model",
+    );
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [original] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: fixture }));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/provider.create-context-compaction-fixture",
+      environment,
+      { ...credentials, name: "spark-x-context-compaction-${run.id}" },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      providerFixtureResourceId: `${fixtureProviderId}:${originalProviderId}`,
+      fixtureProviderId,
+      originalProviderId,
+      fixtureCreated: true,
+      originalProviderActive: true,
+      contextFixtureTargetAllowed: true,
+      contextBaseUrlSha256: createHash("sha256").update(fixtureBaseUrl).digest("hex"),
+      nameSha256: createHash("sha256").update(name).digest("hex"),
+    });
+    const createBody = fetcher.mock.calls[2]?.[1]?.body;
+    expect(typeof createBody).toBe("string");
+    if (typeof createBody !== "string") throw new Error("expected context Provider fixture body");
+    expect(JSON.parse(createBody)).toEqual({
+      name,
+      base_url: fixtureBaseUrl,
+      api_key: "spark-x-test-platform-noncredential-context-compaction-fixture",
+      model: "spark-x-test-platform-context-compaction-model",
+      protocol: "openai",
+    });
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain(
+      "spark-x-test-platform-noncredential-context-compaction-fixture",
+    );
+    expect(serialized).not.toContain("/api/v1/fixtures/openai/context-compaction");
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("proves durable compaction continuity with a real read-only tool pair and exact phases", async () => {
+    const runId = variables["run.id"];
+    const resourceId = `${fixtureProviderId}:${originalProviderId}`;
+    const fixtureBaseUrl = "http://192.168.110.136:4173/api/v1/fixtures/openai/context-compaction";
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      true,
+    );
+    const fixture = providerProjection(
+      fixtureProviderId,
+      `spark-x-context-compaction-${runId}`,
+      fixtureBaseUrl,
+      false,
+      "spark-x-test-platform-context-compaction-model",
+    );
+    const toolCallId = `call_chat005_${runId.replaceAll("-", "")}`;
+    const toolArguments = { query: `spark-x-chat005-${runId}` };
+    const toolResult = {
+      success: true,
+      results: [],
+      message: "No relevant documents found",
+    };
+    const continuation = `CHAT005_CONTINUITY_OK:${runId}`;
+    const historyItems = [
+      { role: "user", content: `CHAT005_TOOL:${runId}` },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: toolCallId,
+            type: "function",
+            function: { name: "document_search", arguments: toolArguments },
+          },
+        ],
+      },
+      { role: "tool", content: JSON.stringify(toolResult), tool_call_id: toolCallId },
+      {
+        role: "assistant",
+        content: `CHAT005_TOOL_DONE:${runId}`,
+        finish_reason: "stop",
+        public_execution_trace: [
+          { kind: "tool_call", id: toolCallId, name: "document_search", arguments: toolArguments },
+          {
+            kind: "tool_result",
+            id: toolCallId,
+            name: "document_search",
+            result: toolResult,
+            success: true,
+          },
+        ],
+      },
+      { role: "user", content: `CHAT005_FILL:${runId}:01:bounded`, payload_truncated: true },
+      { role: "assistant", content: `CHAT005_FILL_ACK:${runId}`, finish_reason: "stop" },
+      { role: "user", content: `CHAT005_CONTINUE:${runId}` },
+      { role: "assistant", content: continuation, finish_reason: "stop" },
+    ];
+    const chatResponse = (
+      content: string,
+      extraEvents: readonly Readonly<Record<string, unknown>>[] = [],
+    ) =>
+      sseResponse([
+        { event: "conversation_id", data: { conversation_id: conversationId } },
+        ...extraEvents,
+        { event: "content", data: { content } },
+        {
+          event: "done",
+          data: { final_content: content, truncated: false, stop_reason: "stop" },
+        },
+      ]);
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [original, fixture] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "activated" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: [
+            { ...original, is_active: false },
+            { ...fixture, is_active: true },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        chatResponse(`CHAT005_TOOL_DONE:${runId}`, [
+          {
+            event: "tool_call",
+            data: { id: toolCallId, name: "document_search", arguments: toolArguments },
+          },
+          {
+            event: "tool_result",
+            data: {
+              id: toolCallId,
+              name: "document_search",
+              result: toolResult,
+              success: true,
+            },
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        chatResponse(`CHAT005_FILL_ACK:${runId}`, [
+          { event: "status", data: { phase: "context_compacting" } },
+          { event: "status", data: { phase: "context_ready" } },
+        ]),
+      )
+      .mockResolvedValueOnce(chatResponse(continuation))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { items: historyItems, total: historyItems.length } }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/chat.assert-context-compaction-continuity",
+      environment,
+      { ...credentials, conversationId, providerFixtureResourceId: resourceId },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      conversationId,
+      compactionObserved: true,
+      contextCompactingCount: 1,
+      contextReadyCount: 1,
+      phaseOrderMatched: true,
+      durableContinuation: true,
+      durableCursorContinued: true,
+      toolStatePreserved: true,
+      toolCallCount: 1,
+      toolResultCount: 1,
+      toolCallIdSha256: createHash("sha256").update(toolCallId).digest("hex"),
+      toolArgumentsSha256: hashCanonical(toolArguments),
+      toolResultSha256: hashCanonical(toolResult),
+      triggerRound: 1,
+      continuationRecompactionCount: 0,
+      messageCount: 8,
+      userMessageCount: 3,
+      assistantMessageCount: 4,
+      toolMessageCount: 1,
+      traceToolCallCount: 1,
+      traceToolResultCount: 1,
+      continuationContentSha256: createHash("sha256").update(continuation).digest("hex"),
+    });
+    const fillerBody = fetcher.mock.calls[5]?.[1]?.body;
+    expect(typeof fillerBody).toBe("string");
+    expect(fillerBody).not.toContain("memory-only-access-token-value");
+    expect((fillerBody as string).length).toBeGreaterThan(19_000);
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain(toolCallId);
+    expect(serialized).not.toContain(`spark-x-chat005-${runId}`);
+    expect(serialized).not.toContain(continuation);
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("preserves a root-cause failure when the compaction phases arrive out of order", async () => {
+    const runId = variables["run.id"];
+    const fixtureBaseUrl = "http://192.168.110.136:4173/api/v1/fixtures/openai/context-compaction";
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      true,
+    );
+    const fixture = providerProjection(
+      fixtureProviderId,
+      `spark-x-context-compaction-${runId}`,
+      fixtureBaseUrl,
+      false,
+      "spark-x-test-platform-context-compaction-model",
+    );
+    const toolCallId = `call_chat005_${runId.replaceAll("-", "")}`;
+    const toolArguments = { query: `spark-x-chat005-${runId}` };
+    const toolResult = {
+      success: true,
+      results: [],
+      message: "No relevant documents found",
+    };
+    const chatResponse = (
+      content: string,
+      extraEvents: readonly Readonly<Record<string, unknown>>[] = [],
+    ) =>
+      sseResponse([
+        { event: "conversation_id", data: { conversation_id: conversationId } },
+        ...extraEvents,
+        { event: "content", data: { content } },
+        {
+          event: "done",
+          data: { final_content: content, truncated: false, stop_reason: "stop" },
+        },
+      ]);
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [original, fixture] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "activated" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: [
+            { ...original, is_active: false },
+            { ...fixture, is_active: true },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        chatResponse(`CHAT005_TOOL_DONE:${runId}`, [
+          {
+            event: "tool_call",
+            data: { id: toolCallId, name: "document_search", arguments: toolArguments },
+          },
+          {
+            event: "tool_result",
+            data: {
+              id: toolCallId,
+              name: "document_search",
+              result: toolResult,
+              success: true,
+            },
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        chatResponse(`CHAT005_FILL_ACK:${runId}`, [
+          { event: "status", data: { phase: "context_ready" } },
+          { event: "status", data: { phase: "context_compacting" } },
+        ]),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/chat.assert-context-compaction-continuity",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          providerFixtureResourceId: `${fixtureProviderId}:${originalProviderId}`,
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_CONTEXT_COMPACTION_NOT_OBSERVED",
+        classification: "test_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(6);
   });
 
   it("preserves a visible Provider failure and completes an independent explicit retry without duplicate messages", async () => {

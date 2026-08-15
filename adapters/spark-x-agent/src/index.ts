@@ -17,10 +17,12 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/conversation.assert-deleted-state",
   "adapter:spark-x-agent/conversation.delete",
   "adapter:spark-x-agent/provider.create-transient-failure-fixture",
+  "adapter:spark-x-agent/provider.create-context-compaction-fixture",
   "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
   "adapter:spark-x-agent/chat.ask",
   "adapter:spark-x-agent/chat.cancel-and-resume",
   "adapter:spark-x-agent/chat.assert-provider-failure-retry",
+  "adapter:spark-x-agent/chat.assert-context-compaction-continuity",
   "adapter:spark-x-agent/chat.assert-history",
   "adapter:spark-x-agent/chat.assert-context-history",
   "adapter:spark-x-agent/tool.assert-safe-catalog",
@@ -303,6 +305,50 @@ export const sparkXAgentActionCapabilities = [
     },
   },
   {
+    key: "provider.create-context-compaction-fixture",
+    name: "创建上下文压缩 Provider 夹具",
+    description:
+      "登记固定、受限且不转发请求的 OpenAI 兼容 Provider 夹具，并冻结原活跃 Provider 标识供 finally 与中断补偿。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 20_000,
+    producesResource: true,
+    cleanupAction: "provider.cleanup-transient-failure-fixture",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "name"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        name: { type: "string", minLength: 1, maxLength: 200 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "providerFixtureResourceId",
+        "fixtureProviderId",
+        "originalProviderId",
+        "fixtureCreated",
+        "originalProviderActive",
+        "contextFixtureTargetAllowed",
+        "contextBaseUrlSha256",
+        "nameSha256",
+      ],
+      properties: {
+        providerFixtureResourceId: { type: "string", minLength: 73, maxLength: 73 },
+        fixtureProviderId: { type: "string", format: "uuid" },
+        originalProviderId: { type: "string", format: "uuid" },
+        fixtureCreated: { const: true },
+        originalProviderActive: { const: true },
+        contextFixtureTargetAllowed: { const: true },
+        contextBaseUrlSha256: { type: "string", minLength: 64, maxLength: 64 },
+        nameSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
     key: "chat.ask",
     name: "发送对话并校验回复",
     description: "向已登记测试会话发送带运行标识的受控消息，并校验完整 SSE 回复。",
@@ -442,6 +488,78 @@ export const sparkXAgentActionCapabilities = [
         retryAssistantContentLength: { type: "integer", minimum: 1 },
         failurePollAttempts: { type: "integer", minimum: 1, maximum: 300 },
         retryPollAttempts: { type: "integer", minimum: 1, maximum: 600 },
+      },
+    },
+  },
+  {
+    key: "chat.assert-context-compaction-continuity",
+    name: "校验长上下文压缩续接",
+    description:
+      "通过受限 Provider 夹具和内置只读 document_search 产生真实工具历史，触发语义压缩后以独立请求验证关键事实、工具状态与持久化游标连续。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 240_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "conversationId", "providerFixtureResourceId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        providerFixtureResourceId: { type: "string", minLength: 73, maxLength: 73 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "compactionObserved",
+        "contextCompactingCount",
+        "contextReadyCount",
+        "phaseOrderMatched",
+        "durableContinuation",
+        "durableCursorContinued",
+        "toolStatePreserved",
+        "toolCallCount",
+        "toolResultCount",
+        "toolCallIdSha256",
+        "toolArgumentsSha256",
+        "toolResultSha256",
+        "triggerRound",
+        "continuationRecompactionCount",
+        "messageCount",
+        "userMessageCount",
+        "assistantMessageCount",
+        "toolMessageCount",
+        "traceToolCallCount",
+        "traceToolResultCount",
+        "continuationContentSha256",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        compactionObserved: { const: true },
+        contextCompactingCount: { const: 1 },
+        contextReadyCount: { const: 1 },
+        phaseOrderMatched: { const: true },
+        durableContinuation: { const: true },
+        durableCursorContinued: { const: true },
+        toolStatePreserved: { const: true },
+        toolCallCount: { const: 1 },
+        toolResultCount: { const: 1 },
+        toolCallIdSha256: { type: "string", minLength: 64, maxLength: 64 },
+        toolArgumentsSha256: { type: "string", minLength: 64, maxLength: 64 },
+        toolResultSha256: { type: "string", minLength: 64, maxLength: 64 },
+        triggerRound: { type: "integer", minimum: 1, maximum: 24 },
+        continuationRecompactionCount: { const: 0 },
+        messageCount: { type: "integer", minimum: 8, maximum: 60 },
+        userMessageCount: { type: "integer", minimum: 3, maximum: 26 },
+        assistantMessageCount: { type: "integer", minimum: 4, maximum: 27 },
+        toolMessageCount: { const: 1 },
+        traceToolCallCount: { const: 1 },
+        traceToolResultCount: { const: 1 },
+        continuationContentSha256: { type: "string", minLength: 64, maxLength: 64 },
       },
     },
   },
@@ -1981,7 +2099,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.21.0",
+  version: "0.22.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -3660,6 +3778,9 @@ interface SparkXProviderFixtureResource {
 
 const transientProviderFixtureApiKey = "spark-x-test-platform-noncredential-fault-fixture";
 const transientProviderFixtureModel = "spark-x-test-platform-fault-model";
+const contextCompactionFixtureApiKey =
+  "spark-x-test-platform-noncredential-context-compaction-fixture";
+const contextCompactionFixtureModel = "spark-x-test-platform-context-compaction-model";
 const providerFixtureResourcePattern =
   /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu;
 
@@ -3667,6 +3788,17 @@ function transientProviderFixtureBaseUrl(environment: HttpExecutionEnvironment):
   const target = new URL(environment.baseUrl);
   target.port = "9";
   target.pathname = "/spark-x-test-platform-provider-fault";
+  target.search = "";
+  target.hash = "";
+  assertHttpTargetAllowed(target, environment.allowlist);
+  return target.toString().replace(/\/$/u, "");
+}
+
+function contextCompactionFixtureBaseUrl(environment: HttpExecutionEnvironment): string {
+  const target = new URL(environment.baseUrl);
+  target.protocol = "http:";
+  target.port = "4173";
+  target.pathname = "/api/v1/fixtures/openai/context-compaction";
   target.search = "";
   target.hash = "";
   assertHttpTargetAllowed(target, environment.allowlist);
@@ -4015,6 +4147,7 @@ interface SparkXAgentChatResult {
   readonly conversationId: string;
   readonly contentEventCount: number;
   readonly statusEventCount: number;
+  readonly statusPhases: readonly string[];
   readonly assistantPreviewEventCount: number;
   readonly toolEventCount: number;
   readonly skillEventCount: number;
@@ -4038,6 +4171,7 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
   let doneEventCount = 0;
   let contentEventCount = 0;
   let statusEventCount = 0;
+  const statusPhases: string[] = [];
   let assistantPreviewEventCount = 0;
   let toolEventCount = 0;
   let skillEventCount = 0;
@@ -4084,6 +4218,14 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
       streamedContent += data.content;
     } else if (event === "status" || event === "progress" || event === "heartbeat") {
       statusEventCount += 1;
+      if (
+        event === "status" &&
+        typeof data.phase === "string" &&
+        data.phase.length > 0 &&
+        data.phase.length <= 100
+      ) {
+        statusPhases.push(data.phase);
+      }
     } else if (event === "assistant_preview") {
       assistantPreviewEventCount += 1;
     } else if (event === "tool_call") {
@@ -4198,6 +4340,7 @@ function parseChatStream(text: string, streamBytes: number): SparkXAgentChatResu
     conversationId,
     contentEventCount,
     statusEventCount,
+    statusPhases,
     assistantPreviewEventCount,
     toolEventCount,
     skillEventCount,
@@ -4479,6 +4622,107 @@ export async function executeSparkXAgentAction(
       originalProviderActive: true,
       faultTargetAllowed: true,
       faultBaseUrlSha256: sha256(faultBaseUrl),
+      nameSha256: sha256(name),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/provider.create-context-compaction-fixture") {
+    const name = requiredString(params, "name", variables, 200);
+    const runId = variables["run.id"];
+    if (
+      typeof runId !== "string" ||
+      !uuidPattern.test(runId) ||
+      !name.includes(runId) ||
+      name.trim() !== name ||
+      name.includes("\u0000")
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_CONTEXT_FIXTURE_TRACEABILITY_REQUIRED",
+        "上下文压缩 Provider 夹具名称必须包含当前 run_id 且符合受控文本边界。",
+      );
+    }
+    const contextBaseUrl = contextCompactionFixtureBaseUrl(environment);
+    const before = await listSparkXProviders(environment, token, remainingOptions());
+    const active = before.filter((provider) => provider.active);
+    if (active.length !== 1 || active[0] === undefined) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_PROVIDER_BASELINE_INVALID",
+        "星火 Agent 测试账号必须且只能有一个活跃 Provider。",
+      );
+    }
+    if (before.some((provider) => provider.name === name)) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_CONTEXT_FIXTURE_NAME_CONFLICT",
+        "本次运行的上下文压缩 Provider 夹具名称已存在，需先完成残留清理。",
+      );
+    }
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath("/providers"),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          name,
+          base_url: contextBaseUrl,
+          api_key: contextCompactionFixtureApiKey,
+          model: contextCompactionFixtureModel,
+          protocol: "openai",
+        },
+      },
+      remainingOptions(),
+    );
+    accepted(response, "SPARK_X_AGENT_CONTEXT_FIXTURE_CREATE_FAILED");
+    const createdData = dataEnvelope(
+      response.body,
+      "SPARK_X_AGENT_CONTEXT_FIXTURE_RESPONSE_INVALID",
+    );
+    let fixture: SparkXProviderProjection;
+    try {
+      fixture = sparkXProviderProjection(
+        createdData,
+        "SPARK_X_AGENT_CONTEXT_FIXTURE_RESPONSE_INVALID",
+      );
+      if (
+        fixture.name !== name ||
+        fixture.baseUrl !== contextBaseUrl ||
+        fixture.model !== contextCompactionFixtureModel ||
+        fixture.protocol !== "openai" ||
+        fixture.active
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_CONTEXT_FIXTURE_RESPONSE_INVALID",
+          "上下文压缩 Provider 夹具的名称、固定目标、协议或非活跃状态不一致。",
+        );
+      }
+    } catch (firstError) {
+      if (typeof createdData.id === "string" && uuidPattern.test(createdData.id)) {
+        try {
+          await authenticatedRequest(
+            environment,
+            token,
+            {
+              method: "DELETE",
+              path: actionPath(`/providers/${encodeURIComponent(createdData.id)}`),
+            },
+            remainingOptions(),
+          );
+        } catch {
+          // Preserve the first product failure; the malformed fixture has no safe ledger identity.
+        }
+      }
+      throw firstError;
+    }
+    const providerFixtureResourceId = `${fixture.id}:${active[0].id}`;
+    return {
+      providerFixtureResourceId,
+      fixtureProviderId: fixture.id,
+      originalProviderId: active[0].id,
+      fixtureCreated: true,
+      originalProviderActive: true,
+      contextFixtureTargetAllowed: true,
+      contextBaseUrlSha256: sha256(contextBaseUrl),
       nameSha256: sha256(name),
     };
   }
@@ -7240,6 +7484,283 @@ export async function executeSparkXAgentAction(
       truncated: false,
       ...(result.stopReason === undefined ? {} : { stopReason: result.stopReason }),
       ...(result.durationMs === undefined ? {} : { durationMs: result.durationMs }),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/chat.assert-context-compaction-continuity") {
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const providerFixtureResourceId = requiredString(
+      params,
+      "providerFixtureResourceId",
+      variables,
+      73,
+    );
+    const runId = variables["run.id"];
+    if (typeof runId !== "string" || !uuidPattern.test(runId)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_CONTEXT_RUN_ID_REQUIRED",
+        "上下文压缩回归必须绑定有效 run_id。",
+      );
+    }
+    const fixtureResource = providerFixtureResource(providerFixtureResourceId);
+    const contextBaseUrl = contextCompactionFixtureBaseUrl(environment);
+    const providers = await listSparkXProviders(environment, token, remainingOptions());
+    const original = providers.find(
+      (provider) => provider.id === fixtureResource.originalProviderId,
+    );
+    const fixture = providers.find((provider) => provider.id === fixtureResource.fixtureProviderId);
+    const active = providers.filter((provider) => provider.active);
+    if (
+      original === undefined ||
+      fixture === undefined ||
+      active.length !== 1 ||
+      active[0]?.id !== original.id ||
+      fixture.active ||
+      fixture.baseUrl !== contextBaseUrl ||
+      fixture.model !== contextCompactionFixtureModel ||
+      fixture.protocol !== "openai"
+    ) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_CONTEXT_FIXTURE_BASELINE_INVALID",
+        "上下文压缩 Provider 夹具或原活跃 Provider 已偏离本次运行登记基线。",
+      );
+    }
+    await activateSparkXProvider(environment, token, fixture.id, remainingOptions());
+    const activated = await listSparkXProviders(environment, token, remainingOptions());
+    const activatedProviders = activated.filter((provider) => provider.active);
+    if (activatedProviders.length !== 1 || activatedProviders[0]?.id !== fixture.id) {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONTEXT_FIXTURE_ACTIVATION_ASSERTION_FAILED",
+        "上下文压缩 Provider 夹具没有成为唯一活跃 Provider。",
+      );
+    }
+
+    const toolMessage = `CHAT005_TOOL:${runId}`;
+    const expectedToolArguments = { query: `spark-x-chat005-${runId}` };
+    const expectedToolResult = {
+      success: true,
+      results: [],
+      message: "No relevant documents found",
+    };
+    const toolRound = await streamChat(
+      environment,
+      token,
+      conversationId,
+      toolMessage,
+      remainingOptions(),
+    );
+    const toolCall = toolRound.toolCalls[0];
+    const toolResult = toolRound.toolResults[0];
+    if (
+      toolRound.finalContent !== `CHAT005_TOOL_DONE:${runId}` ||
+      toolRound.toolCalls.length !== 1 ||
+      toolRound.toolResults.length !== 1 ||
+      toolRound.reviewEventCount !== 0 ||
+      toolCall === undefined ||
+      toolResult === undefined ||
+      toolCall.name !== "document_search" ||
+      toolResult.name !== "document_search" ||
+      toolCall.id !== toolResult.id ||
+      toolResult.success !== true ||
+      canonicalJson(toolCall.arguments) !== canonicalJson(expectedToolArguments) ||
+      canonicalJson(toolResult.result) !== canonicalJson(expectedToolResult)
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_CONTEXT_TOOL_STATE_INVALID",
+        "压缩前只读工具调用、结果或最终回复没有形成唯一完整的真实工具状态。",
+      );
+    }
+
+    let triggerRound: number | undefined;
+    let contextCompactingCount = 0;
+    let contextReadyCount = 0;
+    let phaseOrderMatched = false;
+    const filler = "x".repeat(19_200);
+    for (let round = 1; round <= 24; round += 1) {
+      const result = await streamChat(
+        environment,
+        token,
+        conversationId,
+        `CHAT005_FILL:${runId}:${String(round).padStart(2, "0")}:${filler}`,
+        remainingOptions(),
+      );
+      if (
+        result.finalContent !== `CHAT005_FILL_ACK:${runId}` ||
+        result.toolCalls.length !== 0 ||
+        result.toolResults.length !== 0 ||
+        result.reviewEventCount !== 0
+      ) {
+        throw assertionFailure(
+          "SPARK_X_AGENT_CONTEXT_FILLER_RESPONSE_INVALID",
+          "上下文填充轮产生了非固定回复、额外工具调用或人工复核。",
+        );
+      }
+      const compactingIndexes = result.statusPhases
+        .map((phase, index) => (phase === "context_compacting" ? index : -1))
+        .filter((index) => index >= 0);
+      const readyIndexes = result.statusPhases
+        .map((phase, index) => (phase === "context_ready" ? index : -1))
+        .filter((index) => index >= 0);
+      if (compactingIndexes.length > 0 || readyIndexes.length > 0) {
+        triggerRound = round;
+        contextCompactingCount = compactingIndexes.length;
+        contextReadyCount = readyIndexes.length;
+        phaseOrderMatched =
+          compactingIndexes.length === 1 &&
+          readyIndexes.length === 1 &&
+          (compactingIndexes[0] ?? Number.MAX_SAFE_INTEGER) < (readyIndexes[0] ?? -1);
+        break;
+      }
+    }
+    if (
+      triggerRound === undefined ||
+      contextCompactingCount !== 1 ||
+      contextReadyCount !== 1 ||
+      !phaseOrderMatched
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_CONTEXT_COMPACTION_NOT_OBSERVED",
+        "有界长上下文没有产生唯一且有序的 context_compacting/context_ready 阶段。",
+      );
+    }
+
+    const continuationText = `CHAT005_CONTINUITY_OK:${runId}`;
+    const continuation = await streamChat(
+      environment,
+      token,
+      conversationId,
+      `CHAT005_CONTINUE:${runId}`,
+      remainingOptions(),
+    );
+    const continuationRecompactionCount = continuation.statusPhases.filter(
+      (phase) => phase === "context_compacting",
+    ).length;
+    if (
+      continuation.finalContent !== continuationText ||
+      continuation.toolCalls.length !== 0 ||
+      continuation.toolResults.length !== 0 ||
+      continuation.reviewEventCount !== 0 ||
+      continuationRecompactionCount !== 0
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_CONTEXT_COMPACTION_CONTINUITY_FAILED",
+        "独立续接请求没有从持久化摘要恢复关键事实与工具状态，或游标导致立即重复压缩。",
+      );
+    }
+
+    const historyResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+        ),
+      },
+      remainingOptions(),
+    );
+    accepted(historyResponse, "SPARK_X_AGENT_CONTEXT_COMPACTION_HISTORY_FAILED");
+    const history = dataEnvelope(
+      historyResponse.body,
+      "SPARK_X_AGENT_CONTEXT_COMPACTION_HISTORY_RESPONSE_INVALID",
+    );
+    const items = Array.isArray(history.items)
+      ? history.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    const userMessages = items.filter((item) => item.role === "user");
+    const assistantMessages = items.filter((item) => item.role === "assistant");
+    const toolMessages = items.filter((item) => item.role === "tool");
+    const calls = assistantMessages.flatMap((item) =>
+      Array.isArray(item.tool_calls)
+        ? item.tool_calls
+            .map(objectValue)
+            .filter((call): call is Readonly<Record<string, unknown>> => call !== null)
+        : [],
+    );
+    const historyCall = calls[0];
+    const historyFunction = historyCall === undefined ? null : objectValue(historyCall.function);
+    const historyTool = toolMessages[0];
+    const expectedMessageCount = triggerRound * 2 + 6;
+    const traceEvents = items.flatMap((item) =>
+      Array.isArray(item.public_execution_trace)
+        ? item.public_execution_trace
+            .map(objectValue)
+            .filter((event): event is Readonly<Record<string, unknown>> => event !== null)
+        : [],
+    );
+    const traceCalls = traceEvents.filter((event) => event.kind === "tool_call");
+    const traceResults = traceEvents.filter((event) => event.kind === "tool_result");
+    const historyArguments = structuredObject(
+      historyFunction?.arguments,
+      "SPARK_X_AGENT_CONTEXT_COMPACTION_HISTORY_RESPONSE_INVALID",
+      "压缩后的工具调用历史缺少结构化参数。",
+      "product_failed",
+    );
+    const historyResult = structuredObject(
+      historyTool?.content,
+      "SPARK_X_AGENT_CONTEXT_COMPACTION_HISTORY_RESPONSE_INVALID",
+      "压缩后的工具结果历史缺少结构化结果。",
+      "product_failed",
+    );
+    if (
+      items.length !== expectedMessageCount ||
+      userMessages.length !== triggerRound + 2 ||
+      assistantMessages.length !== triggerRound + 3 ||
+      toolMessages.length !== 1 ||
+      calls.length !== 1 ||
+      userMessages.filter((item) => item.content === toolMessage && item.payload_truncated !== true)
+        .length !== 1 ||
+      userMessages.filter(
+        (item) => item.content === `CHAT005_CONTINUE:${runId}` && item.payload_truncated !== true,
+      ).length !== 1 ||
+      assistantMessages.filter(
+        (item) => item.content === continuationText && item.payload_truncated !== true,
+      ).length !== 1 ||
+      historyCall?.id !== toolCall.id ||
+      historyFunction?.name !== "document_search" ||
+      historyTool?.tool_call_id !== toolCall.id ||
+      canonicalJson(historyArguments) !== canonicalJson(expectedToolArguments) ||
+      canonicalJson(historyResult) !== canonicalJson(expectedToolResult) ||
+      traceCalls.length !== 1 ||
+      traceResults.length !== 1 ||
+      traceCalls[0]?.id !== toolCall.id ||
+      traceCalls[0]?.name !== "document_search" ||
+      traceResults[0]?.id !== toolCall.id ||
+      traceResults[0]?.name !== "document_search" ||
+      traceResults[0]?.success !== true
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_CONTEXT_COMPACTION_HISTORY_ASSERTION_FAILED",
+        "压缩后权威历史没有完整保留唯一工具调用/结果、续接消息、公开轨迹或精确消息基数。",
+      );
+    }
+    const toolArgumentsCanonical = canonicalJson(expectedToolArguments);
+    const toolResultCanonical = canonicalJson(expectedToolResult);
+    return {
+      conversationId,
+      compactionObserved: true,
+      contextCompactingCount,
+      contextReadyCount,
+      phaseOrderMatched: true,
+      durableContinuation: true,
+      durableCursorContinued: true,
+      toolStatePreserved: true,
+      toolCallCount: 1,
+      toolResultCount: 1,
+      toolCallIdSha256: sha256(toolCall.id),
+      toolArgumentsSha256: sha256(toolArgumentsCanonical),
+      toolResultSha256: sha256(toolResultCanonical),
+      triggerRound,
+      continuationRecompactionCount,
+      messageCount: items.length,
+      userMessageCount: userMessages.length,
+      assistantMessageCount: assistantMessages.length,
+      toolMessageCount: toolMessages.length,
+      traceToolCallCount: traceCalls.length,
+      traceToolResultCount: traceResults.length,
+      continuationContentSha256: sha256(continuationText),
     };
   }
 

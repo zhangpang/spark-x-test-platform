@@ -11,6 +11,7 @@ import {
 import { registerControlPlaneRoutes } from "./control-plane/routes.js";
 import { SecretVault } from "./control-plane/secrets.js";
 import { ControlPlaneService } from "./control-plane/service.js";
+import { registerContextCompactionFixtureRoutes } from "./context-compaction-fixture-routes.js";
 import { registerReleaseHookRoutes, resolveReleaseHookConfig } from "./release-hook-routes.js";
 import { registerRunRoutes, type RunQueue, type RunRouteStore } from "./run-routes.js";
 
@@ -103,6 +104,11 @@ export function buildApiApplication(
     runStore,
     queue,
     releaseHookConfig,
+    `/api/${apiVersion}`,
+  );
+  registerContextCompactionFixtureRoutes(
+    application.app,
+    environment.PLATFORM_CONTEXT_COMPACTION_FIXTURE_ENABLED === "true",
     `/api/${apiVersion}`,
   );
 
