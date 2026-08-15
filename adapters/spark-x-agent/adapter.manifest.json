@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -711,6 +711,94 @@
             "titleMatched": { "const": true },
             "fixtureSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
             "pollAttempts": { "type": "integer", "minimum": 1, "maximum": 120 }
+          }
+        }
+      },
+      {
+        "key": "knowledge-base.assert-conversation-scope",
+        "name": "校验会话知识范围与不可变快照",
+        "description": "将本次运行创建的知识库绑定到测试会话，严格固定文档版本，并校验快照幂等重放与范围稳定性。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 30000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "conversationId",
+            "knowledgeBaseId",
+            "knowledgeDocumentId",
+            "expectedFixtureSha256",
+            "clientRequestId"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "knowledgeBaseId": { "type": "string", "format": "uuid" },
+            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
+            "expectedFixtureSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "clientRequestId": { "type": "string", "format": "uuid" }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "knowledgeBaseId",
+            "knowledgeDocumentId",
+            "retrievalPolicy",
+            "scopeRevision",
+            "scopeHash",
+            "scopeKnowledgeBaseCount",
+            "scopeDocumentCount",
+            "scopeReadyDocumentCount",
+            "snapshotId",
+            "snapshotStatus",
+            "snapshotHash",
+            "snapshotKnowledgeBaseCount",
+            "snapshotReadyDocumentCount",
+            "snapshotExcludedDocumentCount",
+            "snapshotDocumentCount",
+            "scopeMatched",
+            "documentMatched",
+            "contentHashMatched",
+            "firstCreated",
+            "idempotentReplay",
+            "snapshotIdentityMatched",
+            "scopeStable"
+          ],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "knowledgeBaseId": { "type": "string", "format": "uuid" },
+            "knowledgeDocumentId": { "type": "string", "format": "uuid" },
+            "retrievalPolicy": { "const": "required" },
+            "scopeRevision": { "const": 1 },
+            "scopeHash": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "scopeKnowledgeBaseCount": { "const": 1 },
+            "scopeDocumentCount": { "const": 1 },
+            "scopeReadyDocumentCount": { "const": 1 },
+            "snapshotId": { "type": "string", "format": "uuid" },
+            "snapshotStatus": { "const": "prepared" },
+            "snapshotHash": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "snapshotKnowledgeBaseCount": { "const": 1 },
+            "snapshotReadyDocumentCount": { "const": 1 },
+            "snapshotExcludedDocumentCount": { "const": 0 },
+            "snapshotDocumentCount": { "const": 1 },
+            "scopeMatched": { "const": true },
+            "documentMatched": { "const": true },
+            "contentHashMatched": { "const": true },
+            "firstCreated": { "const": true },
+            "idempotentReplay": { "const": true },
+            "snapshotIdentityMatched": { "const": true },
+            "scopeStable": { "const": true }
           }
         }
       },

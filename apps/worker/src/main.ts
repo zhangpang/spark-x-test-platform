@@ -52,6 +52,7 @@ const workerRegistration = {
     "adapter:spark-x-agent/knowledge-base.upload-fixture",
     "adapter:spark-x-agent/knowledge-base.attach-upload",
     "adapter:spark-x-agent/knowledge-base.wait-ready",
+    "adapter:spark-x-agent/knowledge-base.assert-conversation-scope",
     "adapter:spark-x-agent/knowledge-base.cleanup",
     "adapter:spark-x-agent/skill.assert-trusted-publication",
     "adapter:spark-x-agent/automation.create",

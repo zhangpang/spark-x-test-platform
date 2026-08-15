@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -188,10 +188,10 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.8.1` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
+当前 `0.8.2` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
 `chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
-`knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.cleanup` 和
+`knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-conversation-scope`、`knowledge-base.cleanup` 和
 `skill.assert-trusted-publication`，以及 `automation.create`、`automation.wait-fired` 和
 `automation.cleanup`。动作只调用适配器内
 固定的 `/trade/api` 与 `/trade-domain-api` 路径，所有请求与
@@ -222,6 +222,13 @@ SHA-256。创建动作只登记一个 `spark-x-agent-knowledge-base` 顶层资�
 先删除知识文档与 Parser 资源，再删除原始上传并归档知识库，因此普通 `finally` 和 Worker 中断后的独立补偿
 不依赖中间步骤是否完成捕获。解析服务缺失、配置错误或 5xx 归为 `environment_failed`，首次失败不会被清理
 或重试覆盖。
+
+`knowledge-base.assert-conversation-scope` 只接受本次运行登记的会话、知识库、知识文档和 `${run.id}` 幂等键。
+动作先确认新会话为空范围且修订号为 0，再以乐观修订绑定唯一 `required` 知识库；首次创建快照必须返回
+HTTP 201，同一请求重放必须返回 HTTP 200，且范围哈希、快照 ID、快照哈希、知识版本 ID、Parser 版本 ID 和
+内容哈希必须完全一致。创建和重放后再次读取范围，确认修订、哈希、计数和绑定关系没有漂移。输出只登记
+资源 ID、哈希、计数和布尔结论；文件名、标题、Parser 内部 ID、签名地址、文档内容、密码和 Token 均不进入
+结构化证据。会话后于知识库登记，普通 `finally` 明确先删会话再清知识库，独立补偿按资源倒序保持同一顺序。
 
 SKILL 动作当前只读校验部署系统已经发布的固定 `trade-port-daily-brief`，不接受 Skill 名称、Prompt、文件、
 URL 或脚本参数。动作分别读取当前用户清单、用户详情和管理员清单，要求 UUID、名称、展示名、分类、启用状态、

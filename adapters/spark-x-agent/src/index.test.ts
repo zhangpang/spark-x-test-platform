@@ -31,6 +31,9 @@ const conversationId = "00000000-0000-4000-8000-000000000202";
 const knowledgeBaseId = "00000000-0000-4000-8000-000000000210";
 const uploadedDocumentId = "00000000-0000-4000-8000-000000000211";
 const knowledgeDocumentId = "00000000-0000-4000-8000-000000000212";
+const knowledgeVersionId = "00000000-0000-4000-8000-000000000215";
+const knowledgeScopeId = "00000000-0000-4000-8000-000000000216";
+const knowledgeSnapshotId = "00000000-0000-4000-8000-000000000217";
 const skillId = "00000000-0000-4000-8000-000000000213";
 const automationId = "00000000-0000-4000-8000-000000000214";
 const automationMarker = `spark-x-auto-${variables["run.id"]}`;
@@ -126,7 +129,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.8.1",
+      version: "0.8.2",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -173,6 +176,10 @@ describe("spark-x-agent adapter", () => {
           }),
           expect.objectContaining({
             key: "knowledge-base.wait-ready",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "knowledge-base.assert-conversation-scope",
             actionLevel: "write",
           }),
           expect.objectContaining({
@@ -1459,6 +1466,289 @@ describe("spark-x-agent adapter", () => {
       fixtureSha256,
       pollAttempts: 1,
     });
+  });
+
+  it("binds one ready knowledge base and replays the exact immutable snapshot", async () => {
+    const fixtureSha256 = "a".repeat(64);
+    const scopeHash = "b".repeat(64);
+    const snapshotHash = "c".repeat(64);
+    const clientRequestId = variables["run.id"];
+    const knowledgeBase = {
+      id: knowledgeBaseId,
+      name: "sensitive fixture title",
+      status: "active",
+      document_count: 1,
+      ready_document_count: 1,
+    };
+    const savedScope = {
+      id: knowledgeScopeId,
+      conversation_id: conversationId,
+      retrieval_policy: "required",
+      status: "active",
+      revision: 1,
+      scope_hash: scopeHash,
+      knowledge_base_ids: [knowledgeBaseId],
+      knowledge_bases: [knowledgeBase],
+      created_at: "2026-08-15T04:00:00.000Z",
+      updated_at: "2026-08-15T04:00:00.000Z",
+    };
+    const snapshot = {
+      id: knowledgeSnapshotId,
+      conversation_id: conversationId,
+      scope_id: knowledgeScopeId,
+      scope_revision: 1,
+      scope_hash: scopeHash,
+      client_request_id: clientRequestId,
+      turn_id: null,
+      retrieval_policy: "required",
+      status: "prepared",
+      snapshot_hash: snapshotHash,
+      knowledge_base_count: 1,
+      ready_document_count: 1,
+      excluded_document_count: 0,
+      documents: [
+        {
+          knowledge_base_id: knowledgeBaseId,
+          knowledge_document_id: knowledgeDocumentId,
+          knowledge_version_id: knowledgeVersionId,
+          rust_document_id: uploadedDocumentId,
+          parser_document_id: "parser-document-secret",
+          parser_version_id: "parser-version-secret",
+          version_number: 1,
+          title: "sensitive fixture title",
+          source_filename: "sensitive-fixture.pdf",
+          content_hash: fixtureSha256,
+        },
+      ],
+      expires_at: "2026-08-16T04:00:00.000Z",
+      attached_at: null,
+      consumed_at: null,
+      created_at: "2026-08-15T04:00:00.000Z",
+      updated_at: "2026-08-15T04:00:00.000Z",
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            id: null,
+            conversation_id: conversationId,
+            retrieval_policy: "auto",
+            status: "active",
+            revision: 0,
+            scope_hash: null,
+            knowledge_base_ids: [],
+            knowledge_bases: [],
+            created_at: null,
+            updated_at: null,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: savedScope }))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { ...snapshot, idempotent_replay: false } }, 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { ...snapshot, idempotent_replay: true } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: savedScope }));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/knowledge-base.assert-conversation-scope",
+      environment,
+      {
+        ...credentials,
+        conversationId,
+        knowledgeBaseId,
+        knowledgeDocumentId,
+        expectedFixtureSha256: fixtureSha256,
+        clientRequestId: "${run.id}",
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    const requests = fetcher.mock.calls.slice(1).map((call) => ({
+      url: urlOf(call[0] as URL | RequestInfo),
+      method: call[1]?.method,
+      headers: new Headers(call[1]?.headers),
+      body: typeof call[1]?.body === "string" ? (JSON.parse(call[1].body) as unknown) : undefined,
+    }));
+    expect(requests.map(({ url, method }) => ({ url, method }))).toEqual([
+      {
+        url: `http://192.168.110.136/trade-domain-api/conversations/${conversationId}/knowledge-scope`,
+        method: "GET",
+      },
+      {
+        url: `http://192.168.110.136/trade-domain-api/conversations/${conversationId}/knowledge-scope`,
+        method: "PUT",
+      },
+      {
+        url: `http://192.168.110.136/trade-domain-api/conversations/${conversationId}/document-context-snapshots`,
+        method: "POST",
+      },
+      {
+        url: `http://192.168.110.136/trade-domain-api/conversations/${conversationId}/document-context-snapshots`,
+        method: "POST",
+      },
+      {
+        url: `http://192.168.110.136/trade-domain-api/conversations/${conversationId}/knowledge-scope`,
+        method: "GET",
+      },
+    ]);
+    expect(requests[1]?.body).toEqual({
+      knowledge_base_ids: [knowledgeBaseId],
+      retrieval_policy: "required",
+      expected_revision: 0,
+    });
+    for (const request of requests.slice(2, 4)) {
+      expect(request.headers.get("idempotency-key")).toBe(clientRequestId);
+      expect(request.body).toEqual({
+        client_request_id: clientRequestId,
+        expected_scope_revision: 1,
+        expected_scope_hash: scopeHash,
+      });
+    }
+    expect(output).toEqual({
+      conversationId,
+      knowledgeBaseId,
+      knowledgeDocumentId,
+      retrievalPolicy: "required",
+      scopeRevision: 1,
+      scopeHash,
+      scopeKnowledgeBaseCount: 1,
+      scopeDocumentCount: 1,
+      scopeReadyDocumentCount: 1,
+      snapshotId: knowledgeSnapshotId,
+      snapshotStatus: "prepared",
+      snapshotHash,
+      snapshotKnowledgeBaseCount: 1,
+      snapshotReadyDocumentCount: 1,
+      snapshotExcludedDocumentCount: 0,
+      snapshotDocumentCount: 1,
+      scopeMatched: true,
+      documentMatched: true,
+      contentHashMatched: true,
+      firstCreated: true,
+      idempotentReplay: true,
+      snapshotIdentityMatched: true,
+      scopeStable: true,
+    });
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain("sensitive fixture title");
+    expect(serialized).not.toContain("sensitive-fixture.pdf");
+    expect(serialized).not.toContain("parser-document-secret");
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("preserves a snapshot replay identity mismatch as the root test failure", async () => {
+    const fixtureSha256 = "a".repeat(64);
+    const scopeHash = "b".repeat(64);
+    const snapshotHash = "c".repeat(64);
+    const clientRequestId = variables["run.id"];
+    const savedScope = {
+      conversation_id: conversationId,
+      retrieval_policy: "required",
+      status: "active",
+      revision: 1,
+      scope_hash: scopeHash,
+      knowledge_base_ids: [knowledgeBaseId],
+      knowledge_bases: [
+        {
+          id: knowledgeBaseId,
+          status: "active",
+          document_count: 1,
+          ready_document_count: 1,
+        },
+      ],
+    };
+    const snapshot = {
+      id: knowledgeSnapshotId,
+      conversation_id: conversationId,
+      scope_id: knowledgeScopeId,
+      scope_revision: 1,
+      scope_hash: scopeHash,
+      client_request_id: clientRequestId,
+      retrieval_policy: "required",
+      status: "prepared",
+      snapshot_hash: snapshotHash,
+      knowledge_base_count: 1,
+      ready_document_count: 1,
+      excluded_document_count: 0,
+      documents: [
+        {
+          knowledge_base_id: knowledgeBaseId,
+          knowledge_document_id: knowledgeDocumentId,
+          knowledge_version_id: knowledgeVersionId,
+          rust_document_id: uploadedDocumentId,
+          parser_document_id: "parser-document-1",
+          parser_version_id: "parser-version-1",
+          version_number: 1,
+          content_hash: fixtureSha256,
+        },
+      ],
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            conversation_id: conversationId,
+            retrieval_policy: "auto",
+            status: "active",
+            revision: 0,
+            scope_hash: null,
+            knowledge_base_ids: [],
+            knowledge_bases: [],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: savedScope }))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { ...snapshot, idempotent_replay: false } }, 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            ...snapshot,
+            id: "00000000-0000-4000-8000-000000000299",
+            idempotent_replay: true,
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/knowledge-base.assert-conversation-scope",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          knowledgeBaseId,
+          knowledgeDocumentId,
+          expectedFixtureSha256: fixtureSha256,
+          clientRequestId: "${run.id}",
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_KNOWLEDGE_SNAPSHOT_REPLAY_ASSERTION_FAILED",
+        classification: "test_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(5);
   });
 
   it("classifies parser runtime failures as environment failures", async () => {

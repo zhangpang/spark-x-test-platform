@@ -24,6 +24,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/knowledge-base.upload-fixture",
   "adapter:spark-x-agent/knowledge-base.attach-upload",
   "adapter:spark-x-agent/knowledge-base.wait-ready",
+  "adapter:spark-x-agent/knowledge-base.assert-conversation-scope",
   "adapter:spark-x-agent/knowledge-base.cleanup",
   "adapter:spark-x-agent/skill.assert-trusted-publication",
   "adapter:spark-x-agent/automation.create",
@@ -667,6 +668,91 @@ const conversationActionCapabilities = [
     },
   },
   {
+    key: "knowledge-base.assert-conversation-scope",
+    name: "校验会话知识范围与不可变快照",
+    description:
+      "将本次运行创建的知识库绑定到测试会话，严格固定文档版本，并校验快照幂等重放与范围稳定性。",
+    actionLevel: "write",
+    defaultTimeoutMs: 30_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "conversationId",
+        "knowledgeBaseId",
+        "knowledgeDocumentId",
+        "expectedFixtureSha256",
+        "clientRequestId",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        knowledgeDocumentId: { type: "string", format: "uuid" },
+        expectedFixtureSha256: { type: "string", minLength: 64, maxLength: 64 },
+        clientRequestId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "knowledgeBaseId",
+        "knowledgeDocumentId",
+        "retrievalPolicy",
+        "scopeRevision",
+        "scopeHash",
+        "scopeKnowledgeBaseCount",
+        "scopeDocumentCount",
+        "scopeReadyDocumentCount",
+        "snapshotId",
+        "snapshotStatus",
+        "snapshotHash",
+        "snapshotKnowledgeBaseCount",
+        "snapshotReadyDocumentCount",
+        "snapshotExcludedDocumentCount",
+        "snapshotDocumentCount",
+        "scopeMatched",
+        "documentMatched",
+        "contentHashMatched",
+        "firstCreated",
+        "idempotentReplay",
+        "snapshotIdentityMatched",
+        "scopeStable",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        knowledgeBaseId: { type: "string", format: "uuid" },
+        knowledgeDocumentId: { type: "string", format: "uuid" },
+        retrievalPolicy: { const: "required" },
+        scopeRevision: { const: 1 },
+        scopeHash: { type: "string", minLength: 64, maxLength: 64 },
+        scopeKnowledgeBaseCount: { const: 1 },
+        scopeDocumentCount: { const: 1 },
+        scopeReadyDocumentCount: { const: 1 },
+        snapshotId: { type: "string", format: "uuid" },
+        snapshotStatus: { const: "prepared" },
+        snapshotHash: { type: "string", minLength: 64, maxLength: 64 },
+        snapshotKnowledgeBaseCount: { const: 1 },
+        snapshotReadyDocumentCount: { const: 1 },
+        snapshotExcludedDocumentCount: { const: 0 },
+        snapshotDocumentCount: { const: 1 },
+        scopeMatched: { const: true },
+        documentMatched: { const: true },
+        contentHashMatched: { const: true },
+        firstCreated: { const: true },
+        idempotentReplay: { const: true },
+        snapshotIdentityMatched: { const: true },
+        scopeStable: { const: true },
+      },
+    },
+  },
+  {
     key: "knowledge-base.cleanup",
     name: "清理知识库测试资源",
     description: "按已登记知识库 ID 删除其文档与原始上传，并幂等归档知识库。",
@@ -953,7 +1039,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.8.1",
+  version: "0.8.2",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1212,6 +1298,154 @@ function acceptedKnowledgeRuntime(response: HttpExecutionResult, code: string): 
     throw environmentFailure(code, `星火 Agent 知识库运行时返回 HTTP ${response.status}。`);
   }
   accepted(response, code);
+}
+
+interface KnowledgeScopeProjection {
+  readonly conversationId: string;
+  readonly retrievalPolicy: string;
+  readonly status: string;
+  readonly revision: number;
+  readonly scopeHash: string | null;
+  readonly knowledgeBaseIds: readonly string[];
+  readonly knowledgeBases: readonly Readonly<Record<string, unknown>>[];
+}
+
+function knowledgeScopeProjection(
+  body: unknown,
+  conversationId: string,
+  code: string,
+): KnowledgeScopeProjection {
+  const data = dataEnvelope(body, code);
+  const knowledgeBaseIds = Array.isArray(data.knowledge_base_ids) ? data.knowledge_base_ids : null;
+  const knowledgeBases = Array.isArray(data.knowledge_bases)
+    ? data.knowledge_bases
+        .map(objectValue)
+        .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+    : null;
+  if (
+    data.conversation_id !== conversationId ||
+    typeof data.retrieval_policy !== "string" ||
+    typeof data.status !== "string" ||
+    !Number.isInteger(data.revision) ||
+    (data.scope_hash !== null &&
+      (typeof data.scope_hash !== "string" || !sha256Pattern.test(data.scope_hash))) ||
+    knowledgeBaseIds === null ||
+    knowledgeBaseIds.some((id) => typeof id !== "string" || !uuidPattern.test(id)) ||
+    knowledgeBases === null ||
+    knowledgeBases.length !==
+      (Array.isArray(data.knowledge_bases) ? data.knowledge_bases.length : -1)
+  ) {
+    throw apiFailure(code, "会话知识范围响应结构不完整或标识不一致。");
+  }
+  return {
+    conversationId,
+    retrievalPolicy: data.retrieval_policy,
+    status: data.status,
+    revision: data.revision as number,
+    scopeHash: data.scope_hash,
+    knowledgeBaseIds: knowledgeBaseIds as string[],
+    knowledgeBases,
+  };
+}
+
+interface KnowledgeSnapshotProjection {
+  readonly id: string;
+  readonly scopeId: string;
+  readonly scopeRevision: number;
+  readonly scopeHash: string;
+  readonly snapshotHash: string;
+  readonly status: string;
+  readonly knowledgeBaseCount: number;
+  readonly readyDocumentCount: number;
+  readonly excludedDocumentCount: number;
+  readonly knowledgeBaseId: string;
+  readonly knowledgeDocumentId: string;
+  readonly knowledgeVersionId: string;
+  readonly rustDocumentId: string;
+  readonly parserDocumentId: string;
+  readonly parserVersionId: string;
+  readonly versionNumber: number;
+  readonly contentHash: string;
+  readonly idempotentReplay: boolean;
+}
+
+function knowledgeSnapshotProjection(
+  body: unknown,
+  expected: {
+    readonly conversationId: string;
+    readonly clientRequestId: string;
+  },
+  code: string,
+): KnowledgeSnapshotProjection {
+  const data = dataEnvelope(body, code);
+  const documents = Array.isArray(data.documents)
+    ? data.documents
+        .map(objectValue)
+        .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+    : null;
+  const document = documents?.[0];
+  if (
+    typeof data.id !== "string" ||
+    !uuidPattern.test(data.id) ||
+    data.conversation_id !== expected.conversationId ||
+    typeof data.scope_id !== "string" ||
+    !uuidPattern.test(data.scope_id) ||
+    !Number.isInteger(data.scope_revision) ||
+    typeof data.scope_hash !== "string" ||
+    !sha256Pattern.test(data.scope_hash) ||
+    data.client_request_id !== expected.clientRequestId ||
+    typeof data.retrieval_policy !== "string" ||
+    typeof data.status !== "string" ||
+    typeof data.snapshot_hash !== "string" ||
+    !sha256Pattern.test(data.snapshot_hash) ||
+    !Number.isInteger(data.knowledge_base_count) ||
+    !Number.isInteger(data.ready_document_count) ||
+    !Number.isInteger(data.excluded_document_count) ||
+    typeof data.idempotent_replay !== "boolean" ||
+    documents === null ||
+    documents.length !== (Array.isArray(data.documents) ? data.documents.length : -1) ||
+    documents.length !== 1 ||
+    document === undefined ||
+    typeof document.knowledge_base_id !== "string" ||
+    !uuidPattern.test(document.knowledge_base_id) ||
+    typeof document.knowledge_document_id !== "string" ||
+    !uuidPattern.test(document.knowledge_document_id) ||
+    typeof document.knowledge_version_id !== "string" ||
+    !uuidPattern.test(document.knowledge_version_id) ||
+    typeof document.rust_document_id !== "string" ||
+    !uuidPattern.test(document.rust_document_id) ||
+    typeof document.parser_document_id !== "string" ||
+    document.parser_document_id.length === 0 ||
+    document.parser_document_id.length > 200 ||
+    typeof document.parser_version_id !== "string" ||
+    document.parser_version_id.length === 0 ||
+    document.parser_version_id.length > 200 ||
+    !Number.isInteger(document.version_number) ||
+    typeof document.content_hash !== "string" ||
+    !sha256Pattern.test(document.content_hash)
+  ) {
+    throw apiFailure(code, "知识范围快照响应结构不完整或标识不一致。");
+  }
+  return {
+    id: data.id,
+    scopeId: data.scope_id,
+    scopeRevision: data.scope_revision as number,
+    scopeHash: data.scope_hash,
+    snapshotHash: data.snapshot_hash,
+    status: data.status,
+    knowledgeBaseCount: data.knowledge_base_count as number,
+    readyDocumentCount: data.ready_document_count as number,
+    excludedDocumentCount: data.excluded_document_count as number,
+    knowledgeBaseId: document.knowledge_base_id,
+    knowledgeDocumentId: document.knowledge_document_id,
+    knowledgeVersionId: document.knowledge_version_id,
+    rustDocumentId: document.rust_document_id,
+    parserDocumentId: document.parser_document_id,
+    parserVersionId: document.parser_version_id,
+    versionNumber: document.version_number as number,
+    contentHash: document.content_hash,
+    idempotentReplay: data.idempotent_replay,
+  };
 }
 
 function acceptedSkillRuntime(response: HttpExecutionResult, code: string): void {
@@ -2986,6 +3220,244 @@ export async function executeSparkXAgentAction(
       titleMatched: true,
       fixtureSha256: expectedFixtureSha256,
       pollAttempts,
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/knowledge-base.assert-conversation-scope") {
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const knowledgeBaseId = requiredUuid(params, "knowledgeBaseId", variables);
+    const knowledgeDocumentId = requiredUuid(params, "knowledgeDocumentId", variables);
+    const expectedFixtureSha256 = requiredSha256(params, "expectedFixtureSha256", variables);
+    const clientRequestId = requiredUuid(params, "clientRequestId", variables);
+    const scopePath = domainActionPath(
+      `/conversations/${encodeURIComponent(conversationId)}/knowledge-scope`,
+    );
+    const snapshotPath = domainActionPath(
+      `/conversations/${encodeURIComponent(conversationId)}/document-context-snapshots`,
+    );
+
+    const initialResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: scopePath },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(initialResponse, "SPARK_X_AGENT_KNOWLEDGE_SCOPE_INITIAL_READ_FAILED");
+    const initial = knowledgeScopeProjection(
+      initialResponse.body,
+      conversationId,
+      "SPARK_X_AGENT_KNOWLEDGE_SCOPE_INITIAL_RESPONSE_INVALID",
+    );
+    if (
+      initial.retrievalPolicy !== "auto" ||
+      initial.status !== "active" ||
+      initial.revision !== 0 ||
+      initial.scopeHash !== null ||
+      initial.knowledgeBaseIds.length !== 0 ||
+      initial.knowledgeBases.length !== 0
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_SCOPE_INITIAL_ASSERTION_FAILED",
+        "新建会话的初始知识范围不是空范围或修订号不是 0。",
+      );
+    }
+
+    const updateResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "PUT",
+        path: scopePath,
+        headers: { "Content-Type": "application/json" },
+        body: {
+          knowledge_base_ids: [knowledgeBaseId],
+          retrieval_policy: "required",
+          expected_revision: 0,
+        },
+      },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(updateResponse, "SPARK_X_AGENT_KNOWLEDGE_SCOPE_UPDATE_FAILED");
+    const saved = knowledgeScopeProjection(
+      updateResponse.body,
+      conversationId,
+      "SPARK_X_AGENT_KNOWLEDGE_SCOPE_UPDATE_RESPONSE_INVALID",
+    );
+    const savedBase = saved.knowledgeBases[0];
+    if (
+      saved.retrievalPolicy !== "required" ||
+      saved.status !== "active" ||
+      saved.revision !== 1 ||
+      saved.scopeHash === null ||
+      saved.knowledgeBaseIds.length !== 1 ||
+      saved.knowledgeBaseIds[0] !== knowledgeBaseId ||
+      saved.knowledgeBases.length !== 1 ||
+      savedBase?.id !== knowledgeBaseId ||
+      savedBase.status !== "active" ||
+      savedBase.document_count !== 1 ||
+      savedBase.ready_document_count !== 1
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_SCOPE_UPDATE_ASSERTION_FAILED",
+        "会话知识范围、修订号或可检索文档计数与本次测试资源不一致。",
+      );
+    }
+
+    const snapshotBody = {
+      client_request_id: clientRequestId,
+      expected_scope_revision: saved.revision,
+      expected_scope_hash: saved.scopeHash,
+    };
+    const snapshotHeaders = {
+      "Content-Type": "application/json",
+      "Idempotency-Key": clientRequestId,
+    };
+    const firstResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: snapshotPath,
+        headers: snapshotHeaders,
+        body: snapshotBody,
+      },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(firstResponse, "SPARK_X_AGENT_KNOWLEDGE_SNAPSHOT_CREATE_FAILED");
+    if (firstResponse.status !== 201) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_SNAPSHOT_CREATE_STATUS_FAILED",
+        "首次创建知识范围快照没有返回 HTTP 201。",
+      );
+    }
+    const first = knowledgeSnapshotProjection(
+      firstResponse.body,
+      { conversationId, clientRequestId },
+      "SPARK_X_AGENT_KNOWLEDGE_SNAPSHOT_CREATE_RESPONSE_INVALID",
+    );
+    if (
+      first.scopeRevision !== saved.revision ||
+      first.scopeHash !== saved.scopeHash ||
+      first.status !== "prepared" ||
+      first.knowledgeBaseCount !== 1 ||
+      first.readyDocumentCount !== 1 ||
+      first.excludedDocumentCount !== 0 ||
+      first.knowledgeBaseId !== knowledgeBaseId ||
+      first.knowledgeDocumentId !== knowledgeDocumentId ||
+      first.versionNumber !== 1 ||
+      first.contentHash !== expectedFixtureSha256 ||
+      first.idempotentReplay
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_SNAPSHOT_CREATE_ASSERTION_FAILED",
+        "首次知识范围快照没有固定本次文档版本或返回了错误计数。",
+      );
+    }
+
+    const replayResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: snapshotPath,
+        headers: snapshotHeaders,
+        body: snapshotBody,
+      },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(replayResponse, "SPARK_X_AGENT_KNOWLEDGE_SNAPSHOT_REPLAY_FAILED");
+    if (replayResponse.status !== 200) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_SNAPSHOT_REPLAY_STATUS_FAILED",
+        "知识范围快照幂等重放没有返回 HTTP 200。",
+      );
+    }
+    const replay = knowledgeSnapshotProjection(
+      replayResponse.body,
+      { conversationId, clientRequestId },
+      "SPARK_X_AGENT_KNOWLEDGE_SNAPSHOT_REPLAY_RESPONSE_INVALID",
+    );
+    const snapshotIdentityMatched =
+      replay.id === first.id &&
+      replay.scopeId === first.scopeId &&
+      replay.scopeRevision === first.scopeRevision &&
+      replay.scopeHash === first.scopeHash &&
+      replay.snapshotHash === first.snapshotHash &&
+      replay.status === first.status &&
+      replay.knowledgeBaseCount === first.knowledgeBaseCount &&
+      replay.readyDocumentCount === first.readyDocumentCount &&
+      replay.excludedDocumentCount === first.excludedDocumentCount &&
+      replay.knowledgeBaseId === first.knowledgeBaseId &&
+      replay.knowledgeDocumentId === first.knowledgeDocumentId &&
+      replay.knowledgeVersionId === first.knowledgeVersionId &&
+      replay.rustDocumentId === first.rustDocumentId &&
+      replay.parserDocumentId === first.parserDocumentId &&
+      replay.parserVersionId === first.parserVersionId &&
+      replay.versionNumber === first.versionNumber &&
+      replay.contentHash === first.contentHash;
+    if (!replay.idempotentReplay || !snapshotIdentityMatched) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_SNAPSHOT_REPLAY_ASSERTION_FAILED",
+        "知识范围快照幂等重放生成了不同快照或不同固定文档版本。",
+      );
+    }
+
+    const finalResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: scopePath },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(finalResponse, "SPARK_X_AGENT_KNOWLEDGE_SCOPE_FINAL_READ_FAILED");
+    const finalScope = knowledgeScopeProjection(
+      finalResponse.body,
+      conversationId,
+      "SPARK_X_AGENT_KNOWLEDGE_SCOPE_FINAL_RESPONSE_INVALID",
+    );
+    const finalBase = finalScope.knowledgeBases[0];
+    const scopeStable =
+      finalScope.retrievalPolicy === saved.retrievalPolicy &&
+      finalScope.status === saved.status &&
+      finalScope.revision === saved.revision &&
+      finalScope.scopeHash === saved.scopeHash &&
+      finalScope.knowledgeBaseIds.length === 1 &&
+      finalScope.knowledgeBaseIds[0] === knowledgeBaseId &&
+      finalScope.knowledgeBases.length === 1 &&
+      finalBase?.id === knowledgeBaseId &&
+      finalBase.status === "active" &&
+      finalBase.document_count === 1 &&
+      finalBase.ready_document_count === 1;
+    if (!scopeStable) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_SCOPE_FINAL_ASSERTION_FAILED",
+        "创建和重放快照后，会话知识范围发生了非预期变化。",
+      );
+    }
+
+    return {
+      conversationId,
+      knowledgeBaseId,
+      knowledgeDocumentId,
+      retrievalPolicy: "required",
+      scopeRevision: saved.revision,
+      scopeHash: saved.scopeHash,
+      scopeKnowledgeBaseCount: saved.knowledgeBaseIds.length,
+      scopeDocumentCount: savedBase.document_count,
+      scopeReadyDocumentCount: savedBase.ready_document_count,
+      snapshotId: first.id,
+      snapshotStatus: first.status,
+      snapshotHash: first.snapshotHash,
+      snapshotKnowledgeBaseCount: first.knowledgeBaseCount,
+      snapshotReadyDocumentCount: first.readyDocumentCount,
+      snapshotExcludedDocumentCount: first.excludedDocumentCount,
+      snapshotDocumentCount: 1,
+      scopeMatched: true,
+      documentMatched: true,
+      contentHashMatched: true,
+      firstCreated: true,
+      idempotentReplay: replay.idempotentReplay,
+      snapshotIdentityMatched,
+      scopeStable,
     };
   }
 
