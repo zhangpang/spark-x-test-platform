@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.15.0",
+  "version": "0.17.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -191,12 +191,13 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.16.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+当前 `0.17.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
 `conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
 `chat.cancel-and-resume`、`chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
 `tool.invoke-failure-recovery`、`tool.assert-history`、`tool.assert-failure-recovery-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
-`knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-conversation-scope`、`knowledge-base.cleanup` 和
+`knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-conversation-scope`、
+`knowledge-base.query-and-assert-evidence`、`knowledge-base.cleanup` 和
 `skill.assert-trusted-publication`，以及 `automation.create`、`automation.wait-fired`、`automation.assert-no-duplicate-delivery`、`automation.assert-lifecycle` 和
 `automation.cleanup`。动作只调用适配器内
 固定的 `/trade/api` 与 `/trade-domain-api` 路径，所有请求与
@@ -278,6 +279,15 @@ HTTP 201，同一请求重放必须返回 HTTP 200，且范围哈希、快照 ID
 内容哈希必须完全一致。创建和重放后再次读取范围，确认修订、哈希、计数和绑定关系没有漂移。输出只登记
 资源 ID、哈希、计数和布尔结论；文件名、标题、Parser 内部 ID、签名地址、文档内容、密码和 Token 均不进入
 结构化证据。会话后于知识库登记，普通 `finally` 明确先删会话再清知识库，独立补偿按资源倒序保持同一顺序。
+
+`knowledge-base.upload-fixture` 的可选 `fixtureKind` 只允许 `order` 或 `account-chart`，两类 PDF 均由适配器
+源码固定生成，不接受任意文件、URL 或脚本。`knowledge-base.query-and-assert-evidence` 只接受本次运行捕获的
+会话、订单文档和不可变快照 ID/哈希，以 V5 Turn 执行真实模型检索；重定向后仍重新执行环境 allowlist 校验。
+动作要求历史恰好为一条用户消息和一条 `stop` 助手消息，回答必须包含固定订单事实，引用回执与
+`knowledge-evidence` 的 ref 集合必须一致，且每条证据只能指向允许的订单文档，禁止命中科目表隔离文档。
+答案、证据片段、标题、定位器、密钥和 Token 只在 Worker 内存中校验；平台输出仅登记资源 ID、计数、布尔结论
+以及答案/证据集合 SHA-256。Provider 可重试故障归类为 `environment_failed`，事实、引用或隔离断言失败保留
+稳定首错并继续执行 `finally`，不会用重试掩盖问题。
 
 SKILL 动作当前只读校验部署系统已经发布的固定 `trade-port-daily-brief`，不接受 Skill 名称、Prompt、文件、
 URL 或脚本参数。动作分别读取当前用户清单、用户详情和管理员清单，要求 UUID、名称、展示名、分类、启用状态、

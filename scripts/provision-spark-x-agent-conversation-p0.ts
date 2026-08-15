@@ -72,6 +72,8 @@ const runConversationPaginationSmoke =
 const runConversationDeleteSmoke =
   process.env.SPARK_X_AGENT_RUN_CONVERSATION_DELETE_SMOKE === "true";
 const runKnowledgeSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_SMOKE === "true";
+const runKnowledgeRetrievalSmoke =
+  process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_RETRIEVAL_SMOKE === "true";
 const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
 const runMcpSmoke = process.env.SPARK_X_AGENT_RUN_MCP_SMOKE === "true";
 const expectMcpUnavailable = process.env.SPARK_X_AGENT_EXPECT_MCP_UNAVAILABLE === "true";
@@ -2042,6 +2044,311 @@ function knowledgeScopeDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function knowledgeRetrievalDefinition(): Readonly<Record<string, unknown>> {
+  const orderTitle = "spark-x-b2c-order-${run.id}.pdf";
+  const chartTitle = "spark-x-account-chart-${run.id}.pdf";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "KB-003 B2C订单文件准确检索",
+      description:
+        "创建订单与科目表两个隔离知识库，只将订单知识库绑定到会话，以不可变快照执行真实问答，并校验答案、引用回执与结构化证据只来自订单文件。",
+      systemKey: "spark-x-agent",
+      moduleKey: "knowledge-base",
+      priority: "P0",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: [
+        "adapter",
+        "knowledge-base",
+        "retrieval",
+        "immutable-snapshot",
+        "evidence",
+        "isolation",
+        "p0",
+        "full-regression",
+        "real-model",
+      ],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 180_000,
+      caseTimeoutMs: 900_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:knowledge-base", "spark-x-agent:admin:conversation"],
+    steps: [
+      {
+        id: "create-order-knowledge-base",
+        name: "创建并登记订单知识库",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          name: "spark-x-kb-order-${run.id}",
+          description: "Spark X Test Platform KB-003 B2C order fixture",
+        },
+        capture: { "order-knowledge-base-id": "$.knowledgeBaseId" },
+        resource: {
+          type: "spark-x-agent-knowledge-base",
+          id: "${step.order-knowledge-base-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/knowledge-base.cleanup",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              knowledgeBaseId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "upload-order-fixture",
+        name: "上传适配器内置订单 PDF",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.upload-fixture",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.order-knowledge-base-id}",
+          fixtureKind: "order",
+        },
+        capture: {
+          "order-uploaded-document-id": "$.uploadedDocumentId",
+          "order-fixture-sha256": "$.fixtureSha256",
+        },
+      },
+      {
+        id: "attach-order-fixture",
+        name: "绑定订单 PDF 并登记知识文档",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.attach-upload",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.order-knowledge-base-id}",
+          uploadedDocumentId: "${step.order-uploaded-document-id}",
+          title: orderTitle,
+        },
+        capture: { "order-knowledge-document-id": "$.knowledgeDocumentId" },
+      },
+      {
+        id: "wait-order-ready",
+        name: "等待订单文档解析就绪",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.wait-ready",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.order-knowledge-base-id}",
+          knowledgeDocumentId: "${step.order-knowledge-document-id}",
+          expectedFixtureSha256: "${step.order-fixture-sha256}",
+          expectedTitle: orderTitle,
+        },
+      },
+      {
+        id: "create-chart-knowledge-base",
+        name: "创建并登记科目表隔离知识库",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          name: "spark-x-kb-chart-${run.id}",
+          description: "Spark X Test Platform KB-003 account chart decoy fixture",
+        },
+        capture: { "chart-knowledge-base-id": "$.knowledgeBaseId" },
+        resource: {
+          type: "spark-x-agent-knowledge-base",
+          id: "${step.chart-knowledge-base-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/knowledge-base.cleanup",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              knowledgeBaseId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "upload-chart-fixture",
+        name: "上传适配器内置科目表 PDF",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.upload-fixture",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.chart-knowledge-base-id}",
+          fixtureKind: "account-chart",
+        },
+        capture: {
+          "chart-uploaded-document-id": "$.uploadedDocumentId",
+          "chart-fixture-sha256": "$.fixtureSha256",
+        },
+      },
+      {
+        id: "attach-chart-fixture",
+        name: "绑定科目表 PDF 并登记隔离文档",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.attach-upload",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.chart-knowledge-base-id}",
+          uploadedDocumentId: "${step.chart-uploaded-document-id}",
+          title: chartTitle,
+        },
+        capture: { "chart-knowledge-document-id": "$.knowledgeDocumentId" },
+      },
+      {
+        id: "wait-chart-ready",
+        name: "等待科目表隔离文档解析就绪",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.wait-ready",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.chart-knowledge-base-id}",
+          knowledgeDocumentId: "${step.chart-knowledge-document-id}",
+          expectedFixtureSha256: "${step.chart-fixture-sha256}",
+          expectedTitle: chartTitle,
+        },
+      },
+      {
+        id: "create-retrieval-conversation",
+        name: "创建并登记知识检索测试会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: "spark-x-kb-retrieval-${run.id}",
+        },
+        capture: { "retrieval-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.retrieval-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "prepare-order-snapshot",
+        name: "仅绑定订单知识库并固定不可变快照",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.assert-conversation-scope",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.retrieval-conversation-id}",
+          knowledgeBaseId: "${step.order-knowledge-base-id}",
+          knowledgeDocumentId: "${step.order-knowledge-document-id}",
+          expectedFixtureSha256: "${step.order-fixture-sha256}",
+          clientRequestId: "${run.id}",
+        },
+        capture: {
+          "retrieval-snapshot-id": "$.snapshotId",
+          "retrieval-snapshot-hash": "$.snapshotHash",
+        },
+      },
+      {
+        id: "query-order-and-assert-evidence",
+        name: "真实查询订单并校验答案、引用与隔离证据",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.query-and-assert-evidence",
+        timeoutMs: 120_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.retrieval-conversation-id}",
+          requestId: "${run.id}",
+          snapshotId: "${step.retrieval-snapshot-id}",
+          snapshotHash: "${step.retrieval-snapshot-hash}",
+          knowledgeDocumentId: "${step.order-knowledge-document-id}",
+          forbiddenKnowledgeDocumentId: "${step.chart-knowledge-document-id}",
+          expectedFixtureSha256: "${step.order-fixture-sha256}",
+          expectedTitle: orderTitle,
+          message:
+            "自动化回归 ${run.id}：仅根据知识库回答订单信息，请严格保留文本 B2C-KB-001 | SPARK-REGRESSION | 4200 | PAID，并保留知识引用。请勿使用科目表内容。",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "delete-retrieval-conversation",
+        name: "先删除知识检索测试会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.retrieval-conversation-id}",
+        },
+      },
+      {
+        id: "cleanup-chart-knowledge-base",
+        name: "再清理科目表隔离知识库",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.cleanup",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.chart-knowledge-base-id}",
+        },
+      },
+      {
+        id: "cleanup-order-knowledge-base",
+        name: "最后清理订单知识库",
+        kind: "action",
+        action: "adapter:spark-x-agent/knowledge-base.cleanup",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          knowledgeBaseId: "${step.order-knowledge-base-id}",
+        },
+      },
+    ],
+  };
+}
+
 function mcpConnectorDefinition(): Readonly<Record<string, unknown>> {
   return {
     schemaVersion: "1.0",
@@ -3979,6 +4286,262 @@ async function executeKnowledgeSmoke(
   return run;
 }
 
+function assertKnowledgeRetrievalEvidence(run: RunDetail): void {
+  const orderUpload = run.steps.find((step) => step.stepId === "upload-order-fixture");
+  const orderAttach = run.steps.find((step) => step.stepId === "attach-order-fixture");
+  const orderReady = run.steps.find((step) => step.stepId === "wait-order-ready");
+  const chartUpload = run.steps.find((step) => step.stepId === "upload-chart-fixture");
+  const chartAttach = run.steps.find((step) => step.stepId === "attach-chart-fixture");
+  const chartReady = run.steps.find((step) => step.stepId === "wait-chart-ready");
+  const conversation = run.steps.find((step) => step.stepId === "create-retrieval-conversation");
+  const snapshot = run.steps.find((step) => step.stepId === "prepare-order-snapshot");
+  const query = run.steps.find((step) => step.stepId === "query-order-and-assert-evidence");
+  const deleteConversation = run.steps.find(
+    (step) => step.stepId === "delete-retrieval-conversation",
+  );
+  const chartCleanup = run.steps.find((step) => step.stepId === "cleanup-chart-knowledge-base");
+  const orderCleanup = run.steps.find((step) => step.stepId === "cleanup-order-knowledge-base");
+
+  check(
+    orderUpload !== undefined &&
+      orderUpload.outputSummary !== null &&
+      orderAttach !== undefined &&
+      orderAttach.outputSummary !== null &&
+      orderReady !== undefined &&
+      orderReady.outputSummary !== null &&
+      chartUpload !== undefined &&
+      chartUpload.outputSummary !== null &&
+      chartAttach !== undefined &&
+      chartAttach.outputSummary !== null &&
+      chartReady !== undefined &&
+      chartReady.outputSummary !== null &&
+      conversation !== undefined &&
+      conversation.outputSummary !== null &&
+      snapshot !== undefined &&
+      snapshot.outputSummary !== null &&
+      query !== undefined &&
+      query.outputSummary !== null &&
+      deleteConversation !== undefined &&
+      deleteConversation.outputSummary !== null &&
+      chartCleanup !== undefined &&
+      chartCleanup.outputSummary !== null &&
+      orderCleanup !== undefined &&
+      orderCleanup.outputSummary !== null,
+    "KB-003 step evidence is missing",
+  );
+
+  check(
+    orderUpload.outputSummary.uploaded === true &&
+      orderUpload.outputSummary.fixtureKind === "order" &&
+      chartUpload.outputSummary.uploaded === true &&
+      chartUpload.outputSummary.fixtureKind === "account-chart" &&
+      typeof orderUpload.outputSummary.fixtureSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(orderUpload.outputSummary.fixtureSha256) &&
+      typeof chartUpload.outputSummary.fixtureSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(chartUpload.outputSummary.fixtureSha256) &&
+      orderUpload.outputSummary.fixtureSha256 !== chartUpload.outputSummary.fixtureSha256,
+    "KB-003 order and account-chart fixtures are not distinct controlled uploads",
+  );
+  check(
+    orderAttach.outputSummary.knowledgeBaseId === orderUpload.outputSummary.knowledgeBaseId &&
+      orderReady.outputSummary.knowledgeDocumentId ===
+        orderAttach.outputSummary.knowledgeDocumentId &&
+      orderReady.outputSummary.fixtureSha256 === orderUpload.outputSummary.fixtureSha256 &&
+      orderReady.outputSummary.ready === true &&
+      chartAttach.outputSummary.knowledgeBaseId === chartUpload.outputSummary.knowledgeBaseId &&
+      chartReady.outputSummary.knowledgeDocumentId ===
+        chartAttach.outputSummary.knowledgeDocumentId &&
+      chartReady.outputSummary.fixtureSha256 === chartUpload.outputSummary.fixtureSha256 &&
+      chartReady.outputSummary.ready === true,
+    "KB-003 parsed document evidence is not linked to both controlled uploads",
+  );
+  check(
+    snapshot.outputSummary.conversationId === conversation.outputSummary.conversationId &&
+      snapshot.outputSummary.knowledgeBaseId === orderUpload.outputSummary.knowledgeBaseId &&
+      snapshot.outputSummary.knowledgeDocumentId ===
+        orderAttach.outputSummary.knowledgeDocumentId &&
+      snapshot.outputSummary.scopeKnowledgeBaseCount === 1 &&
+      snapshot.outputSummary.scopeDocumentCount === 1 &&
+      snapshot.outputSummary.snapshotDocumentCount === 1 &&
+      snapshot.outputSummary.snapshotExcludedDocumentCount === 0 &&
+      snapshot.outputSummary.snapshotIdentityMatched === true &&
+      snapshot.outputSummary.scopeStable === true,
+    "KB-003 immutable snapshot is not restricted to the order document",
+  );
+  check(
+    query.outputSummary.conversationId === conversation.outputSummary.conversationId &&
+      query.outputSummary.knowledgeDocumentId === orderAttach.outputSummary.knowledgeDocumentId &&
+      query.outputSummary.snapshotId === snapshot.outputSummary.snapshotId &&
+      query.outputSummary.snapshotHash === snapshot.outputSummary.snapshotHash &&
+      query.outputSummary.completed === true &&
+      query.outputSummary.expectedFactsMatched === true &&
+      query.outputSummary.citationSetMatched === true &&
+      query.outputSummary.forbiddenEvidenceAbsent === true &&
+      query.outputSummary.messageCount === 2 &&
+      query.outputSummary.userMessageCount === 1 &&
+      query.outputSummary.assistantMessageCount === 1 &&
+      query.outputSummary.toolMessageCount === 0 &&
+      typeof query.outputSummary.evidenceCount === "number" &&
+      query.outputSummary.evidenceCount >= 1 &&
+      query.outputSummary.evidenceCount <= 20 &&
+      query.outputSummary.citedRefCount === query.outputSummary.evidenceCount &&
+      ["keyword", "semantic", "hybrid"].includes(String(query.outputSummary.retrievalMode)) &&
+      typeof query.outputSummary.answerLength === "number" &&
+      query.outputSummary.answerLength > 0 &&
+      typeof query.outputSummary.answerSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(query.outputSummary.answerSha256) &&
+      typeof query.outputSummary.evidenceSetSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(query.outputSummary.evidenceSetSha256),
+    "KB-003 answer, citation or structured evidence closure is incomplete",
+  );
+  check(
+    Object.keys(query.outputSummary).sort().join(",") ===
+      [
+        "answerLength",
+        "answerSha256",
+        "assistantMessageCount",
+        "citationSetMatched",
+        "citedRefCount",
+        "completed",
+        "conversationId",
+        "evidenceCount",
+        "evidenceSetSha256",
+        "expectedFactsMatched",
+        "forbiddenEvidenceAbsent",
+        "knowledgeDocumentId",
+        "messageCount",
+        "packetHash",
+        "pollAttempts",
+        "retrievalId",
+        "retrievalMode",
+        "snapshotHash",
+        "snapshotId",
+        "toolMessageCount",
+        "turnId",
+        "userMessageCount",
+      ]
+        .sort()
+        .join(","),
+    "KB-003 evidence contains unregistered fields that could expose answer or document contents",
+  );
+  check(
+    deleteConversation.outputSummary.deleted === true &&
+      chartCleanup.outputSummary.cleaned === true &&
+      orderCleanup.outputSummary.cleaned === true &&
+      chartCleanup.outputSummary.knowledgeDocumentDeleteCount === 1 &&
+      orderCleanup.outputSummary.knowledgeDocumentDeleteCount === 1 &&
+      chartCleanup.outputSummary.rawDocumentDeleted === true &&
+      orderCleanup.outputSummary.rawDocumentDeleted === true &&
+      chartCleanup.outputSummary.knowledgeBaseArchived === true &&
+      orderCleanup.outputSummary.knowledgeBaseArchived === true,
+    "KB-003 ordered conversation and two-knowledge-base cleanup is incomplete",
+  );
+  const evidence = JSON.stringify({
+    orderUpload,
+    orderAttach,
+    orderReady,
+    chartUpload,
+    chartAttach,
+    chartReady,
+    conversation,
+    snapshot,
+    query,
+    deleteConversation,
+    chartCleanup,
+    orderCleanup,
+  });
+  check(
+    !evidence.includes("B2C-KB-001") &&
+      !evidence.includes("SPARK-REGRESSION") &&
+      !evidence.includes("AMOUNT_CNY") &&
+      !evidence.includes("ACCOUNT_CHART") &&
+      !evidence.includes("ACCOUNTS_RECEIVABLE") &&
+      !evidence.includes("source_url") &&
+      !evidence.includes("snippet"),
+    "KB-003 answer, fixture contents or signed source data leaked into structured evidence",
+  );
+}
+
+async function executeKnowledgeRetrievalSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-knowledge-retrieval-p0-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-knowledge-retrieval-p0-verification",
+      priority: 95,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent knowledge retrieval run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(
+    run.gateResult === "passed",
+    `Spark X Agent knowledge retrieval gate is ${String(run.gateResult)}`,
+  );
+  check(run.summary.passed === 1, "Spark X Agent KB-003 case did not pass");
+  check(run.firstFailure === null, "Spark X Agent KB-003 retained a first failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent KB-003 case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/knowledge-base.create",
+        "main:adapter:spark-x-agent/knowledge-base.upload-fixture",
+        "main:adapter:spark-x-agent/knowledge-base.attach-upload",
+        "main:adapter:spark-x-agent/knowledge-base.wait-ready",
+        "main:adapter:spark-x-agent/knowledge-base.create",
+        "main:adapter:spark-x-agent/knowledge-base.upload-fixture",
+        "main:adapter:spark-x-agent/knowledge-base.attach-upload",
+        "main:adapter:spark-x-agent/knowledge-base.wait-ready",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/knowledge-base.assert-conversation-scope",
+        "main:adapter:spark-x-agent/knowledge-base.query-and-assert-evidence",
+        "finally:adapter:spark-x-agent/conversation.delete",
+        "finally:adapter:spark-x-agent/knowledge-base.cleanup",
+        "finally:adapter:spark-x-agent/knowledge-base.cleanup",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent KB-003 structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 3 &&
+      run.resources.filter(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-knowledge-base" &&
+          resource.cleanupStatus === "passed" &&
+          resource.cleanupDefinition.action === "adapter:spark-x-agent/knowledge-base.cleanup",
+      ).length === 2 &&
+      run.resources.filter(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-conversation" &&
+          resource.cleanupStatus === "passed" &&
+          resource.cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete",
+      ).length === 1,
+    "Spark X Agent KB-003 resource ledger or cleanup definition is incomplete",
+  );
+  check(run.cleanupJob === null, "normal KB-003 run unexpectedly required compensation");
+  assertKnowledgeRetrievalEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into KB-003 evidence",
+    );
+  }
+  return run;
+}
+
 async function executeSkillSmoke(
   systemId: string,
   environmentId: string,
@@ -4351,6 +4914,14 @@ const knowledgeScopeCase = await ensureCase(
   knowledgeScopeDefinition(),
   "新增会话 required 知识范围、不可变文档版本快照、幂等重放和有序清理 P0 闭环",
 );
+const knowledgeRetrievalCase = await ensureCase(
+  system.id,
+  knowledgeBase.id,
+  environment.id,
+  "KB-003 B2C订单文件准确检索",
+  knowledgeRetrievalDefinition(),
+  "新增订单/科目表固定夹具隔离、不可变快照真实问答、引用回执与结构化证据闭环",
+);
 const skillPublicationCase = await ensureCase(
   system.id,
   skills.id,
@@ -4499,6 +5070,24 @@ const knowledgeBaseSuite = await ensureSuite(
   "KB-001/002 固定 PDF 上传、解析版本、会话知识范围、不可变快照幂等重放、资源登记和完整清理闭环。",
   [knowledgeBaseCase.testCase.id, knowledgeScopeCase.testCase.id],
 );
+const knowledgeRetrievalSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-knowledge-retrieval-p0",
+  "星火 Agent 知识检索 P0 纵向切片",
+  "KB-003 订单与科目表双知识库隔离、订单不可变快照真实问答、引用证据关联和逆序完整清理。",
+  [knowledgeRetrievalCase.testCase.id],
+);
+const knowledgeModuleSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-knowledge-base",
+  "星火 Agent 知识库回归",
+  "知识库模块 KB-001/002/003 固定夹具解析、不可变范围、真实准确检索、证据隔离和完整清理。",
+  [
+    knowledgeBaseCase.testCase.id,
+    knowledgeScopeCase.testCase.id,
+    knowledgeRetrievalCase.testCase.id,
+  ],
+);
 const skillSuite = await ensureSuite(
   system.id,
   "spark-x-agent-skills-p0",
@@ -4568,8 +5157,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 20/32）",
-  "手动一键完整回归入口；当前已接入 20/32 条案例，覆盖七个模块的当前 P0、CHAT-003、TOOL-004、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 21/32）",
+  "手动一键完整回归入口；当前已接入 21/32 条案例，覆盖七个模块的当前 P0、CHAT-003、TOOL-004、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -4585,6 +5174,7 @@ const fullRegressionSuite = await ensureSuite(
     forbiddenToolCase.testCase.id,
     knowledgeBaseCase.testCase.id,
     knowledgeScopeCase.testCase.id,
+    knowledgeRetrievalCase.testCase.id,
     skillPublicationCase.testCase.id,
     mcpConnectorCase.testCase.id,
     automationCase.testCase.id,
@@ -4602,6 +5192,7 @@ check(
     runConversationPaginationSmoke,
     runConversationDeleteSmoke,
     runKnowledgeSmoke,
+    runKnowledgeRetrievalSmoke,
     runSkillSmoke,
     runMcpSmoke,
     runAutomationSmoke,
@@ -4642,18 +5233,25 @@ const run = runSmoke
                   knowledgeBaseSuite.id,
                   password,
                 )
-              : runSkillSmoke
-                ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
-                : runMcpSmoke
-                  ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
-                  : runAutomationSmoke
-                    ? await executeAutomationSmoke(
-                        system.id,
-                        environment.id,
-                        automationSuite.id,
-                        password,
-                      )
-                    : undefined;
+              : runKnowledgeRetrievalSmoke
+                ? await executeKnowledgeRetrievalSmoke(
+                    system.id,
+                    environment.id,
+                    knowledgeRetrievalSuite.id,
+                    password,
+                  )
+                : runSkillSmoke
+                  ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
+                  : runMcpSmoke
+                    ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
+                    : runAutomationSmoke
+                      ? await executeAutomationSmoke(
+                          system.id,
+                          environment.id,
+                          automationSuite.id,
+                          password,
+                        )
+                      : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
   : runCancelSmoke
@@ -4666,13 +5264,15 @@ const scenario = runContextSmoke
           ? "spark-x-agent-conversation-delete-p1"
           : runKnowledgeSmoke
             ? "spark-x-agent-knowledge-base-p0"
-            : runSkillSmoke
-              ? "spark-x-agent-skills-p0"
-              : runMcpSmoke
-                ? "spark-x-agent-mcp-p0"
-                : runAutomationSmoke
-                  ? "spark-x-agent-automations-p0"
-                  : "spark-x-agent-core-smoke";
+            : runKnowledgeRetrievalSmoke
+              ? "spark-x-agent-knowledge-retrieval-p0"
+              : runSkillSmoke
+                ? "spark-x-agent-skills-p0"
+                : runMcpSmoke
+                  ? "spark-x-agent-mcp-p0"
+                  : runAutomationSmoke
+                    ? "spark-x-agent-automations-p0"
+                    : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -4693,16 +5293,18 @@ console.info(
                   ? 24
                   : runKnowledgeSmoke
                     ? 32
-                    : runSkillSmoke
-                      ? 12
-                      : runMcpSmoke
-                        ? expectMcpUnavailable
-                          ? 10
-                          : 12
-                        : runAutomationSmoke
-                          ? 20
-                          : 161,
-    caseCount: 20,
+                    : runKnowledgeRetrievalSmoke
+                      ? 35
+                      : runSkillSmoke
+                        ? 12
+                        : runMcpSmoke
+                          ? expectMcpUnavailable
+                            ? 10
+                            : 12
+                          : runAutomationSmoke
+                            ? 20
+                            : 161,
+    caseCount: 21,
     coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -4736,6 +5338,8 @@ console.info(
     knowledgeBaseCaseVersionId: knowledgeBaseCase.version.id,
     knowledgeScopeCaseId: knowledgeScopeCase.testCase.id,
     knowledgeScopeCaseVersionId: knowledgeScopeCase.version.id,
+    knowledgeRetrievalCaseId: knowledgeRetrievalCase.testCase.id,
+    knowledgeRetrievalCaseVersionId: knowledgeRetrievalCase.version.id,
     skillPublicationCaseId: skillPublicationCase.testCase.id,
     skillPublicationCaseVersionId: skillPublicationCase.version.id,
     mcpConnectorCaseId: mcpConnectorCase.testCase.id,
@@ -4760,6 +5364,8 @@ console.info(
     toolFailureRecoverySuiteId: toolFailureRecoverySuite.id,
     toolModuleSuiteId: toolModuleSuite.id,
     knowledgeBaseSuiteId: knowledgeBaseSuite.id,
+    knowledgeRetrievalSuiteId: knowledgeRetrievalSuite.id,
+    knowledgeModuleSuiteId: knowledgeModuleSuite.id,
     skillSuiteId: skillSuite.id,
     mcpSuiteId: mcpSuite.id,
     automationSuiteId: automationSuite.id,

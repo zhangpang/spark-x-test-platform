@@ -1280,7 +1280,7 @@ describe("M2 asset validation", () => {
       inputs,
       execution: {
         stepTimeoutMs: 180_000,
-        caseTimeoutMs: 480_000,
+        caseTimeoutMs: 600_000,
         diagnosticRetries: 0,
       },
       resourceLocks: ["spark-x-agent:admin:knowledge-base"],
@@ -1321,6 +1321,7 @@ describe("M2 asset validation", () => {
             username: "${case.admin-username}",
             password: "${case.admin-password}",
             knowledgeBaseId: "${step.knowledge-base-id}",
+            fixtureKind: "order",
           },
           capture: {
             "uploaded-document-id": "$.uploadedDocumentId",
@@ -1396,6 +1397,31 @@ describe("M2 asset validation", () => {
             knowledgeDocumentId: "${step.knowledge-document-id}",
             expectedFixtureSha256: "${step.fixture-sha256}",
             clientRequestId: "${run.id}",
+          },
+          capture: {
+            "snapshot-id": "$.snapshotId",
+            "snapshot-hash": "$.snapshotHash",
+          },
+        },
+        {
+          id: "query-knowledge-and-assert-evidence",
+          name: "query knowledge and assert evidence",
+          kind: "action",
+          action: "adapter:spark-x-agent/knowledge-base.query-and-assert-evidence",
+          timeoutMs: 120_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            requestId: "${run.id}",
+            snapshotId: "${step.snapshot-id}",
+            snapshotHash: "${step.snapshot-hash}",
+            knowledgeDocumentId: "${step.knowledge-document-id}",
+            forbiddenKnowledgeDocumentId: "00000000-0000-4000-8000-000000000099",
+            expectedFixtureSha256: "${step.fixture-sha256}",
+            expectedTitle: "spark-x-kb-${run.id}.pdf",
+            message:
+              "自动化回归 ${run.id}：仅根据知识库回答订单 B2C-KB-001 的订单号、客户代码、金额和状态，并保留知识引用。",
           },
         },
       ],

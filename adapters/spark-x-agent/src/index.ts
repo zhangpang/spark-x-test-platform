@@ -30,6 +30,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/knowledge-base.attach-upload",
   "adapter:spark-x-agent/knowledge-base.wait-ready",
   "adapter:spark-x-agent/knowledge-base.assert-conversation-scope",
+  "adapter:spark-x-agent/knowledge-base.query-and-assert-evidence",
   "adapter:spark-x-agent/knowledge-base.cleanup",
   "adapter:spark-x-agent/skill.assert-trusted-publication",
   "adapter:spark-x-agent/automation.create",
@@ -901,6 +902,7 @@ export const sparkXAgentActionCapabilities = [
         username: { type: "string", minLength: 1, maxLength: 200 },
         password: { type: "string", minLength: 1, maxLength: 4_096 },
         knowledgeBaseId: { type: "string", format: "uuid" },
+        fixtureKind: { type: "string", enum: ["order", "account-chart"] },
       },
     },
     outputSchema: {
@@ -910,6 +912,7 @@ export const sparkXAgentActionCapabilities = [
         "knowledgeBaseId",
         "uploadedDocumentId",
         "uploaded",
+        "fixtureKind",
         "fixtureSizeBytes",
         "fixtureSha256",
         "fileNameSha256",
@@ -918,6 +921,7 @@ export const sparkXAgentActionCapabilities = [
         knowledgeBaseId: { type: "string", format: "uuid" },
         uploadedDocumentId: { type: "string", format: "uuid" },
         uploaded: { const: true },
+        fixtureKind: { type: "string", enum: ["order", "account-chart"] },
         fixtureSizeBytes: { type: "integer", minimum: 1, maximum: 1_000_000 },
         fixtureSha256: { type: "string", minLength: 64, maxLength: 64 },
         fileNameSha256: { type: "string", minLength: 64, maxLength: 64 },
@@ -1113,6 +1117,97 @@ export const sparkXAgentActionCapabilities = [
         idempotentReplay: { const: true },
         snapshotIdentityMatched: { const: true },
         scopeStable: { const: true },
+      },
+    },
+  },
+  {
+    key: "knowledge-base.query-and-assert-evidence",
+    name: "查询知识并校验答案与引用证据",
+    description:
+      "使用不可变知识快照执行真实 V5 Turn，校验 B2C 订单事实、引用回执和证据文档均来自允许的订单文件。",
+    actionLevel: "write",
+    defaultTimeoutMs: 120_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "conversationId",
+        "requestId",
+        "snapshotId",
+        "snapshotHash",
+        "knowledgeDocumentId",
+        "forbiddenKnowledgeDocumentId",
+        "expectedFixtureSha256",
+        "expectedTitle",
+        "message",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        requestId: { type: "string", format: "uuid" },
+        snapshotId: { type: "string", format: "uuid" },
+        snapshotHash: { type: "string", minLength: 64, maxLength: 64 },
+        knowledgeDocumentId: { type: "string", format: "uuid" },
+        forbiddenKnowledgeDocumentId: { type: "string", format: "uuid" },
+        expectedFixtureSha256: { type: "string", minLength: 64, maxLength: 64 },
+        expectedTitle: { type: "string", minLength: 1, maxLength: 512 },
+        message: { type: "string", minLength: 1, maxLength: 20_000 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "turnId",
+        "knowledgeDocumentId",
+        "snapshotId",
+        "snapshotHash",
+        "retrievalId",
+        "packetHash",
+        "completed",
+        "expectedFactsMatched",
+        "citationSetMatched",
+        "forbiddenEvidenceAbsent",
+        "messageCount",
+        "userMessageCount",
+        "assistantMessageCount",
+        "toolMessageCount",
+        "evidenceCount",
+        "citedRefCount",
+        "retrievalMode",
+        "answerLength",
+        "answerSha256",
+        "evidenceSetSha256",
+        "pollAttempts",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        turnId: { type: "string", format: "uuid" },
+        knowledgeDocumentId: { type: "string", format: "uuid" },
+        snapshotId: { type: "string", format: "uuid" },
+        snapshotHash: { type: "string", minLength: 64, maxLength: 64 },
+        retrievalId: { type: "string", format: "uuid" },
+        packetHash: { type: "string", minLength: 64, maxLength: 64 },
+        completed: { const: true },
+        expectedFactsMatched: { const: true },
+        citationSetMatched: { const: true },
+        forbiddenEvidenceAbsent: { const: true },
+        messageCount: { const: 2 },
+        userMessageCount: { const: 1 },
+        assistantMessageCount: { const: 1 },
+        toolMessageCount: { const: 0 },
+        evidenceCount: { type: "integer", minimum: 1, maximum: 20 },
+        citedRefCount: { type: "integer", minimum: 1, maximum: 20 },
+        retrievalMode: { type: "string", enum: ["keyword", "semantic", "hybrid"] },
+        answerLength: { type: "integer", minimum: 1 },
+        answerSha256: { type: "string", minLength: 64, maxLength: 64 },
+        evidenceSetSha256: { type: "string", minLength: 64, maxLength: 64 },
+        pollAttempts: { type: "integer", minimum: 1, maximum: 600 },
       },
     },
   },
@@ -1568,7 +1663,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.16.0",
+  version: "0.17.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1585,7 +1680,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "full-regression-tool-failure-recovery" as const;
+export const sparkXAgentAdapterPhase = "full-regression-knowledge-retrieval" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -2240,24 +2335,41 @@ function domainActionPath(suffix: string): string {
 interface KnowledgeFixture {
   readonly bytes: Uint8Array;
   readonly fileName: string;
+  readonly kind: KnowledgeFixtureKind;
   readonly sha256: string;
 }
 
-function buildKnowledgeFixture(knowledgeBaseId: string): KnowledgeFixture {
+type KnowledgeFixtureKind = "order" | "account-chart";
+
+function buildKnowledgeFixture(
+  knowledgeBaseId: string,
+  kind: KnowledgeFixtureKind = "order",
+): KnowledgeFixture {
   if (!uuidPattern.test(knowledgeBaseId)) {
     throw assertionFailure(
       "SPARK_X_AGENT_PARAMETER_INVALID",
       "知识库测试资源标识必须是有效 UUID。",
     );
   }
-  const lines = [
-    "SPARK_X_KB_FIXTURE",
-    `RUN_RESOURCE_ID: ${knowledgeBaseId}`,
-    "ORDER_ID: B2C-KB-001",
-    "CUSTOMER_CODE: SPARK-REGRESSION",
-    "AMOUNT_CNY: 4200",
-    "STATUS: PAID",
-  ];
+  const lines =
+    kind === "order"
+      ? [
+          "SPARK_X_KB_FIXTURE",
+          `RUN_RESOURCE_ID: ${knowledgeBaseId}`,
+          "DOCUMENT_TYPE: B2C_ORDER",
+          "ORDER_ID: B2C-KB-001",
+          "CUSTOMER_CODE: SPARK-REGRESSION",
+          "AMOUNT_CNY: 4200",
+          "STATUS: PAID",
+        ]
+      : [
+          "SPARK_X_ACCOUNT_CHART_FIXTURE",
+          `RUN_RESOURCE_ID: ${knowledgeBaseId}`,
+          "DOCUMENT_TYPE: ACCOUNT_CHART",
+          "ACCOUNT_CODE: 1122",
+          "ACCOUNT_NAME: ACCOUNTS_RECEIVABLE",
+          "DECOY_AMOUNT_CNY: 9900",
+        ];
   const content = ["BT", "/F1 12 Tf", "72 720 Td"];
   lines.forEach((line, index) => {
     if (index > 0) content.push("0 -18 Td");
@@ -2285,7 +2397,11 @@ function buildKnowledgeFixture(knowledgeBaseId: string): KnowledgeFixture {
   const bytes = new TextEncoder().encode(source);
   return {
     bytes,
-    fileName: `spark-x-kb-${knowledgeBaseId}.pdf`,
+    fileName:
+      kind === "order"
+        ? `spark-x-kb-${knowledgeBaseId}.pdf`
+        : `spark-x-account-chart-${knowledgeBaseId}.pdf`,
+    kind,
     sha256: createHash("sha256").update(bytes).digest("hex"),
   };
 }
@@ -2855,6 +2971,15 @@ interface EnqueuedSparkXTurn {
   readonly messageId: string;
 }
 
+interface SparkXTurnAdmission {
+  readonly documentContext?: Readonly<{
+    provider: "caishui_knowledge";
+    snapshotId: string;
+    snapshotHash: string;
+  }>;
+  readonly toolMode?: "auto";
+}
+
 async function enqueueSparkXTurn(
   environment: HttpExecutionEnvironment,
   token: string,
@@ -2862,6 +2987,7 @@ async function enqueueSparkXTurn(
   requestId: string,
   content: string,
   remainingOptions: () => SparkXAgentExecutionOptions,
+  admission: SparkXTurnAdmission = {},
 ): Promise<EnqueuedSparkXTurn> {
   const response = await authenticatedRequest(
     environment,
@@ -2880,8 +3006,16 @@ async function enqueueSparkXTurn(
         skill_names: [],
         document_ids: [],
         task_title: null,
-        document_context: null,
-        required_capabilities: null,
+        document_context:
+          admission.documentContext === undefined
+            ? null
+            : {
+                provider: admission.documentContext.provider,
+                snapshot_id: admission.documentContext.snapshotId,
+                snapshot_hash: admission.documentContext.snapshotHash,
+              },
+        required_capabilities:
+          admission.toolMode === undefined ? null : { tool_mode: admission.toolMode },
       },
     },
     remainingOptions(),
@@ -4359,7 +4493,14 @@ export async function executeSparkXAgentAction(
 
   if (action === "adapter:spark-x-agent/knowledge-base.upload-fixture") {
     const knowledgeBaseId = requiredUuid(params, "knowledgeBaseId", variables);
-    const fixture = buildKnowledgeFixture(knowledgeBaseId);
+    const fixtureKind = params.fixtureKind ?? "order";
+    if (fixtureKind !== "order" && fixtureKind !== "account-chart") {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "知识库测试夹具类型必须是 order 或 account-chart。",
+      );
+    }
+    const fixture = buildKnowledgeFixture(knowledgeBaseId, fixtureKind);
     let upload: UploadedFixtureProjection;
     try {
       const response = await uploadKnowledgeFixture(
@@ -4431,6 +4572,7 @@ export async function executeSparkXAgentAction(
       knowledgeBaseId,
       uploadedDocumentId: upload.id,
       uploaded: true,
+      fixtureKind: fixture.kind,
       fixtureSizeBytes: fixture.bytes.byteLength,
       fixtureSha256: fixture.sha256,
       fileNameSha256: sha256(fixture.fileName),
@@ -4890,6 +5032,285 @@ export async function executeSparkXAgentAction(
       idempotentReplay: replay.idempotentReplay,
       snapshotIdentityMatched,
       scopeStable,
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/knowledge-base.query-and-assert-evidence") {
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const requestId = requiredUuid(params, "requestId", variables);
+    const snapshotId = requiredUuid(params, "snapshotId", variables);
+    const snapshotHash = requiredSha256(params, "snapshotHash", variables);
+    const knowledgeDocumentId = requiredUuid(params, "knowledgeDocumentId", variables);
+    const forbiddenKnowledgeDocumentId = requiredUuid(
+      params,
+      "forbiddenKnowledgeDocumentId",
+      variables,
+    );
+    const expectedFixtureSha256 = requiredSha256(params, "expectedFixtureSha256", variables);
+    const expectedTitle = requiredString(params, "expectedTitle", variables, 512);
+    const message = requiredString(params, "message", variables, 20_000);
+    if (
+      knowledgeDocumentId === forbiddenKnowledgeDocumentId ||
+      message.includes("\u0000") ||
+      expectedTitle.includes("\u0000")
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "知识检索回归必须使用不同的允许/禁止文档，且受控文本不能包含空字符。",
+      );
+    }
+
+    const turn = await enqueueSparkXTurn(
+      environment,
+      token,
+      conversationId,
+      requestId,
+      message,
+      remainingOptions,
+      {
+        documentContext: {
+          provider: "caishui_knowledge",
+          snapshotId,
+          snapshotHash,
+        },
+        toolMode: "auto",
+      },
+    );
+    const terminal = await waitForSparkXTurnTerminal(
+      environment,
+      token,
+      conversationId,
+      turn.turnId,
+      600,
+      remainingOptions,
+    );
+    if (
+      terminal.snapshot.status !== "completed" ||
+      terminal.snapshot.assistantMessageId === null ||
+      terminal.snapshot.finishReason !== "stop" ||
+      terminal.snapshot.failureCode !== null ||
+      terminal.snapshot.failureRetryable !== null
+    ) {
+      if (terminal.snapshot.failureRetryable === true) {
+        throw environmentFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_QUERY_ENVIRONMENT_FAILED",
+          "知识检索 Turn 因可重试运行时、检索服务或 Provider 原因失败。",
+        );
+      }
+      throw apiFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_QUERY_TURN_FAILED",
+        "知识检索 Turn 未以带可信回答的 stop 终态完成。",
+      );
+    }
+
+    const historyResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+        ),
+      },
+      remainingOptions(),
+    );
+    accepted(historyResponse, "SPARK_X_AGENT_KNOWLEDGE_QUERY_HISTORY_FAILED");
+    const history = dataEnvelope(
+      historyResponse.body,
+      "SPARK_X_AGENT_KNOWLEDGE_QUERY_HISTORY_RESPONSE_INVALID",
+    );
+    const items = Array.isArray(history.items)
+      ? history.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    if (items.some((item) => item.payload_truncated === true)) {
+      throw apiFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_QUERY_HISTORY_TRUNCATED",
+        "知识检索历史包含已截断的公开消息。",
+      );
+    }
+    const userMessages = items.filter((item) => item.role === "user");
+    const assistantMessages = items.filter((item) => item.role === "assistant");
+    const toolMessages = items.filter((item) => item.role === "tool");
+    const userMessage = userMessages[0];
+    const assistantMessage = assistantMessages[0];
+    const answer = typeof assistantMessage?.content === "string" ? assistantMessage.content : "";
+    const receipt = objectValue(assistantMessage?.document_context);
+    const citedRefs = Array.isArray(receipt?.cited_refs) ? receipt.cited_refs : [];
+    if (
+      items.length !== 2 ||
+      userMessages.length !== 1 ||
+      assistantMessages.length !== 1 ||
+      toolMessages.length !== 0 ||
+      userMessage?.turn_id !== turn.turnId ||
+      userMessage.content !== message ||
+      userMessage.turn_status !== "completed" ||
+      assistantMessage?.id !== terminal.snapshot.assistantMessageId ||
+      assistantMessage.turn_id !== turn.turnId ||
+      assistantMessage.turn_status !== "completed" ||
+      assistantMessage.finish_reason !== "stop" ||
+      answer === "" ||
+      receipt === null ||
+      receipt.provider !== "caishui_knowledge" ||
+      receipt.snapshot_id !== snapshotId ||
+      receipt.snapshot_hash !== snapshotHash ||
+      typeof receipt.retrieval_id !== "string" ||
+      !uuidPattern.test(receipt.retrieval_id) ||
+      typeof receipt.packet_hash !== "string" ||
+      !sha256Pattern.test(receipt.packet_hash) ||
+      !Number.isSafeInteger(receipt.evidence_count) ||
+      Number(receipt.evidence_count) < 1 ||
+      Number(receipt.evidence_count) > 20 ||
+      citedRefs.length < 1 ||
+      citedRefs.length > Number(receipt.evidence_count) ||
+      citedRefs.some(
+        (reference) => typeof reference !== "string" || !/^K[1-9][0-9]{0,3}$/u.test(reference),
+      ) ||
+      new Set(citedRefs).size !== citedRefs.length
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_QUERY_HISTORY_ASSERTION_FAILED",
+        "知识检索回答、Turn 关联或不可变知识回执不完整。",
+      );
+    }
+    const expectedFacts = ["B2C-KB-001", "SPARK-REGRESSION", "4200", "PAID"];
+    const forbiddenFacts = ["9900", "1122", "ACCOUNTS_RECEIVABLE"];
+    if (
+      expectedFacts.some((fact) => !answer.includes(fact)) ||
+      forbiddenFacts.some((fact) => answer.includes(fact))
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_QUERY_ANSWER_FAILED",
+        "知识检索回答缺少订单事实或混入了禁止的科目表事实。",
+      );
+    }
+
+    const evidenceResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: domainActionPath(`/turns/${encodeURIComponent(turn.turnId)}/knowledge-evidence`),
+      },
+      remainingOptions(),
+    );
+    acceptedKnowledgeRuntime(evidenceResponse, "SPARK_X_AGENT_KNOWLEDGE_QUERY_EVIDENCE_FAILED");
+    const evidenceData = dataEnvelope(
+      evidenceResponse.body,
+      "SPARK_X_AGENT_KNOWLEDGE_QUERY_EVIDENCE_RESPONSE_INVALID",
+    );
+    const evidenceItems = Array.isArray(evidenceData.evidence)
+      ? evidenceData.evidence
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    const retrievalModes = new Set(["keyword", "semantic", "hybrid"]);
+    const evidenceRefs = evidenceItems.map((item) => item.ref);
+    if (
+      evidenceData.turn_id !== turn.turnId ||
+      evidenceData.retrieval_id !== receipt.retrieval_id ||
+      evidenceData.snapshot_id !== snapshotId ||
+      evidenceData.snapshot_hash !== snapshotHash ||
+      evidenceData.retrieval_policy !== "required" ||
+      typeof evidenceData.mode !== "string" ||
+      !retrievalModes.has(evidenceData.mode) ||
+      evidenceData.truncated !== false ||
+      !Array.isArray(evidenceData.warnings) ||
+      evidenceData.warnings.length > 32 ||
+      evidenceData.warnings.some(
+        (warning) => typeof warning !== "string" || warning.length > 1_024,
+      ) ||
+      evidenceItems.length < 1 ||
+      evidenceItems.length > 20 ||
+      evidenceItems.length !== Number(receipt.evidence_count) ||
+      citedRefs.length !== evidenceItems.length ||
+      citedRefs.some((reference) => !evidenceRefs.includes(reference)) ||
+      evidenceRefs.some((reference) => !citedRefs.includes(reference))
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_QUERY_EVIDENCE_RESPONSE_INVALID",
+        "知识检索证据包与回答回执、快照或引用集合不一致。",
+      );
+    }
+    for (const [index, item] of evidenceItems.entries()) {
+      if (
+        item.ref !== `K${index + 1}` ||
+        item.document_id !== knowledgeDocumentId ||
+        item.document_id === forbiddenKnowledgeDocumentId ||
+        typeof item.version_id !== "string" ||
+        !uuidPattern.test(item.version_id) ||
+        typeof item.version_number !== "number" ||
+        !Number.isSafeInteger(item.version_number) ||
+        item.version_number < 1 ||
+        item.content_hash !== expectedFixtureSha256 ||
+        item.title !== expectedTitle ||
+        objectValue(item.locator) === null ||
+        typeof item.snippet !== "string" ||
+        item.snippet.trim() === "" ||
+        item.snippet.length > 32_000 ||
+        typeof item.evidence_type !== "string" ||
+        item.evidence_type.trim() === "" ||
+        typeof item.retrieval_mode !== "string" ||
+        !retrievalModes.has(item.retrieval_mode) ||
+        item.truncated !== false ||
+        !(item.score === null || (typeof item.score === "number" && Number.isFinite(item.score)))
+      ) {
+        throw assertionFailure(
+          "SPARK_X_AGENT_KNOWLEDGE_QUERY_DOCUMENT_BOUNDARY_FAILED",
+          "知识检索证据包含错误文档、版本、哈希、标题或越界字段。",
+        );
+      }
+    }
+    const evidenceText = evidenceItems.map((item) => String(item.snippet)).join("\n");
+    if (
+      expectedFacts.some((fact) => !evidenceText.includes(fact)) ||
+      forbiddenFacts.some((fact) => evidenceText.includes(fact))
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_KNOWLEDGE_QUERY_EVIDENCE_FACTS_FAILED",
+        "知识检索证据缺少订单事实或混入了禁止的科目表事实。",
+      );
+    }
+    const evidenceSetSha256 = sha256(
+      canonicalJson(
+        evidenceItems.map((item) => ({
+          ref: item.ref,
+          documentId: item.document_id,
+          versionId: item.version_id,
+          versionNumber: item.version_number,
+          contentHash: item.content_hash,
+          titleSha256: sha256(String(item.title)),
+          locatorSha256: sha256(canonicalJson(item.locator)),
+          snippetSha256: sha256(String(item.snippet)),
+          retrievalMode: item.retrieval_mode,
+          truncated: item.truncated,
+        })),
+      ),
+    );
+    return {
+      conversationId,
+      turnId: turn.turnId,
+      knowledgeDocumentId,
+      snapshotId,
+      snapshotHash,
+      retrievalId: receipt.retrieval_id,
+      packetHash: receipt.packet_hash,
+      completed: true,
+      expectedFactsMatched: true,
+      citationSetMatched: true,
+      forbiddenEvidenceAbsent: true,
+      messageCount: items.length,
+      userMessageCount: userMessages.length,
+      assistantMessageCount: assistantMessages.length,
+      toolMessageCount: toolMessages.length,
+      evidenceCount: evidenceItems.length,
+      citedRefCount: citedRefs.length,
+      retrievalMode: evidenceData.mode,
+      answerLength: answer.length,
+      answerSha256: sha256(answer),
+      evidenceSetSha256,
+      pollAttempts: terminal.pollAttempts,
     };
   }
 
