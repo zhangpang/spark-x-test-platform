@@ -76,6 +76,9 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/conversation.create`：以内存密钥登录，创建标题含 `${run.id}` 的会话并返回非敏感会话 ID；必须同步登记资源和删除补偿；
 - `adapter:spark-x-agent/conversation.assert-recent`：重新登录并验证新会话位于最近会话列表的首个非置顶位置，输出列表位置与消息数摘要；
 - `adapter:spark-x-agent/chat.ask`：向此前已创建并登记的测试会话发送消息含 `${run.id}` 的受控真实模型请求，逐次校验重定向目标，限制 SSE 为 1 MB，只输出终态、事件计数、长度和最终回答 SHA-256；流中会话 ID 必须与登记 ID 一致；
+- `adapter:spark-x-agent/provider.create-transient-failure-fixture`：固定创建同环境主机、白名单端口 9 的不可达 Provider 夹具，输出仅登记夹具/原 Provider 标识及哈希；必须同步登记专用资源和恢复补偿；
+- `adapter:spark-x-agent/chat.assert-provider-failure-retry`：用已登记夹具产生 `provider_unavailable` 可见首错，恢复原 Provider 后以新幂等键提交独立 Turn，严格校验三条消息基数且不输出正文或 Provider 配置；
+- `adapter:spark-x-agent/provider.cleanup-transient-failure-fixture`：先恢复资源标识中的原 Provider，再幂等删除夹具并验证唯一活跃 Provider，用于普通 `finally` 与独立补偿；
 - `adapter:spark-x-agent/chat.assert-history`：重新登录并校验唯一用户消息、唯一助手回复、`stop` 终止原因，以及落库回答 SHA-256 与流式最终回答一致；
 - `adapter:spark-x-agent/chat.assert-context-history`：校验同一主会话两轮用户/助手消息顺序、两次流式哈希、`stop` 终态、零工具消息，并拒绝独立干扰会话标识串入；
 - `adapter:spark-x-agent/tool.assert-safe-catalog`：校验 `builtin-demo` 三个内置只读工具在普通用户与管理员目录中一致，且用户投影不暴露连接配置；

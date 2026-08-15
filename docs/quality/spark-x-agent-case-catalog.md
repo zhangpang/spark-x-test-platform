@@ -78,7 +78,8 @@
 - `spark-x-agent-recent-conversations`：最近会话模块全部 `CONV-001/002/003/004`；
 - `spark-x-agent-chat-context-p0`：`CHAT-002` 独立干扰会话、同会话两轮续接、流式哈希、四消息历史和完整清理闭环；
 - `spark-x-agent-chat-cancel-p1`：`CHAT-003` active Turn 取消、零幽灵助手消息、同会话续接和完整清理；
-- `spark-x-agent-chat`：聊天模块当前已实现的 `CHAT-001/002/003`；
+- `spark-x-agent-chat-provider-retry-p1`：`CHAT-004` 固定不可达 Provider 首次失败可见、恢复原 Provider 后独立重试、消息基数和完整补偿；
+- `spark-x-agent-chat`：聊天模块当前已实现的 `CHAT-001/002/003/004`；
 - `spark-x-agent-tools-p0`：`TOOL-001/002/003/005` 内置只读工具目录、参数绑定、结果进入最终回答、禁止写工具边界、历史证据与清理闭环；
 - `spark-x-agent-tool-failure-recovery-p1`：`TOOL-004` 真实 calculator 除零失败、后续 echo 恢复、两段消息/公开轨迹哈希关联和完整清理；
 - `spark-x-agent-tools`：工具模块全部 `TOOL-001/002/003/004/005`；
@@ -95,7 +96,7 @@
 - `spark-x-agent-automation-idempotency-p1`：`AUTO-004` 单次真实调度后固定三次状态版本、触发游标、唯一消息对和回复哈希静默观察；
 - `spark-x-agent-automations`：自动任务模块 `AUTO-001/002/003/004` 单次调度、上海时区计划、生命周期、重复投递防护和完整清理；
 - `spark-x-agent-core-smoke`：所有 P0 中每个模块至少一个主路径，目标 10～12 个案例；
-- `spark-x-agent-full-regression`：固定的一键完整回归入口；当前接入 24/32 条，后续原 key 追加到全部 32 条；
+- `spark-x-agent-full-regression`：固定的一键完整回归入口；当前接入 25/32 条，后续原 key 追加到全部 32 条；
 - 每个模块独立套件：聊天、工具、知识库、Skill、MCP、自动任务、最近会话；
 - `spark-x-agent-real-model-canary`：真实模型多次运行案例；
 - `spark-x-agent-deterministic-contract`：固定 Provider 和结构化契约案例。
@@ -110,7 +111,7 @@
 
 ## 10. 当前实现检查点
 
-`CONV-001/002/003/004`、`CHAT-001/002/003`、`TOOL-001/002/003/004/005`、`KB-001/002/003/004/005/006`、`SKILL-001`、`MCP-001` 与 `AUTO-001/002/003/004` 已具备用例定义和受信任适配器执行闭环。CONV-001 覆盖创建会话、
+`CONV-001/002/003/004`、`CHAT-001/002/003/004`、`TOOL-001/002/003/004/005`、`KB-001/002/003/004/005/006`、`SKILL-001`、`MCP-001` 与 `AUTO-001/002/003/004` 已具备用例定义和受信任适配器执行闭环。CONV-001 覆盖创建会话、
 最近排序和清理；CONV-002 在首轮后从最近列表重新定位原会话，校验两条已持久化消息，再续接第二轮并核对四消息历史、空知识库/Skill范围与零工具事件；
 CONV-003 创建三个运行隔离会话，重命名最早会话使其成为最新会话，再以每页两条连续完整扫描两次；三个运行会话必须跨页且每次恰好出现一次，
 保持“重命名目标、最新创建、次新创建”的顺序和相同页内位置，最后逆序清理三个资源。分页动作只输出标题 SHA-256、页数、计数和布尔判定；
@@ -120,6 +121,10 @@ CHAT-001 覆盖真实模型 SSE 终态、回答哈希、单轮历史持久化一
 核对四条消息顺序、两次流式哈希、`stop` 终态、零工具消息及干扰标识完全缺失，并按资源登记倒序清理两个会话。CHAT-003
 通过 V5 Turn 队列启动长回答，必须观察到 `claimed/running` 后在无外部副作用边界请求取消；取消终态不得产生助手消息，
 随后同一会话新 Turn 必须以 `stop` 完成。最终历史只能有一条取消输入、一条续接输入和一条续接回复，正文仅登记 SHA-256；
+CHAT-004 先登记一个固定、同环境白名单内但不可达的临时 Provider 和原活跃 Provider 标识，再创建运行隔离会话。故障夹具只使用无真实权限的固定哨兵值，
+不接收 URL、模型或凭据输入；切换夹具后完成首次 Turn 入队便立即恢复原 Provider。首次 Turn 必须以 `provider_unavailable/retryable=true` 失败且无助手消息，
+随后用户用新幂等键提交独立重试 Turn 并以 `completed/stop` 完成。最终历史只能有一条失败输入、一条重试输入和一条成功回复，Turn 与消息标识不得复用；
+`finally` 与独立补偿都会先恢复原 Provider，再幂等删除夹具。输出不含消息正文、Provider URL、哨兵值或凭据，仅保留 ID、计数、布尔判定和 SHA-256；
 TOOL 覆盖普通用户工具
 目录的凭据边界、管理员目录的精确三工具白名单和无写入/无复核/无高风险结构化证据；TOOL-002 单次调用
 `builtin-demo__calculator` 校验工具选择与参数绑定，TOOL-003 单次调用 `builtin-demo__echo` 校验嵌套结果进入最终回答，
@@ -160,9 +165,9 @@ MCP-001 复用同一受信任连接器目录动作，只读核对 `builtin-demo`
 三项只读工具风险策略和凭据边界；连接器停用时必须返回 `environment_failed`，独立 MCP 诊断套件明确输出
 `inconclusive`，不得伪造通过或自动启动服务。
 `scripts/provision-spark-x-agent-conversation-p0.ts` 幂等创建；脚本同时维护 CONV、CHAT、TOOL、KB、SKILL、MCP、AUTO 诊断套件、
-当前含十一条案例的 `spark-x-agent-core-smoke`，以及建设中含 24/32 条案例的固定
+当前含十一条案例的 `spark-x-agent-core-smoke`，以及建设中含 25/32 条案例的固定
 `spark-x-agent-full-regression` 一键入口；脚本从文件或标准输入读取管理员密码，只向平台密钥库提交且不打印密钥。
 已配置环境可设置 `SPARK_X_AGENT_USE_EXISTING_SECRETS=true`，此时脚本不读取也不更新密钥，仅复用平台密钥库
 中已有的引用值，适合发布后无人值守回归。
-当前进度为核心冒烟 11/10～12、完整回归 24/32，最近会话模块 4/4、聊天模块 3/5、工具模块 5/5、知识库模块 6/6、自动任务模块 4/4，已覆盖全部七个模块；测试环境 `builtin-demo` 由管理员明确停用，因此 TOOL/MCP
+当前进度为核心冒烟 11/10～12、完整回归 25/32，最近会话模块 4/4、聊天模块 4/5、工具模块 5/5、知识库模块 6/6、自动任务模块 4/4，已覆盖全部七个模块；测试环境 `builtin-demo` 由管理员明确停用，因此 TOOL/MCP
 真实运行保持 `inconclusive`。仍以完成真实发布联动、完整回归和全部故障验收为最终完成条件。

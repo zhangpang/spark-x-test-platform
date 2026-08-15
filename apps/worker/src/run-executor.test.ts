@@ -2434,6 +2434,147 @@ describe("run worker", () => {
     );
   });
 
+  it("restores the original Provider during independent compensation", async () => {
+    const cleanupJob = {
+      protocolVersion: "1.0" as const,
+      cleanupJobId: "00000000-0000-4000-8000-000000000170",
+      runId: job.runId,
+      queuedAt: new Date(0).toISOString(),
+    };
+    const originalProviderId = "00000000-0000-4000-8000-000000000171";
+    const fixtureProviderId = "00000000-0000-4000-8000-000000000172";
+    const providerFixtureResourceId = `${fixtureProviderId}:${originalProviderId}`;
+    const compensationSnapshot: RunExecutionSnapshot = {
+      ...snapshot({
+        inputs: [
+          { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
+          { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
+        ],
+        steps: [],
+      }),
+      environment: {
+        id: "00000000-0000-4000-8000-000000000102",
+        baseUrl: "http://192.168.110.136/trade/",
+        actionLevel: "dangerous",
+        adapterKey: "spark-x-agent",
+        allowlist: [
+          {
+            protocol: "http",
+            host: "192.168.110.136",
+            ports: [80],
+            pathPrefixes: ["/trade/"],
+          },
+          {
+            protocol: "http",
+            host: "192.168.110.136",
+            ports: [9],
+            pathPrefixes: ["/spark-x-test-platform-provider-fault"],
+          },
+        ],
+      },
+    };
+    const store = {
+      claimCleanupJob: vi.fn(() =>
+        Promise.resolve({
+          id: cleanupJob.cleanupJobId,
+          runId: job.runId,
+          attempts: 1,
+          summary: {
+            total: 1,
+            queued: 0,
+            running: 0,
+            passed: 0,
+            productFailed: 0,
+            testFailed: 0,
+            environmentFailed: 0,
+            infrastructureFailed: 1,
+            flaky: 0,
+            cancelled: 0,
+            skipped: 0,
+          },
+          gateResult: "inconclusive",
+          firstFailure: null,
+          snapshot: compensationSnapshot,
+        }),
+      ),
+      resolveSecretVariables: vi.fn(() =>
+        Promise.resolve({
+          "case.admin-username": "admin",
+          "case.admin-password": "provider-compensation-password",
+        }),
+      ),
+      listResourcesForCleanup: vi.fn(() =>
+        Promise.resolve([
+          {
+            id: "00000000-0000-4000-8000-000000000173",
+            runCaseId: "00000000-0000-4000-8000-000000000104",
+            systemResourceId: providerFixtureResourceId,
+            cleanupDefinition: {
+              action: "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                providerFixtureResourceId: "${resource.id}",
+              },
+            },
+          },
+        ]),
+      ),
+      markResourceCleanup: vi.fn(() => Promise.resolve()),
+      renewResourceLocks: vi.fn(() => Promise.resolve()),
+      failCleanupJob: vi.fn(() => Promise.resolve()),
+      completeCompensation: vi.fn(() => Promise.resolve()),
+    } as unknown as CompensationExecutionStore;
+    const json = (body: unknown): Response =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    const original = {
+      id: originalProviderId,
+      name: "primary",
+      base_url: "https://provider.example.com",
+      model: "real-model",
+      protocol: "openai",
+      is_active: false,
+      has_api_key: true,
+    };
+    const fixture = {
+      id: fixtureProviderId,
+      name: "spark-x-provider-fault",
+      base_url: "http://192.168.110.136:9/spark-x-test-platform-provider-fault",
+      model: "spark-x-test-platform-fault-model",
+      protocol: "openai",
+      is_active: true,
+      has_api_key: true,
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        json({ success: true, data: { token: "provider-compensation-token" } }),
+      )
+      .mockResolvedValueOnce(json({ success: true, data: [fixture, original] }))
+      .mockResolvedValueOnce(json({ success: true, message: "activated" }))
+      .mockResolvedValueOnce(json({ success: true, message: "deleted" }))
+      .mockResolvedValueOnce(json({ success: true, data: [{ ...original, is_active: true }] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(executeCompensationJob(cleanupJob, store)).resolves.toEqual({ cleaned: 1 });
+    expect(requestUrl(fetchMock.mock.calls[2]?.[0])).toBe(
+      `http://192.168.110.136/trade/api/providers/${originalProviderId}/activate`,
+    );
+    expect(requestUrl(fetchMock.mock.calls[3]?.[0])).toBe(
+      `http://192.168.110.136/trade/api/providers/${fixtureProviderId}`,
+    );
+    expect(store.markResourceCleanup).toHaveBeenLastCalledWith(
+      "00000000-0000-4000-8000-000000000173",
+      "passed",
+    );
+    expect(JSON.stringify(vi.mocked(store.markResourceCleanup).mock.calls)).not.toContain(
+      "provider-compensation-password",
+    );
+  });
+
   it("refreshes an automation state version during independent compensation", async () => {
     const cleanupJob = {
       protocolVersion: "1.0" as const,

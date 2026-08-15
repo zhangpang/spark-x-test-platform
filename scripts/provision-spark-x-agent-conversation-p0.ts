@@ -65,6 +65,7 @@ const apiBase = process.env.SPARK_X_TEST_PLATFORM_API_URL ?? "http://127.0.0.1:4
 const runSmoke = process.env.SPARK_X_AGENT_RUN_SMOKE === "true";
 const runContextSmoke = process.env.SPARK_X_AGENT_RUN_CONTEXT_SMOKE === "true";
 const runCancelSmoke = process.env.SPARK_X_AGENT_RUN_CANCEL_SMOKE === "true";
+const runProviderRetrySmoke = process.env.SPARK_X_AGENT_RUN_PROVIDER_RETRY_SMOKE === "true";
 const runConversationReopenSmoke =
   process.env.SPARK_X_AGENT_RUN_CONVERSATION_REOPEN_SMOKE === "true";
 const runConversationPaginationSmoke =
@@ -217,6 +218,12 @@ async function ensureEnvironment(systemId: string): Promise<EnvironmentRecord> {
         host: "192.168.110.136",
         ports: [18121],
         pathPrefixes: ["/mcp/document"],
+      },
+      {
+        protocol: "http",
+        host: "192.168.110.136",
+        ports: [9],
+        pathPrefixes: ["/spark-x-test-platform-provider-fault"],
       },
     ],
     timezone: "Asia/Shanghai",
@@ -1207,6 +1214,157 @@ function chatCancelDefinition(): Readonly<Record<string, unknown>> {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
           conversationId: "${step.cancel-conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
+function chatProviderRetryDefinition(): Readonly<Record<string, unknown>> {
+  const marker = "spark-x-provider-retry-${run.id}";
+  const failureMessage =
+    "自动化回归 ${run.id} 首次尝试：请只回复标识 spark-x-provider-retry-${run.id}，不要调用工具或 Skill。";
+  const retryMessage =
+    "自动化回归 ${run.id} 明确重试同一请求：请只回复标识 spark-x-provider-retry-${run.id}，不要调用工具或 Skill。";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "CHAT-004 Provider 短暂失败后的明确重试",
+      description:
+        "用固定不可达 Provider 夹具产生可见首次失败，立即恢复原 Provider 后提交独立重试 Turn，校验首次错误、独立标识、消息基数和完整清理。",
+      systemKey: "spark-x-agent",
+      moduleKey: "chat",
+      priority: "P1",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: [
+        "adapter",
+        "chat",
+        "p1",
+        "full-regression",
+        "provider-failure",
+        "explicit-retry",
+        "real-model",
+      ],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 180_000,
+      caseTimeoutMs: 600_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:provider-config", "spark-x-agent:admin:chat"],
+    steps: [
+      {
+        id: "create-provider-failure-fixture",
+        name: "创建并登记短暂 Provider 故障夹具",
+        kind: "action",
+        action: "adapter:spark-x-agent/provider.create-transient-failure-fixture",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          name: "spark-x-provider-fault-${run.id}",
+        },
+        capture: {
+          "provider-fixture-resource-id": "$.providerFixtureResourceId",
+        },
+        resource: {
+          type: "spark-x-agent-provider-fixture",
+          id: "${step.provider-fixture-resource-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              providerFixtureResourceId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "create-provider-retry-conversation",
+        name: "创建并登记 Provider 重试会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: marker,
+        },
+        capture: { "provider-retry-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.provider-retry-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "assert-provider-failure-explicit-retry",
+        name: "校验首次 Provider 失败和独立明确重试",
+        kind: "action",
+        action: "adapter:spark-x-agent/chat.assert-provider-failure-retry",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.provider-retry-conversation-id}",
+          providerFixtureResourceId: "${step.provider-fixture-resource-id}",
+          requestId: "${run.id}",
+          failureMessage,
+          retryMessage,
+          expectedText: marker,
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "cleanup-provider-failure-fixture",
+        name: "恢复原 Provider 并删除故障夹具",
+        kind: "action",
+        action: "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          providerFixtureResourceId: "${step.provider-fixture-resource-id}",
+        },
+      },
+      {
+        id: "delete-provider-retry-conversation",
+        name: "删除 Provider 重试回归会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.provider-retry-conversation-id}",
         },
       },
     ],
@@ -4262,6 +4420,150 @@ async function executeCancelSmoke(
   return run;
 }
 
+function assertProviderRetryEvidence(run: RunDetail): void {
+  const fixture = run.steps.find((step) => step.stepId === "create-provider-failure-fixture");
+  const retry = run.steps.find((step) => step.stepId === "assert-provider-failure-explicit-retry");
+  const cleanup = run.steps.find((step) => step.stepId === "cleanup-provider-failure-fixture");
+  const failureMessage = `自动化回归 ${run.id} 首次尝试：请只回复标识 spark-x-provider-retry-${run.id}，不要调用工具或 Skill。`;
+  const retryMessage = `自动化回归 ${run.id} 明确重试同一请求：请只回复标识 spark-x-provider-retry-${run.id}，不要调用工具或 Skill。`;
+  const marker = `spark-x-provider-retry-${run.id}`;
+  check(
+    fixture?.outputSummary?.fixtureCreated === true &&
+      fixture.outputSummary.originalProviderActive === true &&
+      fixture.outputSummary.faultTargetAllowed === true &&
+      typeof fixture.outputSummary.providerFixtureResourceId === "string" &&
+      /^[0-9a-f-]{36}:[0-9a-f-]{36}$/iu.test(fixture.outputSummary.providerFixtureResourceId) &&
+      typeof fixture.outputSummary.fixtureProviderId === "string" &&
+      typeof fixture.outputSummary.originalProviderId === "string" &&
+      fixture.outputSummary.fixtureProviderId !== fixture.outputSummary.originalProviderId &&
+      typeof fixture.outputSummary.faultBaseUrlSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(fixture.outputSummary.faultBaseUrlSha256) &&
+      typeof fixture.outputSummary.nameSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(fixture.outputSummary.nameSha256),
+    "CHAT-004 Provider fixture registration or fixed-target evidence is incomplete",
+  );
+  const summary = retry?.outputSummary;
+  check(
+    summary !== null &&
+      summary !== undefined &&
+      typeof summary.conversationId === "string" &&
+      typeof summary.failedTurnId === "string" &&
+      typeof summary.retryTurnId === "string" &&
+      summary.failedTurnId !== summary.retryTurnId &&
+      summary.firstFailureVisible === true &&
+      summary.failureCode === "provider_unavailable" &&
+      summary.failureRetryable === true &&
+      summary.failedAssistantAbsent === true &&
+      summary.retryCompleted === true &&
+      summary.independentAttempts === true &&
+      summary.messageCardinalityMatched === true &&
+      summary.messageCount === 3 &&
+      summary.failedUserMessageCount === 1 &&
+      summary.retryUserMessageCount === 1 &&
+      summary.retryAssistantMessageCount === 1 &&
+      summary.toolMessageCount === 0 &&
+      summary.expectedTextMatched === true &&
+      summary.failureInputSha256 === createHash("sha256").update(failureMessage).digest("hex") &&
+      summary.retryInputSha256 === createHash("sha256").update(retryMessage).digest("hex") &&
+      typeof summary.retryAssistantSha256 === "string" &&
+      /^[0-9a-f]{64}$/u.test(summary.retryAssistantSha256) &&
+      typeof summary.retryAssistantContentLength === "number" &&
+      summary.retryAssistantContentLength > 0 &&
+      typeof summary.failurePollAttempts === "number" &&
+      summary.failurePollAttempts >= 1 &&
+      typeof summary.retryPollAttempts === "number" &&
+      summary.retryPollAttempts >= 1,
+    "CHAT-004 first failure, independent retry or message-cardinality evidence is incomplete",
+  );
+  check(
+    cleanup?.outputSummary?.originalProviderActive === true &&
+      cleanup.outputSummary.fixtureDeleted === true &&
+      cleanup.outputSummary.activeProviderCount === 1 &&
+      typeof cleanup.outputSummary.providerFixtureResourceIdSha256 === "string" &&
+      cleanup.outputSummary.providerFixtureResourceIdSha256 ===
+        createHash("sha256")
+          .update(String(fixture?.outputSummary?.providerFixtureResourceId))
+          .digest("hex"),
+    "CHAT-004 did not prove original Provider restoration and fixture deletion",
+  );
+  const evidence = JSON.stringify({ fixture, retry, cleanup });
+  check(
+    !evidence.includes(failureMessage) &&
+      !evidence.includes(retryMessage) &&
+      !evidence.includes(marker) &&
+      !evidence.includes("spark-x-test-platform-noncredential-fault-fixture") &&
+      !evidence.includes("spark-x-test-platform-provider-fault") &&
+      !evidence.includes("memory-only-access-token"),
+    "CHAT-004 prompt, fixed fault target, noncredential sentinel or in-memory token leaked into evidence",
+  );
+}
+
+async function executeProviderRetrySmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-chat-provider-retry-p1-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-chat-provider-retry-p1-verification",
+      priority: 90,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent Provider retry run was not accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(
+    run.gateResult === "passed",
+    `Spark X Agent Provider retry gate is ${String(run.gateResult)}`,
+  );
+  check(run.summary.passed === 1, "Spark X Agent Provider retry case did not pass");
+  check(run.firstFailure === null, "Spark X Agent Provider retry retained a run failure");
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent Provider retry case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/provider.create-transient-failure-fixture",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/chat.assert-provider-failure-retry",
+        "finally:adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+        "finally:adapter:spark-x-agent/conversation.delete",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent Provider retry structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 2 &&
+      run.resources[0]?.resourceType === "spark-x-agent-provider-fixture" &&
+      run.resources[0].cleanupDefinition.action ===
+        "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture" &&
+      run.resources[0].cleanupStatus === "passed" &&
+      run.resources[1]?.resourceType === "spark-x-agent-conversation" &&
+      run.resources[1].cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete" &&
+      run.resources[1].cleanupStatus === "passed",
+    "Spark X Agent Provider retry resource ledger or cleanup order is incomplete",
+  );
+  check(run.cleanupJob === null, "normal Provider retry run unexpectedly required compensation");
+  assertProviderRetryEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into CHAT-004 evidence",
+    );
+  }
+  return run;
+}
+
 function assertConversationPaginationEvidence(run: RunDetail): void {
   const createSteps = run.steps.filter(
     (step) => step.phase === "main" && step.action === "adapter:spark-x-agent/conversation.create",
@@ -6121,6 +6423,14 @@ const chatCancelCase = await ensureCase(
   chatCancelDefinition(),
   "新增 active Turn 取消、零幽灵助手消息、同会话独立续接和完整清理 P1 闭环",
 );
+const chatProviderRetryCase = await ensureCase(
+  system.id,
+  chat.id,
+  environment.id,
+  "CHAT-004 Provider 短暂失败后的明确重试",
+  chatProviderRetryDefinition(),
+  "新增固定不可达 Provider 夹具、可见首次失败、独立用户重试、消息基数和 Provider 恢复补偿 P1 闭环",
+);
 const toolCatalogCase = await ensureCase(
   system.id,
   tools.id,
@@ -6311,12 +6621,24 @@ const chatCancelSuite = await ensureSuite(
   "CHAT-003 active Turn 取消、无外部副作用边界、零幽灵助手消息、同会话独立续接和完整清理闭环。",
   [chatCancelCase.testCase.id],
 );
+const chatProviderRetrySuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-chat-provider-retry-p1",
+  "星火 Agent Provider 失败明确重试 P1 纵向切片",
+  "CHAT-004 固定不可达 Provider 首次失败可见，恢复原 Provider 后独立重试成功，消息无额外重复且夹具完整清理。",
+  [chatProviderRetryCase.testCase.id],
+);
 const chatSuite = await ensureSuite(
   system.id,
   "spark-x-agent-chat",
   "星火 Agent 聊天回归",
-  "聊天模块当前 CHAT-001/002/003 流式首轮、两轮上下文隔离、用户取消和同会话续接。",
-  [chatCase.testCase.id, chatContextCase.testCase.id, chatCancelCase.testCase.id],
+  "聊天模块当前 CHAT-001/002/003/004 流式首轮、两轮上下文隔离、用户取消、Provider 失败和明确重试。",
+  [
+    chatCase.testCase.id,
+    chatContextCase.testCase.id,
+    chatCancelCase.testCase.id,
+    chatProviderRetryCase.testCase.id,
+  ],
 );
 const toolSuite = await ensureSuite(
   system.id,
@@ -6468,8 +6790,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 24/32）",
-  "手动一键完整回归入口；当前已接入 24/32 条案例，覆盖七个模块的当前 P0、CHAT-003、TOOL-004、KB-005/006、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 25/32）",
+  "手动一键完整回归入口；当前已接入 25/32 条案例，覆盖七个模块的当前 P0、CHAT-003/004、TOOL-004、KB-005/006、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -6478,6 +6800,7 @@ const fullRegressionSuite = await ensureSuite(
     chatCase.testCase.id,
     chatContextCase.testCase.id,
     chatCancelCase.testCase.id,
+    chatProviderRetryCase.testCase.id,
     toolCatalogCase.testCase.id,
     toolInvocationCase.testCase.id,
     toolResultCase.testCase.id,
@@ -6502,6 +6825,7 @@ check(
     runSmoke,
     runContextSmoke,
     runCancelSmoke,
+    runProviderRetrySmoke,
     runConversationReopenSmoke,
     runConversationPaginationSmoke,
     runConversationDeleteSmoke,
@@ -6522,106 +6846,120 @@ const run = runSmoke
     ? await executeContextSmoke(system.id, environment.id, chatContextSuite.id, password)
     : runCancelSmoke
       ? await executeCancelSmoke(system.id, environment.id, chatCancelSuite.id, password)
-      : runConversationReopenSmoke
-        ? await executeConversationReopenSmoke(
+      : runProviderRetrySmoke
+        ? await executeProviderRetrySmoke(
             system.id,
             environment.id,
-            conversationReopenSuite.id,
+            chatProviderRetrySuite.id,
             password,
           )
-        : runConversationPaginationSmoke
-          ? await executeConversationPaginationSmoke(
+        : runConversationReopenSmoke
+          ? await executeConversationReopenSmoke(
               system.id,
               environment.id,
-              conversationPaginationSuite.id,
+              conversationReopenSuite.id,
               password,
             )
-          : runConversationDeleteSmoke
-            ? await executeConversationDeleteSmoke(
+          : runConversationPaginationSmoke
+            ? await executeConversationPaginationSmoke(
                 system.id,
                 environment.id,
-                conversationDeleteSuite.id,
+                conversationPaginationSuite.id,
                 password,
               )
-            : runKnowledgeSmoke
-              ? await executeKnowledgeSmoke(
+            : runConversationDeleteSmoke
+              ? await executeConversationDeleteSmoke(
                   system.id,
                   environment.id,
-                  knowledgeBaseSuite.id,
+                  conversationDeleteSuite.id,
                   password,
                 )
-              : runKnowledgeRetrievalSmoke
-                ? await executeKnowledgeRetrievalSmoke(
+              : runKnowledgeSmoke
+                ? await executeKnowledgeSmoke(
                     system.id,
                     environment.id,
-                    knowledgeRetrievalSuite.id,
+                    knowledgeBaseSuite.id,
                     password,
                   )
-                : runKnowledgeIsolationSmoke
-                  ? await executeKnowledgeIsolationSmoke(
+                : runKnowledgeRetrievalSmoke
+                  ? await executeKnowledgeRetrievalSmoke(
                       system.id,
                       environment.id,
-                      knowledgeIsolationSuite.id,
+                      knowledgeRetrievalSuite.id,
                       password,
                     )
-                  : runKnowledgeCleanupSmoke
-                    ? await executeKnowledgeCleanupSmoke(
+                  : runKnowledgeIsolationSmoke
+                    ? await executeKnowledgeIsolationSmoke(
                         system.id,
                         environment.id,
-                        knowledgeCleanupSuite.id,
+                        knowledgeIsolationSuite.id,
                         password,
                       )
-                    : runKnowledgeLargeTableSmoke
-                      ? await executeKnowledgeLargeTableSmoke(
+                    : runKnowledgeCleanupSmoke
+                      ? await executeKnowledgeCleanupSmoke(
                           system.id,
                           environment.id,
-                          knowledgeLargeTableSuite.id,
+                          knowledgeCleanupSuite.id,
                           password,
                         )
-                      : runSkillSmoke
-                        ? await executeSkillSmoke(
+                      : runKnowledgeLargeTableSmoke
+                        ? await executeKnowledgeLargeTableSmoke(
                             system.id,
                             environment.id,
-                            skillSuite.id,
+                            knowledgeLargeTableSuite.id,
                             password,
                           )
-                        : runMcpSmoke
-                          ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
-                          : runAutomationSmoke
-                            ? await executeAutomationSmoke(
+                        : runSkillSmoke
+                          ? await executeSkillSmoke(
+                              system.id,
+                              environment.id,
+                              skillSuite.id,
+                              password,
+                            )
+                          : runMcpSmoke
+                            ? await executeMcpSmoke(
                                 system.id,
                                 environment.id,
-                                automationSuite.id,
+                                mcpSuite.id,
                                 password,
                               )
-                            : undefined;
+                            : runAutomationSmoke
+                              ? await executeAutomationSmoke(
+                                  system.id,
+                                  environment.id,
+                                  automationSuite.id,
+                                  password,
+                                )
+                              : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
   : runCancelSmoke
     ? "spark-x-agent-chat-cancel-p1"
-    : runConversationReopenSmoke
-      ? "spark-x-agent-conversation-reopen-p0"
-      : runConversationPaginationSmoke
-        ? "spark-x-agent-conversation-pagination-p1"
-        : runConversationDeleteSmoke
-          ? "spark-x-agent-conversation-delete-p1"
-          : runKnowledgeSmoke
-            ? "spark-x-agent-knowledge-base-p0"
-            : runKnowledgeRetrievalSmoke
-              ? "spark-x-agent-knowledge-retrieval-p0"
-              : runKnowledgeIsolationSmoke
-                ? "spark-x-agent-knowledge-isolation-p0"
-                : runKnowledgeCleanupSmoke
-                  ? "spark-x-agent-knowledge-cleanup-p1"
-                  : runKnowledgeLargeTableSmoke
-                    ? "spark-x-agent-knowledge-large-table-p1"
-                    : runSkillSmoke
-                      ? "spark-x-agent-skills-p0"
-                      : runMcpSmoke
-                        ? "spark-x-agent-mcp-p0"
-                        : runAutomationSmoke
-                          ? "spark-x-agent-automations-p0"
-                          : "spark-x-agent-core-smoke";
+    : runProviderRetrySmoke
+      ? "spark-x-agent-chat-provider-retry-p1"
+      : runConversationReopenSmoke
+        ? "spark-x-agent-conversation-reopen-p0"
+        : runConversationPaginationSmoke
+          ? "spark-x-agent-conversation-pagination-p1"
+          : runConversationDeleteSmoke
+            ? "spark-x-agent-conversation-delete-p1"
+            : runKnowledgeSmoke
+              ? "spark-x-agent-knowledge-base-p0"
+              : runKnowledgeRetrievalSmoke
+                ? "spark-x-agent-knowledge-retrieval-p0"
+                : runKnowledgeIsolationSmoke
+                  ? "spark-x-agent-knowledge-isolation-p0"
+                  : runKnowledgeCleanupSmoke
+                    ? "spark-x-agent-knowledge-cleanup-p1"
+                    : runKnowledgeLargeTableSmoke
+                      ? "spark-x-agent-knowledge-large-table-p1"
+                      : runSkillSmoke
+                        ? "spark-x-agent-skills-p0"
+                        : runMcpSmoke
+                          ? "spark-x-agent-mcp-p0"
+                          : runAutomationSmoke
+                            ? "spark-x-agent-automations-p0"
+                            : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -6634,32 +6972,34 @@ console.info(
           ? 28
           : runCancelSmoke
             ? 30
-            : runConversationReopenSmoke
-              ? 23
-              : runConversationPaginationSmoke
-                ? 24
-                : runConversationDeleteSmoke
+            : runProviderRetrySmoke
+              ? 32
+              : runConversationReopenSmoke
+                ? 23
+                : runConversationPaginationSmoke
                   ? 24
-                  : runKnowledgeSmoke
-                    ? 32
-                    : runKnowledgeRetrievalSmoke
-                      ? 35
-                      : runKnowledgeIsolationSmoke
-                        ? 36
-                        : runKnowledgeCleanupSmoke
-                          ? 34
-                          : runKnowledgeLargeTableSmoke
-                            ? 30
-                            : runSkillSmoke
-                              ? 12
-                              : runMcpSmoke
-                                ? expectMcpUnavailable
-                                  ? 10
-                                  : 12
-                                : runAutomationSmoke
-                                  ? 20
-                                  : 161,
-    caseCount: 24,
+                  : runConversationDeleteSmoke
+                    ? 24
+                    : runKnowledgeSmoke
+                      ? 32
+                      : runKnowledgeRetrievalSmoke
+                        ? 35
+                        : runKnowledgeIsolationSmoke
+                          ? 36
+                          : runKnowledgeCleanupSmoke
+                            ? 34
+                            : runKnowledgeLargeTableSmoke
+                              ? 30
+                              : runSkillSmoke
+                                ? 12
+                                : runMcpSmoke
+                                  ? expectMcpUnavailable
+                                    ? 10
+                                    : 12
+                                  : runAutomationSmoke
+                                    ? 20
+                                    : 161,
+    caseCount: 25,
     coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -6679,6 +7019,8 @@ console.info(
     chatContextCaseVersionId: chatContextCase.version.id,
     chatCancelCaseId: chatCancelCase.testCase.id,
     chatCancelCaseVersionId: chatCancelCase.version.id,
+    chatProviderRetryCaseId: chatProviderRetryCase.testCase.id,
+    chatProviderRetryCaseVersionId: chatProviderRetryCase.version.id,
     toolCatalogCaseId: toolCatalogCase.testCase.id,
     toolCatalogCaseVersionId: toolCatalogCase.version.id,
     toolInvocationCaseId: toolInvocationCase.testCase.id,

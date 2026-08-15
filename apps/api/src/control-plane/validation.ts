@@ -44,6 +44,7 @@ const availableActions = new Set([
 const availableCompensationActions = new Set([
   "http:request",
   "adapter:spark-x-agent/conversation.delete",
+  "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
   "adapter:spark-x-agent/knowledge-base.cleanup",
   "adapter:spark-x-agent/automation.cleanup",
 ]);
@@ -424,6 +425,21 @@ function validateSparkXAgentAction(
     });
   }
   if (
+    action === "adapter:spark-x-agent/provider.create-transient-failure-fixture" &&
+    (resource === undefined ||
+      resource.type !== "spark-x-agent-provider-fixture" ||
+      !isObject(resource.cleanup) ||
+      resource.cleanup.action !==
+        "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture")
+  ) {
+    issues.push({
+      severity: "error",
+      code: "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
+      path: `${path}.resource`,
+      message: "创建短暂 Provider 故障夹具必须登记专用资源并声明恢复补偿。",
+    });
+  }
+  if (
     action === "adapter:spark-x-agent/conversation.create" &&
     typeof params.title === "string" &&
     !params.title.includes("${run.id}")
@@ -461,6 +477,7 @@ function validateSparkXAgentAction(
   }
   if (
     (action === "adapter:spark-x-agent/chat.ask" ||
+      action === "adapter:spark-x-agent/chat.assert-provider-failure-retry" ||
       action === "adapter:spark-x-agent/tool.invoke-safe" ||
       action === "adapter:spark-x-agent/tool.invoke-failure-recovery" ||
       action === "adapter:spark-x-agent/knowledge-base.query-and-assert-evidence") &&
@@ -472,6 +489,19 @@ function validateSparkXAgentAction(
       code: "RUN_TRACEABILITY_REQUIRED",
       path: `${path}.params.message`,
       message: "测试对话消息必须包含 ${run.id}，以便追踪和残留数据审计。",
+    });
+  }
+  if (
+    action === "adapter:spark-x-agent/chat.assert-provider-failure-retry" &&
+    ["failureMessage", "retryMessage", "expectedText"].some(
+      (name) => typeof params[name] === "string" && !params[name].includes("${run.id}"),
+    )
+  ) {
+    issues.push({
+      severity: "error",
+      code: "RUN_TRACEABILITY_REQUIRED",
+      path: `${path}.params`,
+      message: "Provider 失败与明确重试消息必须包含 ${run.id}，以便追踪和残留审计。",
     });
   }
   if (
@@ -840,7 +870,8 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
 
     if (
       step.action === "adapter:spark-x-agent/knowledge-base.create" ||
-      step.action === "adapter:spark-x-agent/automation.create"
+      step.action === "adapter:spark-x-agent/automation.create" ||
+      step.action === "adapter:spark-x-agent/provider.create-transient-failure-fixture"
     ) {
       const resource = isObject(step.resource) ? step.resource : undefined;
       const resourceReference =
@@ -851,9 +882,15 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
       const expectedCapturePath =
         step.action === "adapter:spark-x-agent/knowledge-base.create"
           ? "$.knowledgeBaseId"
-          : "$.automationId";
+          : step.action === "adapter:spark-x-agent/automation.create"
+            ? "$.automationId"
+            : "$.providerFixtureResourceId";
       const resourceName =
-        step.action === "adapter:spark-x-agent/knowledge-base.create" ? "知识库" : "自动任务";
+        step.action === "adapter:spark-x-agent/knowledge-base.create"
+          ? "知识库"
+          : step.action === "adapter:spark-x-agent/automation.create"
+            ? "自动任务"
+            : "Provider 故障夹具";
       if (
         resourceReference?.[1] === undefined ||
         capture?.[resourceReference[1]] !== expectedCapturePath
@@ -928,6 +965,17 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
           code: "CLEANUP_RESOURCE_SCOPE_REQUIRED",
           path: `$.steps.${id}.resource.cleanup.params.automationId`,
           message: "自动任务补偿只能使用 ${resource.id} 清理本次登记资源。",
+        });
+      }
+      if (
+        cleanup.action === "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture" &&
+        (!isObject(cleanup.params) || cleanup.params.providerFixtureResourceId !== "${resource.id}")
+      ) {
+        issues.push({
+          severity: "error",
+          code: "CLEANUP_RESOURCE_SCOPE_REQUIRED",
+          path: `$.steps.${id}.resource.cleanup.params.providerFixtureResourceId`,
+          message: "Provider 故障夹具补偿只能使用 ${resource.id} 恢复本次登记资源。",
         });
       }
       if (cleanup.action === "http:request" && isObject(cleanup.params)) {

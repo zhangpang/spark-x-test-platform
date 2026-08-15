@@ -1237,6 +1237,207 @@ describe("M2 asset validation", () => {
     );
   });
 
+  it("requires a scoped Provider failure fixture and run-traceable explicit retry", () => {
+    const sparkEnvironment: EnvironmentRecord = {
+      ...environment,
+      systemId: "00000000-0000-4000-8000-000000000010",
+      baseUrl: "http://192.168.110.136/trade/",
+      actionLevel: "dangerous",
+      allowlist: [
+        {
+          protocol: "http",
+          host: "192.168.110.136",
+          ports: [80],
+          pathPrefixes: ["/trade/", "/trade-domain-api/"],
+        },
+        {
+          protocol: "http",
+          host: "192.168.110.136",
+          ports: [9],
+          pathPrefixes: ["/spark-x-test-platform-provider-fault"],
+        },
+      ],
+      adapterKey: "spark-x-agent",
+    };
+    const retryDefinition = definition({
+      metadata: {
+        name: "CHAT-004 Provider retry",
+        systemKey: "spark-x-agent",
+        moduleKey: "chat",
+        priority: "P1",
+        classification: "blackbox",
+        actionLevel: "dangerous",
+        tags: ["adapter", "chat", "provider-retry"],
+      },
+      inputs: [
+        {
+          name: "admin-username",
+          type: "string",
+          required: true,
+          secretRef: "spark-x-agent-admin-username",
+        },
+        {
+          name: "admin-password",
+          type: "string",
+          required: true,
+          secretRef: "spark-x-agent-admin-password",
+        },
+      ],
+      execution: {
+        stepTimeoutMs: 180_000,
+        caseTimeoutMs: 600_000,
+        diagnosticRetries: 0,
+      },
+      resourceLocks: ["spark-x-agent:admin:provider-config"],
+      steps: [
+        {
+          id: "create-fixture",
+          name: "create fixture",
+          kind: "action",
+          action: "adapter:spark-x-agent/provider.create-transient-failure-fixture",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            name: "spark-x-provider-fault-${run.id}",
+          },
+          capture: { "fixture-resource-id": "$.providerFixtureResourceId" },
+          resource: {
+            type: "spark-x-agent-provider-fixture",
+            id: "${step.fixture-resource-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                providerFixtureResourceId: "${resource.id}",
+              },
+            },
+          },
+        },
+        {
+          id: "create-conversation",
+          name: "create conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.create",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            title: "spark-x-provider-retry-${run.id}",
+          },
+          capture: { "conversation-id": "$.conversationId" },
+          resource: {
+            type: "spark-x-agent-conversation",
+            id: "${step.conversation-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/conversation.delete",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                conversationId: "${resource.id}",
+              },
+            },
+          },
+        },
+        {
+          id: "retry",
+          name: "retry",
+          kind: "action",
+          action: "adapter:spark-x-agent/chat.assert-provider-failure-retry",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            providerFixtureResourceId: "${step.fixture-resource-id}",
+            requestId: "${run.id}",
+            failureMessage: "first ${run.id}",
+            retryMessage: "retry ${run.id}",
+            expectedText: "answer ${run.id}",
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "cleanup-fixture",
+          name: "cleanup fixture",
+          kind: "action",
+          action: "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            providerFixtureResourceId: "${step.fixture-resource-id}",
+          },
+        },
+        {
+          id: "delete-conversation",
+          name: "delete conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.delete",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+          },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(retryDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "chat",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const steps = retryDefinition.steps as readonly JsonObject[];
+    const unsafe = {
+      ...retryDefinition,
+      steps: [
+        {
+          ...steps[0],
+          params: {
+            ...(steps[0]?.params as JsonObject),
+            baseUrl: "http://attacker.invalid",
+          },
+          resource: {
+            type: "wrong-provider-resource",
+            id: "${step.fixture-resource-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                providerFixtureResourceId: "${run.id}",
+              },
+            },
+          },
+        },
+        steps[1],
+        {
+          ...steps[2],
+          params: {
+            ...(steps[2]?.params as JsonObject),
+            failureMessage: "missing run marker",
+          },
+        },
+      ],
+      finally: [],
+    } as JsonObject;
+    expect(
+      validateDefinition(unsafe, {
+        systemKey: "spark-x-agent",
+        moduleKey: "chat",
+        environment: sparkEnvironment,
+      }).issues.map((issue) => issue.code),
+    ).toEqual(
+      expect.arrayContaining([
+        "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
+        "CLEANUP_RESOURCE_SCOPE_REQUIRED",
+        "ARBITRARY_ADAPTER_INPUT_FORBIDDEN",
+        "RUN_TRACEABILITY_REQUIRED",
+      ]),
+    );
+  });
+
   it("accepts fixed-fixture knowledge snapshots and rejects arbitrary upload or cleanup scope", () => {
     const sparkEnvironment: EnvironmentRecord = {
       ...environment,

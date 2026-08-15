@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -187,6 +187,91 @@
         }
       },
       {
+        "key": "provider.create-transient-failure-fixture",
+        "name": "创建短暂 Provider 故障夹具",
+        "description": "登记一个固定不可达且不具备真实凭据的临时 Provider，并冻结原活跃 Provider 标识供中断补偿。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 20000,
+        "producesResource": true,
+        "cleanupAction": "provider.cleanup-transient-failure-fixture",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "name"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "name": { "type": "string", "minLength": 1, "maxLength": 200 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "providerFixtureResourceId",
+            "fixtureProviderId",
+            "originalProviderId",
+            "fixtureCreated",
+            "originalProviderActive",
+            "faultTargetAllowed",
+            "faultBaseUrlSha256",
+            "nameSha256"
+          ],
+          "properties": {
+            "providerFixtureResourceId": { "type": "string", "minLength": 73, "maxLength": 73 },
+            "fixtureProviderId": { "type": "string", "format": "uuid" },
+            "originalProviderId": { "type": "string", "format": "uuid" },
+            "fixtureCreated": { "const": true },
+            "originalProviderActive": { "const": true },
+            "faultTargetAllowed": { "const": true },
+            "faultBaseUrlSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "nameSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+          }
+        }
+      },
+      {
+        "key": "provider.cleanup-transient-failure-fixture",
+        "name": "清理短暂 Provider 故障夹具",
+        "description": "重新激活故障前 Provider，幂等删除临时故障夹具，并验证活跃 Provider 唯一。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 20000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "providerFixtureResourceId"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "providerFixtureResourceId": {
+              "type": "string",
+              "minLength": 73,
+              "maxLength": 73
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "providerFixtureResourceIdSha256",
+            "originalProviderActive",
+            "fixtureDeleted",
+            "activeProviderCount"
+          ],
+          "properties": {
+            "providerFixtureResourceIdSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "originalProviderActive": { "const": true },
+            "fixtureDeleted": { "const": true },
+            "activeProviderCount": { "const": 1 }
+          }
+        }
+      },
+      {
         "key": "chat.ask",
         "name": "发送对话并校验回复",
         "description": "向已登记测试会话发送带运行标识的受控消息，并校验完整 SSE 回复。",
@@ -253,6 +338,94 @@
             "truncated": { "const": false },
             "stopReason": { "type": "string" },
             "durationMs": { "type": "number", "minimum": 0 }
+          }
+        }
+      },
+      {
+        "key": "chat.assert-provider-failure-retry",
+        "name": "校验 Provider 短暂失败后的明确重试",
+        "description": "用已登记的固定故障 Provider 产生可见失败，恢复原 Provider 后提交独立重试 Turn，并校验消息无额外重复。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 180000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "conversationId",
+            "providerFixtureResourceId",
+            "requestId",
+            "failureMessage",
+            "retryMessage",
+            "expectedText"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "providerFixtureResourceId": {
+              "type": "string",
+              "minLength": 73,
+              "maxLength": 73
+            },
+            "requestId": { "type": "string", "format": "uuid" },
+            "failureMessage": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "retryMessage": { "type": "string", "minLength": 1, "maxLength": 20000 },
+            "expectedText": { "type": "string", "minLength": 1, "maxLength": 5000 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "failedTurnId",
+            "retryTurnId",
+            "firstFailureVisible",
+            "failureCode",
+            "failureRetryable",
+            "failedAssistantAbsent",
+            "retryCompleted",
+            "independentAttempts",
+            "messageCardinalityMatched",
+            "messageCount",
+            "failedUserMessageCount",
+            "retryUserMessageCount",
+            "retryAssistantMessageCount",
+            "toolMessageCount",
+            "expectedTextMatched",
+            "failureInputSha256",
+            "retryInputSha256",
+            "retryAssistantSha256",
+            "retryAssistantContentLength",
+            "failurePollAttempts",
+            "retryPollAttempts"
+          ],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "failedTurnId": { "type": "string", "format": "uuid" },
+            "retryTurnId": { "type": "string", "format": "uuid" },
+            "firstFailureVisible": { "const": true },
+            "failureCode": { "const": "provider_unavailable" },
+            "failureRetryable": { "const": true },
+            "failedAssistantAbsent": { "const": true },
+            "retryCompleted": { "const": true },
+            "independentAttempts": { "const": true },
+            "messageCardinalityMatched": { "const": true },
+            "messageCount": { "const": 3 },
+            "failedUserMessageCount": { "const": 1 },
+            "retryUserMessageCount": { "const": 1 },
+            "retryAssistantMessageCount": { "const": 1 },
+            "toolMessageCount": { "const": 0 },
+            "expectedTextMatched": { "const": true },
+            "failureInputSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "retryInputSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "retryAssistantSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "retryAssistantContentLength": { "type": "integer", "minimum": 1 },
+            "failurePollAttempts": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "retryPollAttempts": { "type": "integer", "minimum": 1, "maximum": 600 }
           }
         }
       },

@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -188,16 +188,18 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.20.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+当前 `0.21.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
 `conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
-`chat.cancel-and-resume`、`chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
+`chat.cancel-and-resume`、`chat.assert-provider-failure-retry`、`chat.assert-history`、`chat.assert-context-history`、
+`provider.create-transient-failure-fixture`、`provider.cleanup-transient-failure-fixture`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
 `tool.invoke-failure-recovery`、`tool.assert-history`、`tool.assert-failure-recovery-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-large-table-continuation`、`knowledge-base.assert-conversation-scope`、
 `knowledge-base.query-and-assert-evidence`、`knowledge-base.assert-cleaned-state`、`knowledge-base.cleanup` 和
 `skill.assert-trusted-publication`，以及 `automation.create`、`automation.wait-fired`、`automation.assert-no-duplicate-delivery`、`automation.assert-lifecycle` 和
-`automation.cleanup`。动作只调用适配器内固定的 `/trade/api`、`/trade-domain-api` 路径，以及 KB-006 所需、与被测环境同主机的固定
-`http://<environment-host>:18121/mcp/document` 解析检索端点；所有请求与
+`automation.cleanup`。动作只调用适配器内固定的 `/trade/api`、`/trade-domain-api` 路径、KB-006 所需且与被测环境同主机的固定
+`http://<environment-host>:18121/mcp/document` 解析检索端点，以及 CHAT-004 固定的同主机不可达 Provider 故障端点；所有目标必须先命中
+环境 allowlist，所有实际请求与
 重定向执行环境 allowlist 校验；登录 Token、用户密码和模型回答正文都不进入输出、日志、资源台账或
 结构化证据。`conversation.assert-recent` 不把列表响应缺失的 `message_count` 当作零，而是通过会话历史接口
 读取最多 99 条持久化消息；用例可以声明精确预期数，数量偏差直接归类为产品失败，不轮询或重试。旧用例
@@ -227,6 +229,12 @@ ID 与登记 ID 一致、存在内容事件和唯一终态 `done`，并只输出
 不能有幽灵助手消息或工具消息。若 Provider 太快导致 active 取消窗口无法建立，稳定返回
 `SPARK_X_AGENT_TURN_CANCEL_WINDOW_MISSED/environment_failed`，不会把未执行的取消伪造成通过；正文只输出
 SHA-256、长度、Turn ID 和状态计数。
+`provider.create-transient-failure-fixture` 只使用适配器固定构造的同环境主机端口 9、固定路径、固定 OpenAI 协议、固定模型和无真实权限哨兵，
+不接受 URL、host、模型或 API Key 参数；创建回执只登记临时/原 Provider UUID 和名称/目标哈希。`chat.assert-provider-failure-retry` 短暂激活夹具，
+首次 Turn 入队后立即恢复原 Provider，再等待 `provider_unavailable/retryable=true` 终态并确认公开历史有唯一失败输入且无助手消息；用户明确重试
+必须使用派生的新幂等键、新 Turn 和新消息标识，以 `completed/stop` 完成。最终历史严格为失败输入、重试输入、成功助手回复三条且无工具消息。
+固定故障不使用平台诊断重试；原 Provider 恢复失败不覆盖更早的入队首错。`provider.cleanup-transient-failure-fixture` 可被普通 `finally` 和独立补偿调用，
+总是先激活登记的原 Provider，再删除临时夹具并验证唯一活跃 Provider，输出不含 Provider URL、哨兵、消息正文或凭据。
 
 TOOL 动作仅允许仓库内置的 `builtin-demo__calculator`、`builtin-demo__echo` 和 `builtin-demo__time` 只读
 工具。目录校验同时检查普通用户投影不含连接命令、环境变量、地址、工作目录或错误详情，以及管理员登记

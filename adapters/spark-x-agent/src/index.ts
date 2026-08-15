@@ -16,8 +16,11 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/conversation.rename-and-assert-pagination",
   "adapter:spark-x-agent/conversation.assert-deleted-state",
   "adapter:spark-x-agent/conversation.delete",
+  "adapter:spark-x-agent/provider.create-transient-failure-fixture",
+  "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
   "adapter:spark-x-agent/chat.ask",
   "adapter:spark-x-agent/chat.cancel-and-resume",
+  "adapter:spark-x-agent/chat.assert-provider-failure-retry",
   "adapter:spark-x-agent/chat.assert-history",
   "adapter:spark-x-agent/chat.assert-context-history",
   "adapter:spark-x-agent/tool.assert-safe-catalog",
@@ -222,6 +225,84 @@ export const sparkXAgentActionCapabilities = [
     },
   },
   {
+    key: "provider.create-transient-failure-fixture",
+    name: "创建短暂 Provider 故障夹具",
+    description:
+      "登记一个固定不可达且不具备真实凭据的临时 Provider，并冻结原活跃 Provider 标识供中断补偿。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 20_000,
+    producesResource: true,
+    cleanupAction: "provider.cleanup-transient-failure-fixture",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "name"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        name: { type: "string", minLength: 1, maxLength: 200 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "providerFixtureResourceId",
+        "fixtureProviderId",
+        "originalProviderId",
+        "fixtureCreated",
+        "originalProviderActive",
+        "faultTargetAllowed",
+        "faultBaseUrlSha256",
+        "nameSha256",
+      ],
+      properties: {
+        providerFixtureResourceId: { type: "string", minLength: 73, maxLength: 73 },
+        fixtureProviderId: { type: "string", format: "uuid" },
+        originalProviderId: { type: "string", format: "uuid" },
+        fixtureCreated: { const: true },
+        originalProviderActive: { const: true },
+        faultTargetAllowed: { const: true },
+        faultBaseUrlSha256: { type: "string", minLength: 64, maxLength: 64 },
+        nameSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
+    key: "provider.cleanup-transient-failure-fixture",
+    name: "清理短暂 Provider 故障夹具",
+    description: "重新激活故障前 Provider，幂等删除临时故障夹具，并验证活跃 Provider 唯一。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 20_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "providerFixtureResourceId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        providerFixtureResourceId: { type: "string", minLength: 73, maxLength: 73 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "providerFixtureResourceIdSha256",
+        "originalProviderActive",
+        "fixtureDeleted",
+        "activeProviderCount",
+      ],
+      properties: {
+        providerFixtureResourceIdSha256: { type: "string", minLength: 64, maxLength: 64 },
+        originalProviderActive: { const: true },
+        fixtureDeleted: { const: true },
+        activeProviderCount: { const: 1 },
+      },
+    },
+  },
+  {
     key: "chat.ask",
     name: "发送对话并校验回复",
     description: "向已登记测试会话发送带运行标识的受控消息，并校验完整 SSE 回复。",
@@ -276,6 +357,91 @@ export const sparkXAgentActionCapabilities = [
         truncated: { const: false },
         stopReason: { type: "string" },
         durationMs: { type: "number", minimum: 0 },
+      },
+    },
+  },
+  {
+    key: "chat.assert-provider-failure-retry",
+    name: "校验 Provider 短暂失败后的明确重试",
+    description:
+      "用已登记的固定故障 Provider 产生可见失败，恢复原 Provider 后提交独立重试 Turn，并校验消息无额外重复。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 180_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "conversationId",
+        "providerFixtureResourceId",
+        "requestId",
+        "failureMessage",
+        "retryMessage",
+        "expectedText",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        providerFixtureResourceId: { type: "string", minLength: 73, maxLength: 73 },
+        requestId: { type: "string", format: "uuid" },
+        failureMessage: { type: "string", minLength: 1, maxLength: 20_000 },
+        retryMessage: { type: "string", minLength: 1, maxLength: 20_000 },
+        expectedText: { type: "string", minLength: 1, maxLength: 5_000 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "failedTurnId",
+        "retryTurnId",
+        "firstFailureVisible",
+        "failureCode",
+        "failureRetryable",
+        "failedAssistantAbsent",
+        "retryCompleted",
+        "independentAttempts",
+        "messageCardinalityMatched",
+        "messageCount",
+        "failedUserMessageCount",
+        "retryUserMessageCount",
+        "retryAssistantMessageCount",
+        "toolMessageCount",
+        "expectedTextMatched",
+        "failureInputSha256",
+        "retryInputSha256",
+        "retryAssistantSha256",
+        "retryAssistantContentLength",
+        "failurePollAttempts",
+        "retryPollAttempts",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        failedTurnId: { type: "string", format: "uuid" },
+        retryTurnId: { type: "string", format: "uuid" },
+        firstFailureVisible: { const: true },
+        failureCode: { const: "provider_unavailable" },
+        failureRetryable: { const: true },
+        failedAssistantAbsent: { const: true },
+        retryCompleted: { const: true },
+        independentAttempts: { const: true },
+        messageCardinalityMatched: { const: true },
+        messageCount: { const: 3 },
+        failedUserMessageCount: { const: 1 },
+        retryUserMessageCount: { const: 1 },
+        retryAssistantMessageCount: { const: 1 },
+        toolMessageCount: { const: 0 },
+        expectedTextMatched: { const: true },
+        failureInputSha256: { type: "string", minLength: 64, maxLength: 64 },
+        retryInputSha256: { type: "string", minLength: 64, maxLength: 64 },
+        retryAssistantSha256: { type: "string", minLength: 64, maxLength: 64 },
+        retryAssistantContentLength: { type: "integer", minimum: 1 },
+        failurePollAttempts: { type: "integer", minimum: 1, maximum: 300 },
+        retryPollAttempts: { type: "integer", minimum: 1, maximum: 600 },
       },
     },
   },
@@ -1815,7 +1981,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.20.0",
+  version: "0.21.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1832,7 +1998,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "full-regression-knowledge-cleanup" as const;
+export const sparkXAgentAdapterPhase = "full-regression-provider-explicit-retry" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -3477,6 +3643,124 @@ interface EnqueuedSparkXTurn {
   readonly messageId: string;
 }
 
+interface SparkXProviderProjection {
+  readonly id: string;
+  readonly name: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly protocol: "openai" | "anthropic";
+  readonly active: boolean;
+  readonly hasApiKey: true;
+}
+
+interface SparkXProviderFixtureResource {
+  readonly fixtureProviderId: string;
+  readonly originalProviderId: string;
+}
+
+const transientProviderFixtureApiKey = "spark-x-test-platform-noncredential-fault-fixture";
+const transientProviderFixtureModel = "spark-x-test-platform-fault-model";
+const providerFixtureResourcePattern =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/iu;
+
+function transientProviderFixtureBaseUrl(environment: HttpExecutionEnvironment): string {
+  const target = new URL(environment.baseUrl);
+  target.port = "9";
+  target.pathname = "/spark-x-test-platform-provider-fault";
+  target.search = "";
+  target.hash = "";
+  assertHttpTargetAllowed(target, environment.allowlist);
+  return target.toString().replace(/\/$/u, "");
+}
+
+function sparkXProviderProjection(
+  value: unknown,
+  code = "SPARK_X_AGENT_PROVIDER_RESPONSE_INVALID",
+): SparkXProviderProjection {
+  const provider = objectValue(value);
+  if (
+    provider === null ||
+    typeof provider.id !== "string" ||
+    !uuidPattern.test(provider.id) ||
+    typeof provider.name !== "string" ||
+    provider.name.length === 0 ||
+    provider.name.length > 200 ||
+    typeof provider.base_url !== "string" ||
+    provider.base_url.length === 0 ||
+    provider.base_url.length > 512 ||
+    typeof provider.model !== "string" ||
+    provider.model.length === 0 ||
+    provider.model.length > 200 ||
+    !["openai", "anthropic"].includes(String(provider.protocol)) ||
+    typeof provider.is_active !== "boolean" ||
+    provider.has_api_key !== true ||
+    Object.hasOwn(provider, "api_key") ||
+    Object.hasOwn(provider, "api_key_encrypted")
+  ) {
+    throw apiFailure(code, "星火 Agent Provider 投影缺少受限字段或暴露了凭据。");
+  }
+  return {
+    id: provider.id,
+    name: provider.name,
+    baseUrl: provider.base_url,
+    model: provider.model,
+    protocol: provider.protocol as "openai" | "anthropic",
+    active: provider.is_active,
+    hasApiKey: true,
+  };
+}
+
+async function listSparkXProviders(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  options: SparkXAgentExecutionOptions,
+): Promise<readonly SparkXProviderProjection[]> {
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    { method: "GET", path: actionPath("/providers") },
+    options,
+  );
+  accepted(response, "SPARK_X_AGENT_PROVIDER_LIST_FAILED");
+  const data = successfulData(response.body, "SPARK_X_AGENT_PROVIDER_LIST_RESPONSE_INVALID");
+  if (!Array.isArray(data) || data.length === 0 || data.length > 50) {
+    throw apiFailure(
+      "SPARK_X_AGENT_PROVIDER_LIST_RESPONSE_INVALID",
+      "星火 Agent Provider 列表为空或超过测试账号安全上限。",
+    );
+  }
+  return data.map((provider) => sparkXProviderProjection(provider));
+}
+
+async function activateSparkXProvider(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  providerId: string,
+  options: SparkXAgentExecutionOptions,
+): Promise<void> {
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    {
+      method: "POST",
+      path: actionPath(`/providers/${encodeURIComponent(providerId)}/activate`),
+    },
+    options,
+  );
+  accepted(response, "SPARK_X_AGENT_PROVIDER_ACTIVATION_FAILED");
+}
+
+function providerFixtureResource(value: string): SparkXProviderFixtureResource {
+  const match = providerFixtureResourcePattern.exec(value);
+  if (match?.[1] === undefined || match[2] === undefined || match[1] === match[2]) {
+    throw assertionFailure(
+      "SPARK_X_AGENT_PROVIDER_FIXTURE_RESOURCE_INVALID",
+      "短暂 Provider 故障夹具资源标识无效。",
+    );
+  }
+  return { fixtureProviderId: match[1], originalProviderId: match[2] };
+}
+
 interface SparkXTurnAdmission {
   readonly documentContext?: Readonly<{
     provider: "caishui_knowledge";
@@ -4097,6 +4381,159 @@ export async function executeSparkXAgentAction(
   const username = requiredString(params, "username", variables, 200);
   const password = requiredString(params, "password", variables, 4_096);
   const token = await login(environment, username, password, remainingOptions());
+
+  if (action === "adapter:spark-x-agent/provider.create-transient-failure-fixture") {
+    const name = requiredString(params, "name", variables, 200);
+    const runId = variables["run.id"];
+    if (
+      typeof runId !== "string" ||
+      !uuidPattern.test(runId) ||
+      !name.includes(runId) ||
+      name.trim() !== name ||
+      name.includes("\u0000")
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PROVIDER_FIXTURE_TRACEABILITY_REQUIRED",
+        "短暂 Provider 故障夹具名称必须包含当前 run_id 且符合受控文本边界。",
+      );
+    }
+    const faultBaseUrl = transientProviderFixtureBaseUrl(environment);
+    const before = await listSparkXProviders(environment, token, remainingOptions());
+    const active = before.filter((provider) => provider.active);
+    if (active.length !== 1 || active[0] === undefined) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_PROVIDER_BASELINE_INVALID",
+        "星火 Agent 测试账号必须且只能有一个活跃 Provider。",
+      );
+    }
+    if (before.some((provider) => provider.name === name)) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_PROVIDER_FIXTURE_NAME_CONFLICT",
+        "本次运行的短暂 Provider 故障夹具名称已存在，需先完成残留清理。",
+      );
+    }
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath("/providers"),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          name,
+          base_url: faultBaseUrl,
+          api_key: transientProviderFixtureApiKey,
+          model: transientProviderFixtureModel,
+          protocol: "openai",
+        },
+      },
+      remainingOptions(),
+    );
+    accepted(response, "SPARK_X_AGENT_PROVIDER_FIXTURE_CREATE_FAILED");
+    const createdData = dataEnvelope(
+      response.body,
+      "SPARK_X_AGENT_PROVIDER_FIXTURE_RESPONSE_INVALID",
+    );
+    let fixture: SparkXProviderProjection;
+    try {
+      fixture = sparkXProviderProjection(
+        createdData,
+        "SPARK_X_AGENT_PROVIDER_FIXTURE_RESPONSE_INVALID",
+      );
+      if (
+        fixture.name !== name ||
+        fixture.baseUrl !== faultBaseUrl ||
+        fixture.model !== transientProviderFixtureModel ||
+        fixture.protocol !== "openai" ||
+        fixture.active
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_PROVIDER_FIXTURE_RESPONSE_INVALID",
+          "临时 Provider 故障夹具的名称、固定目标、协议或非活跃状态不一致。",
+        );
+      }
+    } catch (firstError) {
+      if (typeof createdData.id === "string" && uuidPattern.test(createdData.id)) {
+        try {
+          await authenticatedRequest(
+            environment,
+            token,
+            {
+              method: "DELETE",
+              path: actionPath(`/providers/${encodeURIComponent(createdData.id)}`),
+            },
+            remainingOptions(),
+          );
+        } catch {
+          // Preserve the first product failure; the malformed fixture has no safe ledger identity.
+        }
+      }
+      throw firstError;
+    }
+    const providerFixtureResourceId = `${fixture.id}:${active[0].id}`;
+    return {
+      providerFixtureResourceId,
+      fixtureProviderId: fixture.id,
+      originalProviderId: active[0].id,
+      fixtureCreated: true,
+      originalProviderActive: true,
+      faultTargetAllowed: true,
+      faultBaseUrlSha256: sha256(faultBaseUrl),
+      nameSha256: sha256(name),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture") {
+    const providerFixtureResourceId = requiredString(
+      params,
+      "providerFixtureResourceId",
+      variables,
+      73,
+    );
+    const fixtureResource = providerFixtureResource(providerFixtureResourceId);
+    const before = await listSparkXProviders(environment, token, remainingOptions());
+    const original = before.find((provider) => provider.id === fixtureResource.originalProviderId);
+    if (original === undefined) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_PROVIDER_RESTORE_TARGET_MISSING",
+        "短暂故障前的原 Provider 已缺失，不能安全恢复账号基线。",
+      );
+    }
+    await activateSparkXProvider(environment, token, original.id, remainingOptions());
+    const fixtureExists = before.some(
+      (provider) => provider.id === fixtureResource.fixtureProviderId,
+    );
+    if (fixtureExists) {
+      const deleteResponse = await authenticatedRequest(
+        environment,
+        token,
+        {
+          method: "DELETE",
+          path: actionPath(`/providers/${encodeURIComponent(fixtureResource.fixtureProviderId)}`),
+        },
+        remainingOptions(),
+      );
+      accepted(deleteResponse, "SPARK_X_AGENT_PROVIDER_FIXTURE_DELETE_FAILED");
+    }
+    const after = await listSparkXProviders(environment, token, remainingOptions());
+    const active = after.filter((provider) => provider.active);
+    if (
+      active.length !== 1 ||
+      active[0]?.id !== original.id ||
+      after.some((provider) => provider.id === fixtureResource.fixtureProviderId)
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_PROVIDER_FIXTURE_CLEANUP_ASSERTION_FAILED",
+        "临时 Provider 故障夹具清理后没有恢复唯一原 Provider 或仍有夹具残留。",
+      );
+    }
+    return {
+      providerFixtureResourceIdSha256: sha256(providerFixtureResourceId),
+      originalProviderActive: true,
+      fixtureDeleted: true,
+      activeProviderCount: active.length,
+    };
+  }
 
   if (action === "adapter:spark-x-agent/automation.create") {
     const conversationId = requiredUuid(params, "conversationId", variables);
@@ -6803,6 +7240,323 @@ export async function executeSparkXAgentAction(
       truncated: false,
       ...(result.stopReason === undefined ? {} : { stopReason: result.stopReason }),
       ...(result.durationMs === undefined ? {} : { durationMs: result.durationMs }),
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/chat.assert-provider-failure-retry") {
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const providerFixtureResourceId = requiredString(
+      params,
+      "providerFixtureResourceId",
+      variables,
+      73,
+    );
+    const requestId = requiredUuid(params, "requestId", variables);
+    const failureMessage = requiredString(params, "failureMessage", variables, 20_000);
+    const retryMessage = requiredString(params, "retryMessage", variables, 20_000);
+    const expectedText = requiredString(params, "expectedText", variables, 5_000);
+    if (
+      failureMessage === retryMessage ||
+      failureMessage.includes("\u0000") ||
+      retryMessage.includes("\u0000")
+    ) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "首次失败与明确重试消息必须是不同的受控非空文本，且不能包含空字符。",
+      );
+    }
+    const fixtureResource = providerFixtureResource(providerFixtureResourceId);
+    const faultBaseUrl = transientProviderFixtureBaseUrl(environment);
+    const providers = await listSparkXProviders(environment, token, remainingOptions());
+    const original = providers.find(
+      (provider) => provider.id === fixtureResource.originalProviderId,
+    );
+    const fixture = providers.find((provider) => provider.id === fixtureResource.fixtureProviderId);
+    const active = providers.filter((provider) => provider.active);
+    if (
+      original === undefined ||
+      fixture === undefined ||
+      active.length !== 1 ||
+      active[0]?.id !== original.id ||
+      fixture.active ||
+      fixture.baseUrl !== faultBaseUrl ||
+      fixture.model !== transientProviderFixtureModel ||
+      fixture.protocol !== "openai"
+    ) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_PROVIDER_FIXTURE_BASELINE_INVALID",
+        "短暂 Provider 故障夹具或原活跃 Provider 已偏离本次运行登记基线。",
+      );
+    }
+    await activateSparkXProvider(environment, token, fixture.id, remainingOptions());
+    const activated = await listSparkXProviders(environment, token, remainingOptions());
+    const activatedProviders = activated.filter((provider) => provider.active);
+    if (activatedProviders.length !== 1 || activatedProviders[0]?.id !== fixture.id) {
+      throw apiFailure(
+        "SPARK_X_AGENT_PROVIDER_FIXTURE_ACTIVATION_ASSERTION_FAILED",
+        "临时 Provider 故障夹具没有成为唯一活跃 Provider。",
+      );
+    }
+    let failedTurn: EnqueuedSparkXTurn | undefined;
+    let enqueueError: Error | undefined;
+    try {
+      failedTurn = await enqueueSparkXTurn(
+        environment,
+        token,
+        conversationId,
+        requestId,
+        failureMessage,
+        remainingOptions,
+      );
+    } catch (error) {
+      enqueueError =
+        error instanceof Error
+          ? error
+          : new ExecutorFailure(
+              {
+                code: "SPARK_X_AGENT_TURN_ENQUEUE_FAILED",
+                message: "短暂故障 Turn 入队失败。",
+                classification: "environment_failed",
+              },
+              error,
+            );
+    }
+    let restoreError: unknown;
+    try {
+      await activateSparkXProvider(environment, token, original.id, remainingOptions());
+    } catch (error) {
+      restoreError = error;
+    }
+    if (enqueueError !== undefined) throw enqueueError;
+    if (restoreError !== undefined) {
+      throw new ExecutorFailure(
+        {
+          code: "SPARK_X_AGENT_PROVIDER_RESTORE_FAILED",
+          message: "短暂故障 Turn 入队后未能立即恢复原 Provider。",
+          classification: "environment_failed",
+        },
+        restoreError,
+      );
+    }
+    if (failedTurn === undefined) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_TURN_ENQUEUE_OUTCOME_UNKNOWN",
+        "短暂故障 Turn 入队结果无法确认。",
+      );
+    }
+    const restored = await listSparkXProviders(environment, token, remainingOptions());
+    const restoredProviders = restored.filter((provider) => provider.active);
+    if (restoredProviders.length !== 1 || restoredProviders[0]?.id !== original.id) {
+      throw apiFailure(
+        "SPARK_X_AGENT_PROVIDER_RESTORE_ASSERTION_FAILED",
+        "原 Provider 激活请求完成后没有恢复为唯一活跃 Provider。",
+      );
+    }
+    const failed = await waitForSparkXTurnTerminal(
+      environment,
+      token,
+      conversationId,
+      failedTurn.turnId,
+      300,
+      remainingOptions,
+    );
+    if (
+      failed.snapshot.status !== "failed" ||
+      failed.snapshot.failureCode !== "provider_unavailable" ||
+      failed.snapshot.failureRetryable !== true ||
+      failed.snapshot.assistantMessageId !== null ||
+      failed.snapshot.finishReason !== null
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_PROVIDER_FIRST_FAILURE_ASSERTION_FAILED",
+        "固定不可达 Provider 没有留下可重试、无助手消息的 provider_unavailable 首次失败。",
+      );
+    }
+    const firstHistoryResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+        ),
+      },
+      remainingOptions(),
+    );
+    accepted(firstHistoryResponse, "SPARK_X_AGENT_PROVIDER_FIRST_FAILURE_HISTORY_FAILED");
+    const firstHistory = dataEnvelope(
+      firstHistoryResponse.body,
+      "SPARK_X_AGENT_PROVIDER_FIRST_FAILURE_HISTORY_RESPONSE_INVALID",
+    );
+    const firstItems = Array.isArray(firstHistory.items)
+      ? firstHistory.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    const firstFailedUsers = firstItems.filter(
+      (item) => item.turn_id === failedTurn.turnId && item.role === "user",
+    );
+    const firstFailedAssistants = firstItems.filter(
+      (item) => item.turn_id === failedTurn.turnId && item.role === "assistant",
+    );
+    if (
+      firstItems.some((item) => item.payload_truncated === true) ||
+      firstFailedUsers.length !== 1 ||
+      firstFailedAssistants.length !== 0 ||
+      firstFailedUsers[0]?.id !== failedTurn.messageId ||
+      firstFailedUsers[0]?.content !== failureMessage ||
+      firstFailedUsers[0]?.turn_status !== "failed" ||
+      firstFailedUsers[0]?.failure_code !== "provider_unavailable" ||
+      firstFailedUsers[0]?.failure_retryable !== true
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_PROVIDER_FIRST_FAILURE_HISTORY_ASSERTION_FAILED",
+        "首次 Provider 失败没有以唯一失败输入、稳定错误码和可重试标记公开持久化。",
+      );
+    }
+
+    const retryRequestId = derivedUuid(requestId, "explicit-provider-retry");
+    const retryTurn = await enqueueSparkXTurn(
+      environment,
+      token,
+      conversationId,
+      retryRequestId,
+      retryMessage,
+      remainingOptions,
+    );
+    if (retryTurn.turnId === failedTurn.turnId || retryTurn.messageId === failedTurn.messageId) {
+      throw apiFailure(
+        "SPARK_X_AGENT_PROVIDER_RETRY_IDENTITY_REUSED",
+        "用户明确重试错误地复用了首次失败的 Turn 或输入消息标识。",
+      );
+    }
+    const retried = await waitForSparkXTurnTerminal(
+      environment,
+      token,
+      conversationId,
+      retryTurn.turnId,
+      600,
+      remainingOptions,
+    );
+    if (
+      retried.snapshot.status !== "completed" ||
+      retried.snapshot.assistantMessageId === null ||
+      retried.snapshot.finishReason !== "stop" ||
+      retried.snapshot.failureCode !== null ||
+      retried.snapshot.failureRetryable !== null
+    ) {
+      if (retried.snapshot.failureRetryable === true) {
+        throw environmentFailure(
+          "SPARK_X_AGENT_PROVIDER_EXPLICIT_RETRY_ENVIRONMENT_FAILED",
+          "恢复原 Provider 后的明确重试仍因可重试运行时或 Provider 原因失败。",
+        );
+      }
+      throw apiFailure(
+        "SPARK_X_AGENT_PROVIDER_EXPLICIT_RETRY_FAILED",
+        "恢复原 Provider 后的独立重试 Turn 未以 stop 完成。",
+      );
+    }
+    const historyResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(
+          `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+        ),
+      },
+      remainingOptions(),
+    );
+    accepted(historyResponse, "SPARK_X_AGENT_PROVIDER_RETRY_HISTORY_FAILED");
+    const history = dataEnvelope(
+      historyResponse.body,
+      "SPARK_X_AGENT_PROVIDER_RETRY_HISTORY_RESPONSE_INVALID",
+    );
+    const items = Array.isArray(history.items)
+      ? history.items
+          .map(objectValue)
+          .filter((item): item is Readonly<Record<string, unknown>> => item !== null)
+      : [];
+    if (items.some((item) => item.payload_truncated === true)) {
+      throw apiFailure(
+        "SPARK_X_AGENT_PROVIDER_RETRY_HISTORY_TRUNCATED",
+        "Provider 失败与明确重试历史包含截断消息。",
+      );
+    }
+    const publicMessages = items.filter(
+      (item) => item.role === "user" || item.role === "assistant",
+    );
+    const toolMessages = items.filter((item) => item.role === "tool");
+    const failedUsers = publicMessages.filter(
+      (item) => item.turn_id === failedTurn.turnId && item.role === "user",
+    );
+    const failedAssistants = publicMessages.filter(
+      (item) => item.turn_id === failedTurn.turnId && item.role === "assistant",
+    );
+    const retryUsers = publicMessages.filter(
+      (item) => item.turn_id === retryTurn.turnId && item.role === "user",
+    );
+    const retryAssistants = publicMessages.filter(
+      (item) => item.turn_id === retryTurn.turnId && item.role === "assistant",
+    );
+    const retryAssistant = retryAssistants[0];
+    const expectedRoles = "user,user,assistant";
+    const roles = publicMessages.map((item) => item.role).join(",");
+    const reverseRoles = [...publicMessages]
+      .reverse()
+      .map((item) => item.role)
+      .join(",");
+    if (
+      publicMessages.length !== 3 ||
+      toolMessages.length !== 0 ||
+      failedUsers.length !== 1 ||
+      failedAssistants.length !== 0 ||
+      retryUsers.length !== 1 ||
+      retryAssistants.length !== 1 ||
+      (roles !== expectedRoles && reverseRoles !== expectedRoles) ||
+      failedUsers[0]?.id !== failedTurn.messageId ||
+      failedUsers[0]?.content !== failureMessage ||
+      failedUsers[0]?.turn_status !== "failed" ||
+      failedUsers[0]?.failure_code !== "provider_unavailable" ||
+      failedUsers[0]?.failure_retryable !== true ||
+      retryUsers[0]?.id !== retryTurn.messageId ||
+      retryUsers[0]?.content !== retryMessage ||
+      retryUsers[0]?.turn_status !== "completed" ||
+      retryAssistant === undefined ||
+      retryAssistant.id !== retried.snapshot.assistantMessageId ||
+      typeof retryAssistant.content !== "string" ||
+      !retryAssistant.content.includes(expectedText) ||
+      retryAssistant.turn_status !== "completed" ||
+      retryAssistant.finish_reason !== "stop"
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_PROVIDER_RETRY_HISTORY_ASSERTION_FAILED",
+        "Provider 失败与明确重试历史没有保持一条失败输入、一条重试输入和一条成功回复。",
+      );
+    }
+    return {
+      conversationId,
+      failedTurnId: failedTurn.turnId,
+      retryTurnId: retryTurn.turnId,
+      firstFailureVisible: true,
+      failureCode: "provider_unavailable",
+      failureRetryable: true,
+      failedAssistantAbsent: true,
+      retryCompleted: true,
+      independentAttempts: true,
+      messageCardinalityMatched: true,
+      messageCount: publicMessages.length,
+      failedUserMessageCount: failedUsers.length,
+      retryUserMessageCount: retryUsers.length,
+      retryAssistantMessageCount: retryAssistants.length,
+      toolMessageCount: toolMessages.length,
+      expectedTextMatched: true,
+      failureInputSha256: sha256(failureMessage),
+      retryInputSha256: sha256(retryMessage),
+      retryAssistantSha256: sha256(retryAssistant.content),
+      retryAssistantContentLength: retryAssistant.content.length,
+      failurePollAttempts: failed.pollAttempts,
+      retryPollAttempts: retried.pollAttempts,
     };
   }
 

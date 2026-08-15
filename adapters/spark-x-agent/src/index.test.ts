@@ -26,6 +26,12 @@ const environment: HttpExecutionEnvironment = {
       ports: [18121],
       pathPrefixes: ["/mcp/document"],
     },
+    {
+      protocol: "http",
+      host: "192.168.110.136",
+      ports: [9],
+      pathPrefixes: ["/spark-x-test-platform-provider-fault"],
+    },
   ],
 };
 
@@ -46,6 +52,13 @@ const resumedTurnId = "00000000-0000-4000-8000-000000000207";
 const cancelledMessageId = "00000000-0000-4000-8000-000000000208";
 const resumedMessageId = "00000000-0000-4000-8000-000000000209";
 const resumedAssistantMessageId = "00000000-0000-4000-8000-00000000020a";
+const originalProviderId = "00000000-0000-4000-8000-00000000020b";
+const fixtureProviderId = "00000000-0000-4000-8000-00000000020c";
+const failedProviderTurnId = "00000000-0000-4000-8000-00000000020d";
+const retriedProviderTurnId = "00000000-0000-4000-8000-00000000020e";
+const failedProviderMessageId = "00000000-0000-4000-8000-00000000020f";
+const retriedProviderMessageId = "00000000-0000-4000-8000-000000000220";
+const retriedProviderAssistantMessageId = "00000000-0000-4000-8000-000000000221";
 const knowledgeBaseId = "00000000-0000-4000-8000-000000000210";
 const uploadedDocumentId = "00000000-0000-4000-8000-000000000211";
 const knowledgeDocumentId = "00000000-0000-4000-8000-000000000212";
@@ -120,6 +133,24 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function providerProjection(
+  id: string,
+  name: string,
+  baseUrl: string,
+  active: boolean,
+  model = "real-model",
+): Readonly<Record<string, unknown>> {
+  return {
+    id,
+    name,
+    base_url: baseUrl,
+    model,
+    protocol: "openai",
+    is_active: active,
+    has_api_key: true,
+  };
 }
 
 function sseResponse(events: readonly Readonly<Record<string, unknown>>[], status = 200): Response {
@@ -219,7 +250,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.20.0",
+      version: "0.21.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -238,7 +269,20 @@ describe("spark-x-agent adapter", () => {
             key: "conversation.assert-deleted-state",
             actionLevel: "read",
           }),
+          expect.objectContaining({
+            key: "provider.create-transient-failure-fixture",
+            producesResource: true,
+            cleanupAction: "provider.cleanup-transient-failure-fixture",
+          }),
+          expect.objectContaining({
+            key: "provider.cleanup-transient-failure-fixture",
+            actionLevel: "dangerous",
+          }),
           expect.objectContaining({ key: "chat.ask", producesResource: false }),
+          expect.objectContaining({
+            key: "chat.assert-provider-failure-retry",
+            actionLevel: "dangerous",
+          }),
           expect.objectContaining({
             key: "chat.cancel-and-resume",
             actionLevel: "write",
@@ -389,6 +433,353 @@ describe("spark-x-agent adapter", () => {
     const serialized = JSON.stringify(output);
     expect(serialized).not.toContain("memory-only-access-token-value");
     expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("registers a fixed unreachable Provider fixture without exposing its noncredential sentinel", async () => {
+    const name = `spark-x-provider-fault-${variables["run.id"]}`;
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      true,
+    );
+    const fixture = providerProjection(
+      fixtureProviderId,
+      name,
+      "http://192.168.110.136:9/spark-x-test-platform-provider-fault",
+      false,
+      "spark-x-test-platform-fault-model",
+    );
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [original] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: fixture }));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/provider.create-transient-failure-fixture",
+      environment,
+      { ...credentials, name: "spark-x-provider-fault-${run.id}" },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      providerFixtureResourceId: `${fixtureProviderId}:${originalProviderId}`,
+      fixtureProviderId,
+      originalProviderId,
+      fixtureCreated: true,
+      originalProviderActive: true,
+      faultTargetAllowed: true,
+      faultBaseUrlSha256: createHash("sha256")
+        .update("http://192.168.110.136:9/spark-x-test-platform-provider-fault")
+        .digest("hex"),
+      nameSha256: createHash("sha256").update(name).digest("hex"),
+    });
+    const createBody = fetcher.mock.calls[2]?.[1]?.body;
+    expect(typeof createBody).toBe("string");
+    if (typeof createBody !== "string") throw new Error("expected Provider fixture body");
+    expect(JSON.parse(createBody)).toEqual({
+      name,
+      base_url: "http://192.168.110.136:9/spark-x-test-platform-provider-fault",
+      api_key: "spark-x-test-platform-noncredential-fault-fixture",
+      model: "spark-x-test-platform-fault-model",
+      protocol: "openai",
+    });
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain("spark-x-test-platform-noncredential-fault-fixture");
+    expect(serialized).not.toContain("spark-x-test-platform-provider-fault");
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("preserves a visible Provider failure and completes an independent explicit retry without duplicate messages", async () => {
+    const resourceId = `${fixtureProviderId}:${originalProviderId}`;
+    const failureMessage = `first provider attempt ${variables["run.id"]}`;
+    const retryMessage = `explicit provider retry ${variables["run.id"]}`;
+    const expectedText = `spark-x-provider-retry-${variables["run.id"]}`;
+    const assistantContent = `已恢复：${expectedText}`;
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      true,
+    );
+    const fixture = providerProjection(
+      fixtureProviderId,
+      `spark-x-provider-fault-${variables["run.id"]}`,
+      "http://192.168.110.136:9/spark-x-test-platform-provider-fault",
+      false,
+      "spark-x-test-platform-fault-model",
+    );
+    const failedSnapshot = {
+      turn_id: failedProviderTurnId,
+      conversation_id: conversationId,
+      status: "failed",
+      state_version: 3,
+      cancel_requested_at: null,
+      finished_at: "2026-08-15T07:00:00.000Z",
+      assistant_message_id: null,
+      finish_reason: null,
+      failure_code: "provider_unavailable",
+      failure_retryable: true,
+    };
+    const retriedSnapshot = {
+      turn_id: retriedProviderTurnId,
+      conversation_id: conversationId,
+      status: "completed",
+      state_version: 3,
+      cancel_requested_at: null,
+      finished_at: "2026-08-15T07:00:01.000Z",
+      assistant_message_id: retriedProviderAssistantMessageId,
+      finish_reason: "stop",
+      failure_code: null,
+      failure_retryable: null,
+    };
+    const failedUser = {
+      id: failedProviderMessageId,
+      role: "user",
+      content: failureMessage,
+      turn_id: failedProviderTurnId,
+      turn_status: "failed",
+      failure_code: "provider_unavailable",
+      failure_retryable: true,
+    };
+    const retryUser = {
+      id: retriedProviderMessageId,
+      role: "user",
+      content: retryMessage,
+      turn_id: retriedProviderTurnId,
+      turn_status: "completed",
+      failure_code: null,
+      failure_retryable: null,
+    };
+    const retryAssistant = {
+      id: retriedProviderAssistantMessageId,
+      role: "assistant",
+      content: assistantContent,
+      turn_id: retriedProviderTurnId,
+      turn_status: "completed",
+      finish_reason: "stop",
+      failure_code: null,
+      failure_retryable: null,
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [original, fixture] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "activated" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: [
+            { ...original, is_active: false },
+            { ...fixture, is_active: true },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          turn_id: failedProviderTurnId,
+          message_id: failedProviderMessageId,
+          status: "queued",
+          idempotent_replay: false,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "activated" }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [original, fixture] }))
+      .mockResolvedValueOnce(jsonResponse(failedSnapshot))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: { items: [failedUser] } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          turn_id: retriedProviderTurnId,
+          message_id: retriedProviderMessageId,
+          status: "queued",
+          idempotent_replay: false,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(retriedSnapshot))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { items: [failedUser, retryUser, retryAssistant] },
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/chat.assert-provider-failure-retry",
+      environment,
+      {
+        ...credentials,
+        conversationId,
+        providerFixtureResourceId: resourceId,
+        requestId: "${run.id}",
+        failureMessage,
+        retryMessage,
+        expectedText,
+      },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      conversationId,
+      failedTurnId: failedProviderTurnId,
+      retryTurnId: retriedProviderTurnId,
+      firstFailureVisible: true,
+      failureCode: "provider_unavailable",
+      failureRetryable: true,
+      failedAssistantAbsent: true,
+      retryCompleted: true,
+      independentAttempts: true,
+      messageCardinalityMatched: true,
+      messageCount: 3,
+      failedUserMessageCount: 1,
+      retryUserMessageCount: 1,
+      retryAssistantMessageCount: 1,
+      toolMessageCount: 0,
+      expectedTextMatched: true,
+      failureInputSha256: createHash("sha256").update(failureMessage).digest("hex"),
+      retryInputSha256: createHash("sha256").update(retryMessage).digest("hex"),
+      retryAssistantSha256: createHash("sha256").update(assistantContent).digest("hex"),
+      retryAssistantContentLength: assistantContent.length,
+      failurePollAttempts: 1,
+      retryPollAttempts: 1,
+    });
+    expect(urlOf(fetcher.mock.calls[2]?.[0] as URL | RequestInfo)).toContain(
+      `/providers/${fixtureProviderId}/activate`,
+    );
+    expect(urlOf(fetcher.mock.calls[5]?.[0] as URL | RequestInfo)).toContain(
+      `/providers/${originalProviderId}/activate`,
+    );
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain(failureMessage);
+    expect(serialized).not.toContain(retryMessage);
+    expect(serialized).not.toContain(assistantContent);
+    expect(serialized).not.toContain("provider.example.com");
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("preserves the first enqueue failure when restoring the original Provider also fails", async () => {
+    const resourceId = `${fixtureProviderId}:${originalProviderId}`;
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      true,
+    );
+    const fixture = providerProjection(
+      fixtureProviderId,
+      `spark-x-provider-fault-${variables["run.id"]}`,
+      "http://192.168.110.136:9/spark-x-test-platform-provider-fault",
+      false,
+      "spark-x-test-platform-fault-model",
+    );
+    const enqueueRootCause = new Error("enqueue-root-cause");
+    const restoreRootCause = new Error("restore-root-cause");
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [original, fixture] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "activated" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: [
+            { ...original, is_active: false },
+            { ...fixture, is_active: true },
+          ],
+        }),
+      )
+      .mockRejectedValueOnce(enqueueRootCause)
+      .mockRejectedValueOnce(restoreRootCause);
+
+    let caught: unknown;
+    try {
+      await executeSparkXAgentAction(
+        "adapter:spark-x-agent/chat.assert-provider-failure-retry",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          providerFixtureResourceId: resourceId,
+          requestId: "${run.id}",
+          failureMessage: "first provider attempt ${run.id}",
+          retryMessage: "explicit provider retry ${run.id}",
+          expectedText: "spark-x-provider-retry-${run.id}",
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ExecutorFailure);
+    expect((caught as ExecutorFailure).failure).toMatchObject({
+      code: "HTTP_NETWORK_ERROR",
+      classification: "environment_failed",
+    });
+    expect((caught as Error).cause).toBe(enqueueRootCause);
+    expect((caught as Error).cause).not.toBe(restoreRootCause);
+    expect(fetcher).toHaveBeenCalledTimes(6);
+  });
+
+  it("restores the original Provider and idempotently removes the registered failure fixture", async () => {
+    const resourceId = `${fixtureProviderId}:${originalProviderId}`;
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      false,
+    );
+    const fixture = providerProjection(
+      fixtureProviderId,
+      `spark-x-provider-fault-${variables["run.id"]}`,
+      "http://192.168.110.136:9/spark-x-test-platform-provider-fault",
+      true,
+      "spark-x-test-platform-fault-model",
+    );
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [fixture, original] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "activated" }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "deleted" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: [{ ...original, is_active: true }],
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+      environment,
+      { ...credentials, providerFixtureResourceId: resourceId },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      providerFixtureResourceIdSha256: createHash("sha256").update(resourceId).digest("hex"),
+      originalProviderActive: true,
+      fixtureDeleted: true,
+      activeProviderCount: 1,
+    });
+    expect(urlOf(fetcher.mock.calls[3]?.[0] as URL | RequestInfo)).toContain(
+      `/providers/${fixtureProviderId}`,
+    );
+    expect(JSON.stringify(output)).not.toContain("provider.example.com");
   });
 
   it("uses persisted history for the recent conversation message count", async () => {
