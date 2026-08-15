@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { runStatuses, type RunStatus, type TestRunJob } from "@spark-x-test/contracts";
+import {
+  runStatuses,
+  type RunStatus,
+  type TestRunJob,
+  type TestRunRecord,
+} from "@spark-x-test/contracts";
 import { ArtifactAccessError, type TestRunStore } from "@spark-x-test/service-runtime";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
@@ -22,6 +27,23 @@ export type RunRouteStore = Pick<
   | "getArtifactContent"
   | "updateArtifactRetention"
 >;
+
+export async function enqueueRun(run: TestRunRecord, queue: RunQueue): Promise<void> {
+  if (run.status !== "queued") return;
+  const job: TestRunJob = {
+    protocolVersion: "1.0",
+    runId: run.id,
+    queuedAt: run.queuedAt,
+    priority: run.priority,
+  };
+  await queue.add("run.execute", job, {
+    jobId: run.id,
+    priority: 101 - run.priority,
+    attempts: 1,
+    removeOnComplete: 1_000,
+    removeOnFail: 1_000,
+  });
+}
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -88,14 +110,22 @@ function createRunInput(body: unknown, idempotencyHeader?: string) {
   if (!(["manual", "schedule", "release", "api"] as const).includes(triggerType as never)) {
     throw badRequest("triggerType 不合法。");
   }
+  const triggerSource = stringValue(input.triggerSource ?? "web-console", "triggerSource");
+  const idempotencyKey = stringValue(
+    idempotencyHeader ?? input.idempotencyKey ?? randomUUID(),
+    "idempotencyKey",
+    8,
+  );
+  if (triggerSource.startsWith("youlan:")) {
+    throw badRequest("youlan: triggerSource 命名空间仅供签名发布回调使用。");
+  }
+  if (idempotencyKey.startsWith("spark-x-agent-release:")) {
+    throw badRequest("spark-x-agent-release: idempotencyKey 命名空间仅供签名发布回调使用。");
+  }
   return {
     triggerType: triggerType as "manual" | "schedule" | "release" | "api",
-    triggerSource: stringValue(input.triggerSource ?? "web-console", "triggerSource"),
-    idempotencyKey: stringValue(
-      idempotencyHeader ?? input.idempotencyKey ?? randomUUID(),
-      "idempotencyKey",
-      8,
-    ),
+    triggerSource,
+    idempotencyKey,
     priority: input.priority === undefined ? 50 : integer(input.priority, "priority", 1, 100),
     systemId: uuid(input.systemId, "systemId"),
     environmentId: uuid(input.environmentId, "environmentId"),
@@ -140,21 +170,7 @@ export function registerRunRoutes(
       }
       throw error;
     }
-    if (created.run.status === "queued") {
-      const job: TestRunJob = {
-        protocolVersion: "1.0",
-        runId: created.run.id,
-        queuedAt: created.run.queuedAt,
-        priority: created.run.priority,
-      };
-      await queue.add("run.execute", job, {
-        jobId: created.run.id,
-        priority: 101 - created.run.priority,
-        attempts: 1,
-        removeOnComplete: 1_000,
-        removeOnFail: 1_000,
-      });
-    }
+    await enqueueRun(created.run, queue);
     return reply.code(created.created ? 202 : 200).send(created.run);
   });
 

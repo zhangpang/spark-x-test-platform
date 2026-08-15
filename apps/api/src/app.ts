@@ -11,6 +11,7 @@ import {
 import { registerControlPlaneRoutes } from "./control-plane/routes.js";
 import { SecretVault } from "./control-plane/secrets.js";
 import { ControlPlaneService } from "./control-plane/service.js";
+import { registerReleaseHookRoutes, resolveReleaseHookConfig } from "./release-hook-routes.js";
 import { registerRunRoutes, type RunQueue, type RunRouteStore } from "./run-routes.js";
 
 interface DatabaseError {
@@ -31,6 +32,7 @@ export function buildApiApplication(
     runStore?: RunRouteStore;
   }> = {},
 ) {
+  const releaseHookConfig = resolveReleaseHookConfig(environment);
   const application = createServiceApplication("api", {
     environment,
     healthPrefix: `/api/${apiVersion}`,
@@ -96,6 +98,13 @@ export function buildApiApplication(
 
   registerControlPlaneRoutes(application.app, controlPlane, `/api/${apiVersion}`);
   registerRunRoutes(application.app, runStore, queue, `/api/${apiVersion}`);
+  registerReleaseHookRoutes(
+    application.app,
+    runStore,
+    queue,
+    releaseHookConfig,
+    `/api/${apiVersion}`,
+  );
 
   if (queue instanceof Queue) {
     application.app.addHook("onClose", () => queue.close());

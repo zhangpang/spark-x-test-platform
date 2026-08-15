@@ -201,6 +201,42 @@ describe("API service", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "Youlan trigger source",
+      payload: { triggerSource: "youlan:job_1786763285133_52qxun" },
+      headers: { "idempotency-key": "ordinary-idempotency-key" },
+    },
+    {
+      name: "release-hook idempotency key",
+      payload: { triggerSource: "external-release" },
+      headers: { "idempotency-key": "spark-x-agent-release:reserved-task" },
+    },
+  ])("reserves the $name namespace for signed release callbacks", async ({ payload, headers }) => {
+    const createRun = vi.fn();
+    const application = buildApiApplication(environment, {
+      runStore: { createRun } as unknown as RunRouteStore,
+    });
+    applications.push(application);
+
+    const response = await application.app.inject({
+      method: "POST",
+      url: "/api/v1/runs",
+      payload: {
+        systemId: "00000000-0000-4000-8000-000000000102",
+        environmentId: "00000000-0000-4000-8000-000000000103",
+        suiteId: "00000000-0000-4000-8000-000000000104",
+        testedVersion: "a".repeat(40),
+        ...payload,
+      },
+      headers,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(createRun).not.toHaveBeenCalled();
+  });
+
   it("returns stable artifact expiry errors instead of a generic server failure", async () => {
     const runStore = {
       getArtifactContent: () => Promise.reject(new ArtifactAccessError("ARTIFACT_EXPIRED", 410)),

@@ -87,7 +87,20 @@ npm run compose:down
 - 破坏性迁移必须另有回滚和备份方案，不能直接加入普通启动流程。
 - Youlan 发布计划检测到 `infra/migrations/**` 变化时，必须先生成数据库备份或首发基线标记，并取得显式迁移批准后才能执行。
 
-## 6. 当前实施边界
+## 6. 星火 Agent 发布回调配置
+
+发布回调只在 API 容器注入以下运行时配置，密钥不得提交到仓库、写入用例或进入证据：
+
+| 变量名                                  | 含义                                |
+| --------------------------------------- | ----------------------------------- |
+| `PLATFORM_RELEASE_WEBHOOK_SECRET`       | 至少 32 字节的 HMAC-SHA256 共享密钥 |
+| `PLATFORM_SPARK_X_AGENT_SYSTEM_ID`      | 已登记的星火 Agent 系统 UUID        |
+| `PLATFORM_SPARK_X_AGENT_ENVIRONMENT_ID` | 测试环境 UUID                       |
+| `PLATFORM_SPARK_X_AGENT_CORE_SUITE_ID`  | 核心冒烟套件 UUID                   |
+
+四项全部为空时回调入口以稳定的 `RELEASE_HOOK_DISABLED` 返回 `503`；部分配置、弱密钥或非法 UUID 会阻止 API 启动。签名和联动约定见[发布回调协议](../operations/spark-x-agent-release-hook.md)。
+
+## 7. 当前实施边界
 
 - Scheduler继续通过内部控制队列维护心跳；Worker另消费优先级运行队列；
 - Worker已支持受控HTTP用例、步骤捕获变量、密钥引用、状态码断言、诊断重试、超时/取消传播与`finally`清理；

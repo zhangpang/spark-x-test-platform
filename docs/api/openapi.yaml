@@ -20,6 +20,7 @@ tags:
   - name: Suites
   - name: Plans
   - name: Runs
+  - name: Release Hooks
   - name: Secrets
   - name: Adapters
   - name: Platform
@@ -833,6 +834,70 @@ paths:
                 $ref: "#/components/schemas/TestPlan"
         "400":
           $ref: "#/components/responses/BadRequest"
+  /release-hooks/spark-x-agent:
+    post:
+      tags: [Release Hooks]
+      operationId: triggerSparkXAgentReleaseSmoke
+      description: |
+        Accepts a successful Youlan `release.completed` event and idempotently creates the
+        configured Spark X Agent core-smoke run. Sign the UTF-8 string
+        `<timestamp>.<canonical-json>` with HMAC-SHA256. Canonical JSON has exactly the key
+        order `event`, `releaseTaskId`, `testedVersion` and no whitespace. The timestamp is
+        Unix seconds and may differ from API time by at most 300 seconds.
+      parameters:
+        - name: X-Spark-Release-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9]{10}$"
+        - name: X-Spark-Release-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: "^sha256=[0-9a-f]{64}$"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReleaseCompletedRequest"
+      responses:
+        "202":
+          description: A new core-smoke run was accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseHookResponse"
+        "200":
+          description: The immutable run already linked to this release task was returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseHookResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Signature is missing, invalid, or outside the allowed clock skew.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The release task is already associated with another context or commit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: The release hook is not fully configured.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /runs:
     get:
       tags: [Runs]
@@ -1873,6 +1938,7 @@ components:
         triggerSource:
           type: string
           default: web-console
+          description: The `youlan:` namespace is reserved for authenticated release hooks.
         priority:
           type: integer
           minimum: 1
@@ -1881,15 +1947,86 @@ components:
         testedVersion:
           type: string
           maxLength: 200
+    ReleaseCompletedRequest:
+      type: object
+      additionalProperties: false
+      required: [event, releaseTaskId, testedVersion]
+      properties:
+        event:
+          const: release.completed
+        releaseTaskId:
+          type: string
+          minLength: 8
+          maxLength: 160
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$"
+        testedVersion:
+          type: string
+          pattern: "^[0-9a-f]{40}$"
+    ReleaseHookResponse:
+      type: object
+      additionalProperties: false
+      required: [event, releaseTaskId, testedVersion, duplicate, run]
+      properties:
+        event:
+          const: release.completed
+        releaseTaskId:
+          type: string
+        testedVersion:
+          type: string
+          pattern: "^[0-9a-f]{40}$"
+        duplicate:
+          type: boolean
+        run:
+          $ref: "#/components/schemas/Run"
     RunStatus:
-      enum: [queued, preparing, running, cancelling, cleaning, interrupted, compensation_pending, completed]
+      enum:
+        [
+          queued,
+          preparing,
+          running,
+          cancelling,
+          cleaning,
+          interrupted,
+          compensation_pending,
+          completed,
+        ]
     GateResult:
       enum: [passed, blocked, inconclusive]
     CaseResult:
-      enum: [passed, product_failed, test_failed, environment_failed, infrastructure_failed, flaky, cancelled, skipped]
+      enum:
+        [
+          passed,
+          product_failed,
+          test_failed,
+          environment_failed,
+          infrastructure_failed,
+          flaky,
+          cancelled,
+          skipped,
+        ]
     Run:
       type: object
-      required: [id, sequenceNumber, systemId, environmentId, suiteId, systemName, environmentName, suiteName, triggerType, triggerSource, idempotencyKey, priority, testedVersion, platformVersion, status, queuedAt, summary, cancellationRequested]
+      required:
+        [
+          id,
+          sequenceNumber,
+          systemId,
+          environmentId,
+          suiteId,
+          systemName,
+          environmentName,
+          suiteName,
+          triggerType,
+          triggerSource,
+          idempotencyKey,
+          priority,
+          testedVersion,
+          platformVersion,
+          status,
+          queuedAt,
+          summary,
+          cancellationRequested,
+        ]
       properties:
         id:
           type: string
@@ -2036,7 +2173,17 @@ components:
           type: [integer, "null"]
           minimum: 1
         kind:
-          enum: [log, screenshot, trace, http_exchange, tool_call, matched_document, judge, external_report]
+          enum:
+            [
+              log,
+              screenshot,
+              trace,
+              http_exchange,
+              tool_call,
+              matched_document,
+              judge,
+              external_report,
+            ]
         fileName:
           type: string
         contentType:

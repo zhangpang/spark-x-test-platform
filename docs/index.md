@@ -15,6 +15,7 @@
 | [验收清单](quality/acceptance.md)                                                        | 功能、可靠性、安全和首个适配器验收       | 已确认   |
 | [星火 Agent 案例目录](quality/spark-x-agent-case-catalog.md)                             | 首批 32 个 P0/P1 回归场景                | 已确认   |
 | [开发与测试环境指南](development/getting-started.md)                                     | 工具链、测试机验证、发布方式和目录职责   | 持续维护 |
+| [星火 Agent 发布回调协议](operations/spark-x-agent-release-hook.md)                      | 签名、幂等、运行关联和调用方约定         | M5       |
 | [M1冒烟检查](operations/m1-smoke-check.md)                                               | 部署后依赖、迁移、队列和故障探针验证     | M1       |
 | [M1 测试环境验证记录](operations/m1-test-environment-verification-2026-08-13.md)         | `192.168.110.136` 首次部署与故障恢复证据 | 已通过   |
 | [M2 测试环境验证记录](operations/m2-test-asset-control-plane-verification-2026-08-13.md) | 测试资产控制面、API、页面与安全回归证据  | 已通过   |
