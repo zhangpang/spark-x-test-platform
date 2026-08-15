@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -1167,6 +1167,82 @@
             "firstFireScheduleMatched": { "const": true },
             "firstFireDriftSeconds": { "type": "number", "minimum": 0, "maximum": 60 },
             "localScheduleAdvancedBySeconds": { "const": 300 }
+          }
+        }
+      },
+      {
+        "key": "automation.assert-no-duplicate-delivery",
+        "name": "校验自动任务无重复投递",
+        "description": "在一次真实调度完成后连续三次核对任务游标与会话历史，任何状态推进或第二组消息均立即失败。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 15000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "username",
+            "password",
+            "automationId",
+            "conversationId",
+            "expectedName",
+            "expectedGoal",
+            "expectedAssistantText",
+            "expectedLastFireAt",
+            "expectedNextFireAt",
+            "expectedAssistantSha256"
+          ],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "automationId": { "type": "string", "format": "uuid" },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "expectedName": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "expectedGoal": { "type": "string", "minLength": 1, "maxLength": 65536 },
+            "expectedAssistantText": { "type": "string", "minLength": 1, "maxLength": 5000 },
+            "expectedLastFireAt": { "type": "string", "minLength": 20, "maxLength": 100 },
+            "expectedNextFireAt": { "type": "string", "minLength": 20, "maxLength": 100 },
+            "expectedAssistantSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "automationId",
+            "conversationId",
+            "duplicateDeliveryAbsent",
+            "stableScheduleObserved",
+            "observationCount",
+            "stateVersion",
+            "lastFireAt",
+            "nextFireAt",
+            "userMessageCount",
+            "assistantMessageCount",
+            "toolMessageCount",
+            "toolCallCount",
+            "toolTraceEventCount",
+            "expectedAssistantHashMatched",
+            "userContentSha256",
+            "assistantContentSha256"
+          ],
+          "properties": {
+            "automationId": { "type": "string", "format": "uuid" },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "duplicateDeliveryAbsent": { "const": true },
+            "stableScheduleObserved": { "const": true },
+            "observationCount": { "const": 3 },
+            "stateVersion": { "type": "integer", "minimum": 2 },
+            "lastFireAt": { "type": "string", "format": "date-time" },
+            "nextFireAt": { "type": "string", "format": "date-time" },
+            "userMessageCount": { "const": 1 },
+            "assistantMessageCount": { "const": 1 },
+            "toolMessageCount": { "const": 0 },
+            "toolCallCount": { "const": 0 },
+            "toolTraceEventCount": { "const": 0 },
+            "expectedAssistantHashMatched": { "const": true },
+            "userContentSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "assistantContentSha256": { "type": "string", "minLength": 64, "maxLength": 64 }
           }
         }
       },

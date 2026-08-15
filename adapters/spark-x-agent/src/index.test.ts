@@ -141,7 +141,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.14.0",
+      version: "0.15.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -218,6 +218,11 @@ describe("spark-x-agent adapter", () => {
           expect.objectContaining({
             key: "automation.wait-fired",
             actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "automation.assert-no-duplicate-delivery",
+            actionLevel: "write",
+            producesResource: false,
           }),
           expect.objectContaining({
             key: "automation.assert-lifecycle",
@@ -3044,6 +3049,136 @@ describe("spark-x-agent adapter", () => {
     });
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+
+  it("proves one completed automation delivery stays stable across three observations", async () => {
+    const assistantContent = `已完成：${automationMarker}`;
+    const assistantSha256 = createHash("sha256").update(assistantContent).digest("hex");
+    const historyResponse = () =>
+      jsonResponse({
+        success: true,
+        data: {
+          items: [
+            { role: "user", content: automationGoal, payload_truncated: false },
+            {
+              role: "assistant",
+              content: assistantContent,
+              finish_reason: "stop",
+              tool_calls: [],
+              public_execution_trace: [],
+              payload_truncated: false,
+            },
+          ],
+        },
+      });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [automationProjection()] }))
+      .mockResolvedValueOnce(historyResponse())
+      .mockResolvedValueOnce(jsonResponse({ items: [automationProjection()] }))
+      .mockResolvedValueOnce(historyResponse())
+      .mockResolvedValueOnce(jsonResponse({ items: [automationProjection()] }))
+      .mockResolvedValueOnce(historyResponse());
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/automation.assert-no-duplicate-delivery",
+      environment,
+      {
+        ...credentials,
+        automationId,
+        conversationId,
+        expectedName: automationName,
+        expectedGoal: automationGoal,
+        expectedAssistantText: automationMarker,
+        expectedLastFireAt: "2026-08-15T04:00:00.000Z",
+        expectedNextFireAt: "2026-08-15T04:05:00.000Z",
+        expectedAssistantSha256: assistantSha256,
+      },
+      variables,
+      { timeoutMs: 10_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      automationId,
+      conversationId,
+      duplicateDeliveryAbsent: true,
+      stableScheduleObserved: true,
+      observationCount: 3,
+      stateVersion: 2,
+      lastFireAt: "2026-08-15T04:00:00.000Z",
+      nextFireAt: "2026-08-15T04:05:00.000Z",
+      userMessageCount: 1,
+      assistantMessageCount: 1,
+      toolMessageCount: 0,
+      toolCallCount: 0,
+      toolTraceEventCount: 0,
+      expectedAssistantHashMatched: true,
+      userContentSha256: createHash("sha256").update(automationGoal).digest("hex"),
+      assistantContentSha256: assistantSha256,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(7);
+    const evidence = JSON.stringify(output);
+    expect(evidence).not.toContain(automationGoal);
+    expect(evidence).not.toContain(assistantContent);
+    expect(evidence).not.toContain("memory-only-access-token-value");
+  }, 15_000);
+
+  it("fails on the first schedule change during duplicate-delivery observation", async () => {
+    const assistantContent = `已完成：${automationMarker}`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [automationProjection()] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { role: "user", content: automationGoal, payload_truncated: false },
+              {
+                role: "assistant",
+                content: assistantContent,
+                finish_reason: "stop",
+                tool_calls: [],
+                public_execution_trace: [],
+                payload_truncated: false,
+              },
+            ],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [automationProjection({ state_version: 3 })] }));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/automation.assert-no-duplicate-delivery",
+        environment,
+        {
+          ...credentials,
+          automationId,
+          conversationId,
+          expectedName: automationName,
+          expectedGoal: automationGoal,
+          expectedAssistantText: automationMarker,
+          expectedLastFireAt: "2026-08-15T04:00:00.000Z",
+          expectedNextFireAt: "2026-08-15T04:05:00.000Z",
+          expectedAssistantSha256: createHash("sha256").update(assistantContent).digest("hex"),
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_AUTOMATION_DUPLICATE_DELIVERY_DETECTED",
+        classification: "product_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  }, 10_000);
 
   it("updates, disables, enables and deletes an untriggered automation with exact versions", async () => {
     const updatedName = `${automationName}-updated`;

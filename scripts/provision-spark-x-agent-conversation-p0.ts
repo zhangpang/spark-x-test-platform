@@ -2296,6 +2296,170 @@ function automationTimezoneDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function automationIdempotencyDefinition(): Readonly<Record<string, unknown>> {
+  const name = "spark-x-auto-idempotency-${run.id}";
+  const goal =
+    "自动任务幂等回归标识 spark-x-auto-idempotency-${run.id}。请只回复这个标识，不要调用任何工具或 Skill。";
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "AUTO-004 调度幂等与重复投递防护",
+      description:
+        "创建一次真实无 Skill 自动任务并等待完成，随后连续三次观察相同状态版本、触发游标和唯一消息对，任何第二次投递或内容漂移立即失败，最后完整清理。",
+      systemKey: "spark-x-agent",
+      moduleKey: "automations",
+      priority: "P1",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "automation", "p1", "full-regression", "idempotency", "real-model"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 180_000,
+      caseTimeoutMs: 300_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:automations"],
+    steps: [
+      {
+        id: "create-idempotency-conversation",
+        name: "创建并登记幂等调度目标会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: name,
+        },
+        capture: { "idempotency-conversation-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.idempotency-conversation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "create-idempotency-automation",
+        name: "创建并登记立即触发的幂等测试任务",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.create",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.idempotency-conversation-id}",
+          name,
+          goal,
+        },
+        capture: { "idempotency-automation-id": "$.automationId" },
+        resource: {
+          type: "spark-x-agent-automation",
+          id: "${step.idempotency-automation-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/automation.cleanup",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              automationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "wait-idempotency-automation-fire",
+        name: "等待唯一一次调度完成并捕获游标与回复哈希",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.wait-fired",
+        timeoutMs: 180_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          automationId: "${step.idempotency-automation-id}",
+          conversationId: "${step.idempotency-conversation-id}",
+          expectedName: name,
+          expectedGoal: goal,
+          expectedAssistantText: "spark-x-auto-idempotency-${run.id}",
+        },
+        capture: {
+          "idempotency-last-fire-at": "$.lastFireAt",
+          "idempotency-next-fire-at": "$.nextFireAt",
+          "idempotency-assistant-sha256": "$.assistantContentSha256",
+        },
+      },
+      {
+        id: "assert-no-duplicate-delivery",
+        name: "连续三次断言调度游标与唯一消息对不变",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.assert-no-duplicate-delivery",
+        timeoutMs: 15_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          automationId: "${step.idempotency-automation-id}",
+          conversationId: "${step.idempotency-conversation-id}",
+          expectedName: name,
+          expectedGoal: goal,
+          expectedAssistantText: "spark-x-auto-idempotency-${run.id}",
+          expectedLastFireAt: "${step.idempotency-last-fire-at}",
+          expectedNextFireAt: "${step.idempotency-next-fire-at}",
+          expectedAssistantSha256: "${step.idempotency-assistant-sha256}",
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "cleanup-idempotency-automation",
+        name: "按最新状态版本删除幂等测试任务",
+        kind: "action",
+        action: "adapter:spark-x-agent/automation.cleanup",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          automationId: "${step.idempotency-automation-id}",
+        },
+      },
+      {
+        id: "delete-idempotency-conversation",
+        name: "删除幂等调度目标会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        timeoutMs: 20_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.idempotency-conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
 function automationLifecycleDefinition(): Readonly<Record<string, unknown>> {
   const name = "spark-x-auto-lifecycle-${run.id}";
   const goal =
@@ -4078,6 +4242,14 @@ const automationLifecycleCase = await ensureCase(
   automationLifecycleDefinition(),
   "新增延迟任务修改、停用、重新启用、删除、列表无残留、零调度消息和 finally 幂等清理 P1 闭环",
 );
+const automationIdempotencyCase = await ensureCase(
+  system.id,
+  automations.id,
+  environment.id,
+  "AUTO-004 调度幂等与重复投递防护",
+  automationIdempotencyDefinition(),
+  "新增单次真实调度后固定三次游标、版本、消息基数与回复哈希静默观察 P1 闭环",
+);
 const conversationSuite = await ensureSuite(
   system.id,
   "spark-x-agent-conversation-p0",
@@ -4186,15 +4358,23 @@ const automationTimezoneSuite = await ensureSuite(
   "AUTO-002 五秒延迟真实调度、Asia/Shanghai 首次触发误差、UTC/本地五分钟下一次计划和完整清理。",
   [automationTimezoneCase.testCase.id],
 );
+const automationIdempotencySuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-automation-idempotency-p1",
+  "星火 Agent 自动任务幂等 P1 纵向切片",
+  "AUTO-004 单次真实调度后固定三次状态版本、触发游标、唯一消息对和回复哈希静默观察。",
+  [automationIdempotencyCase.testCase.id],
+);
 const automationModuleSuite = await ensureSuite(
   system.id,
   "spark-x-agent-automations",
   "星火 Agent 自动任务回归",
-  "自动任务模块当前 AUTO-001/002/003 单次立即调度、上海时区计划、版本化修改、停用、重新启用、删除、无触发残留和完整清理。",
+  "自动任务模块 AUTO-001/002/003/004 单次调度、上海时区计划、生命周期、重复投递防护和完整清理。",
   [
     automationCase.testCase.id,
     automationTimezoneCase.testCase.id,
     automationLifecycleCase.testCase.id,
+    automationIdempotencyCase.testCase.id,
   ],
 );
 const suite = await ensureSuite(
@@ -4219,8 +4399,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 18/32）",
-  "手动一键完整回归入口；当前已接入 18/32 条案例，覆盖七个模块的当前 P0、CHAT-003、AUTO-003 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 19/32）",
+  "手动一键完整回归入口；当前已接入 19/32 条案例，覆盖七个模块的当前 P0、CHAT-003、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -4240,6 +4420,7 @@ const fullRegressionSuite = await ensureSuite(
     automationCase.testCase.id,
     automationTimezoneCase.testCase.id,
     automationLifecycleCase.testCase.id,
+    automationIdempotencyCase.testCase.id,
   ],
 );
 check(
@@ -4351,7 +4532,7 @@ console.info(
                         : runAutomationSmoke
                           ? 20
                           : 161,
-    caseCount: 18,
+    caseCount: 19,
     coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -4393,6 +4574,8 @@ console.info(
     automationTimezoneCaseVersionId: automationTimezoneCase.version.id,
     automationLifecycleCaseId: automationLifecycleCase.testCase.id,
     automationLifecycleCaseVersionId: automationLifecycleCase.version.id,
+    automationIdempotencyCaseId: automationIdempotencyCase.testCase.id,
+    automationIdempotencyCaseVersionId: automationIdempotencyCase.version.id,
     conversationSuiteId: conversationSuite.id,
     conversationReopenSuiteId: conversationReopenSuite.id,
     conversationPaginationSuiteId: conversationPaginationSuite.id,
@@ -4407,6 +4590,7 @@ console.info(
     mcpSuiteId: mcpSuite.id,
     automationSuiteId: automationSuite.id,
     automationTimezoneSuiteId: automationTimezoneSuite.id,
+    automationIdempotencySuiteId: automationIdempotencySuite.id,
     automationModuleSuiteId: automationModuleSuite.id,
     suiteId: suite.id,
     fullRegressionSuiteId: fullRegressionSuite.id,

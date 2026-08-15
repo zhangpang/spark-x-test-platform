@@ -32,6 +32,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/skill.assert-trusted-publication",
   "adapter:spark-x-agent/automation.create",
   "adapter:spark-x-agent/automation.wait-fired",
+  "adapter:spark-x-agent/automation.assert-no-duplicate-delivery",
   "adapter:spark-x-agent/automation.assert-lifecycle",
   "adapter:spark-x-agent/automation.cleanup",
 ] as const;
@@ -1129,6 +1130,83 @@ export const sparkXAgentActionCapabilities = [
     },
   },
   {
+    key: "automation.assert-no-duplicate-delivery",
+    name: "校验自动任务无重复投递",
+    description:
+      "在一次真实调度完成后连续三次核对任务游标与会话历史，任何状态推进或第二组消息均立即失败。",
+    actionLevel: "write",
+    defaultTimeoutMs: 15_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "username",
+        "password",
+        "automationId",
+        "conversationId",
+        "expectedName",
+        "expectedGoal",
+        "expectedAssistantText",
+        "expectedLastFireAt",
+        "expectedNextFireAt",
+        "expectedAssistantSha256",
+      ],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        automationId: { type: "string", format: "uuid" },
+        conversationId: { type: "string", format: "uuid" },
+        expectedName: { type: "string", minLength: 1, maxLength: 160 },
+        expectedGoal: { type: "string", minLength: 1, maxLength: 65_536 },
+        expectedAssistantText: { type: "string", minLength: 1, maxLength: 5_000 },
+        expectedLastFireAt: { type: "string", minLength: 20, maxLength: 100 },
+        expectedNextFireAt: { type: "string", minLength: 20, maxLength: 100 },
+        expectedAssistantSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "automationId",
+        "conversationId",
+        "duplicateDeliveryAbsent",
+        "stableScheduleObserved",
+        "observationCount",
+        "stateVersion",
+        "lastFireAt",
+        "nextFireAt",
+        "userMessageCount",
+        "assistantMessageCount",
+        "toolMessageCount",
+        "toolCallCount",
+        "toolTraceEventCount",
+        "expectedAssistantHashMatched",
+        "userContentSha256",
+        "assistantContentSha256",
+      ],
+      properties: {
+        automationId: { type: "string", format: "uuid" },
+        conversationId: { type: "string", format: "uuid" },
+        duplicateDeliveryAbsent: { const: true },
+        stableScheduleObserved: { const: true },
+        observationCount: { const: 3 },
+        stateVersion: { type: "integer", minimum: 2 },
+        lastFireAt: { type: "string", format: "date-time" },
+        nextFireAt: { type: "string", format: "date-time" },
+        userMessageCount: { const: 1 },
+        assistantMessageCount: { const: 1 },
+        toolMessageCount: { const: 0 },
+        toolCallCount: { const: 0 },
+        toolTraceEventCount: { const: 0 },
+        expectedAssistantHashMatched: { const: true },
+        userContentSha256: { type: "string", minLength: 64, maxLength: 64 },
+        assistantContentSha256: { type: "string", minLength: 64, maxLength: 64 },
+      },
+    },
+  },
+  {
     key: "automation.assert-lifecycle",
     name: "校验自动任务修改、停用与删除",
     description:
@@ -1324,7 +1402,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.14.0",
+  version: "0.15.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1341,7 +1419,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "full-regression-automation-timezone" as const;
+export const sparkXAgentAdapterPhase = "full-regression-automation-idempotency" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -3401,6 +3479,115 @@ export async function executeSparkXAgentAction(
       "SPARK_X_AGENT_AUTOMATION_EXECUTION_TIMEOUT",
       "自动任务调度或模型回复未在有界时间内完成。",
     );
+  }
+
+  if (action === "adapter:spark-x-agent/automation.assert-no-duplicate-delivery") {
+    const automationId = requiredUuid(params, "automationId", variables);
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const expectedName = requiredString(params, "expectedName", variables, 160);
+    const expectedGoal = requiredString(params, "expectedGoal", variables, 65_536);
+    const expectedAssistantText = requiredString(params, "expectedAssistantText", variables, 5_000);
+    const expectedLastFireAt = requiredString(params, "expectedLastFireAt", variables, 100);
+    const expectedNextFireAt = requiredString(params, "expectedNextFireAt", variables, 100);
+    const expectedAssistantSha256 = requiredSha256(params, "expectedAssistantSha256", variables);
+    if (!validTimestamp(expectedLastFireAt) || !validTimestamp(expectedNextFireAt)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "自动任务无重复投递断言缺少有效的调度时间戳。",
+      );
+    }
+    let stableStateVersion: number | undefined;
+    let finalHistory: AutomationHistoryEvidence | undefined;
+    for (let observation = 1; observation <= 3; observation += 1) {
+      const listResponse = await authenticatedRequest(
+        environment,
+        token,
+        { method: "GET", path: actionPath("/v5/automations?limit=100") },
+        remainingOptions(),
+      );
+      const definition = listedAutomation(
+        listResponse,
+        automationId,
+        "SPARK_X_AGENT_AUTOMATION_DUPLICATE_OBSERVATION_FAILED",
+      );
+      if (
+        definition === null ||
+        definition.conversationId !== conversationId ||
+        definition.name !== expectedName ||
+        definition.goal !== expectedGoal ||
+        definition.intervalSeconds !== 300 ||
+        definition.status !== "enabled" ||
+        definition.selectedSkillId !== null ||
+        definition.lastFireAt === null ||
+        Date.parse(definition.lastFireAt) !== Date.parse(expectedLastFireAt) ||
+        Date.parse(definition.nextFireAt) !== Date.parse(expectedNextFireAt) ||
+        (stableStateVersion !== undefined && definition.stateVersion !== stableStateVersion)
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_AUTOMATION_DUPLICATE_DELIVERY_DETECTED",
+          "自动任务在静默观察窗口内发生第二次投递、游标推进或定义漂移。",
+        );
+      }
+      stableStateVersion ??= definition.stateVersion;
+      const historyResponse = await authenticatedRequest(
+        environment,
+        token,
+        {
+          method: "GET",
+          path: actionPath(
+            `/conversations/${encodeURIComponent(conversationId)}/messages?page=1&per_page=100`,
+          ),
+        },
+        remainingOptions(),
+      );
+      acceptedAutomationRuntime(
+        historyResponse,
+        "SPARK_X_AGENT_AUTOMATION_DUPLICATE_HISTORY_FAILED",
+      );
+      const history = automationHistoryEvidence(
+        historyResponse.body,
+        expectedGoal,
+        expectedAssistantText,
+      );
+      if (
+        history === null ||
+        history.assistantContentSha256 !== expectedAssistantSha256 ||
+        (finalHistory !== undefined &&
+          (history.userContentSha256 !== finalHistory.userContentSha256 ||
+            history.assistantContentSha256 !== finalHistory.assistantContentSha256))
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_AUTOMATION_DUPLICATE_DELIVERY_DETECTED",
+          "自动任务在静默观察窗口内出现重复消息或已完成回复发生漂移。",
+        );
+      }
+      finalHistory = history;
+      if (observation < 3) await boundedDelay(2_000, remainingOptions().signal);
+    }
+    if (stableStateVersion === undefined || finalHistory === undefined) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_AUTOMATION_DUPLICATE_OBSERVATION_INCOMPLETE",
+        "自动任务无重复投递观察未完成。",
+      );
+    }
+    return {
+      automationId,
+      conversationId,
+      duplicateDeliveryAbsent: true,
+      stableScheduleObserved: true,
+      observationCount: 3,
+      stateVersion: stableStateVersion,
+      lastFireAt: expectedLastFireAt,
+      nextFireAt: expectedNextFireAt,
+      userMessageCount: finalHistory.userMessageCount,
+      assistantMessageCount: finalHistory.assistantMessageCount,
+      toolMessageCount: finalHistory.toolMessageCount,
+      toolCallCount: finalHistory.toolCallCount,
+      toolTraceEventCount: finalHistory.toolTraceEventCount,
+      expectedAssistantHashMatched: true,
+      userContentSha256: finalHistory.userContentSha256,
+      assistantContentSha256: finalHistory.assistantContentSha256,
+    };
   }
 
   if (action === "adapter:spark-x-agent/automation.assert-lifecycle") {
