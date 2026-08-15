@@ -1261,6 +1261,201 @@ describe("M2 asset validation", () => {
     );
   });
 
+  it("accepts the registered automation lifecycle and rejects unscoped cleanup or arbitrary input", () => {
+    const sparkEnvironment: EnvironmentRecord = {
+      ...environment,
+      systemId: "00000000-0000-4000-8000-000000000010",
+      baseUrl: "http://192.168.110.136/trade/",
+      actionLevel: "dangerous",
+      allowlist: [
+        {
+          protocol: "http",
+          host: "192.168.110.136",
+          ports: [80],
+          pathPrefixes: ["/trade/", "/trade-domain-api/"],
+        },
+      ],
+      adapterKey: "spark-x-agent",
+    };
+    const inputs = [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ];
+    const automationDefinition = definition({
+      metadata: {
+        name: "AUTO-001 immediate automation lifecycle",
+        systemKey: "spark-x-agent",
+        moduleKey: "automations",
+        priority: "P0",
+        classification: "blackbox",
+        actionLevel: "dangerous",
+        tags: ["adapter", "core-smoke", "automation"],
+      },
+      inputs,
+      execution: {
+        stepTimeoutMs: 180_000,
+        caseTimeoutMs: 300_000,
+        diagnosticRetries: 0,
+      },
+      resourceLocks: ["spark-x-agent:admin:automations"],
+      steps: [
+        {
+          id: "create-conversation",
+          name: "create conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.create",
+          timeoutMs: 20_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            title: "spark-x-auto-${run.id}",
+          },
+          capture: { "conversation-id": "$.conversationId" },
+          resource: {
+            type: "spark-x-agent-conversation",
+            id: "${step.conversation-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/conversation.delete",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                conversationId: "${resource.id}",
+              },
+            },
+          },
+        },
+        {
+          id: "create-automation",
+          name: "create automation",
+          kind: "action",
+          action: "adapter:spark-x-agent/automation.create",
+          timeoutMs: 20_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+            name: "spark-x-auto-${run.id}",
+            goal: "reply only with spark-x-auto-${run.id}",
+          },
+          capture: { "automation-id": "$.automationId" },
+          resource: {
+            type: "spark-x-agent-automation",
+            id: "${step.automation-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/automation.cleanup",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                automationId: "${resource.id}",
+              },
+            },
+          },
+        },
+        {
+          id: "wait-fired",
+          name: "wait fired",
+          kind: "action",
+          action: "adapter:spark-x-agent/automation.wait-fired",
+          timeoutMs: 180_000,
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            automationId: "${step.automation-id}",
+            conversationId: "${step.conversation-id}",
+            expectedName: "spark-x-auto-${run.id}",
+            expectedGoal: "reply only with spark-x-auto-${run.id}",
+            expectedAssistantText: "spark-x-auto-${run.id}",
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "cleanup-automation",
+          name: "cleanup automation",
+          kind: "action",
+          action: "adapter:spark-x-agent/automation.cleanup",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            automationId: "${step.automation-id}",
+          },
+        },
+        {
+          id: "delete-conversation",
+          name: "delete conversation",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.delete",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.conversation-id}",
+          },
+        },
+      ],
+    });
+
+    expect(
+      validateDefinition(automationDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "automations",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const steps = automationDefinition.steps as readonly JsonObject[];
+    const unsafe = {
+      ...automationDefinition,
+      steps: [
+        steps[0],
+        {
+          ...steps[1],
+          params: {
+            ...(steps[1]?.params as JsonObject),
+            name: "untraceable",
+            script: "return process.env",
+          },
+          capture: { "automation-id": "$.wrongId" },
+          resource: {
+            ...(steps[1]?.resource as JsonObject),
+            cleanup: {
+              action: "adapter:spark-x-agent/automation.cleanup",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                automationId: "00000000-0000-4000-8000-000000000099",
+              },
+            },
+          },
+        },
+        steps[2],
+      ],
+    } as JsonObject;
+    expect(
+      validateDefinition(unsafe, {
+        systemKey: "spark-x-agent",
+        moduleKey: "automations",
+        environment: sparkEnvironment,
+      }).issues.map((issue) => issue.code),
+    ).toEqual(
+      expect.arrayContaining([
+        "RUN_TRACEABILITY_REQUIRED",
+        "ADAPTER_RESOURCE_ID_CAPTURE_REQUIRED",
+        "CLEANUP_RESOURCE_SCOPE_REQUIRED",
+        "ARBITRARY_ADAPTER_INPUT_FORBIDDEN",
+      ]),
+    );
+  });
+
   it("accepts only the registered read-only trusted Skill publication assertion", () => {
     const sparkEnvironment: EnvironmentRecord = {
       ...environment,

@@ -49,11 +49,15 @@ const availableActions = new Set([
   "adapter:spark-x-agent/knowledge-base.wait-ready",
   "adapter:spark-x-agent/knowledge-base.cleanup",
   "adapter:spark-x-agent/skill.assert-trusted-publication",
+  "adapter:spark-x-agent/automation.create",
+  "adapter:spark-x-agent/automation.wait-fired",
+  "adapter:spark-x-agent/automation.cleanup",
 ]);
 const availableCompensationActions = new Set([
   "http:request",
   "adapter:spark-x-agent/conversation.delete",
   "adapter:spark-x-agent/knowledge-base.cleanup",
+  "adapter:spark-x-agent/automation.cleanup",
 ]);
 const availableAssertions = new Set(["status:equals"]);
 const sparkXAgentActionLevels = new Map<string, ActionLevel>([
@@ -71,6 +75,9 @@ const sparkXAgentActionLevels = new Map<string, ActionLevel>([
   ["adapter:spark-x-agent/knowledge-base.wait-ready", "write"],
   ["adapter:spark-x-agent/knowledge-base.cleanup", "dangerous"],
   ["adapter:spark-x-agent/skill.assert-trusted-publication", "read"],
+  ["adapter:spark-x-agent/automation.create", "write"],
+  ["adapter:spark-x-agent/automation.wait-fired", "write"],
+  ["adapter:spark-x-agent/automation.cleanup", "dangerous"],
 ]);
 const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
   ["adapter:spark-x-agent/conversation.create", new Set(["username", "password", "title"])],
@@ -156,6 +163,23 @@ const sparkXAgentActionParameters = new Map<string, ReadonlySet<string>>([
     "adapter:spark-x-agent/skill.assert-trusted-publication",
     new Set(["username", "password", "expectedPublicationSha256"]),
   ],
+  [
+    "adapter:spark-x-agent/automation.create",
+    new Set(["username", "password", "conversationId", "name", "goal"]),
+  ],
+  [
+    "adapter:spark-x-agent/automation.wait-fired",
+    new Set([
+      "username",
+      "password",
+      "automationId",
+      "conversationId",
+      "expectedName",
+      "expectedGoal",
+      "expectedAssistantText",
+    ]),
+  ],
+  ["adapter:spark-x-agent/automation.cleanup", new Set(["username", "password", "automationId"])],
 ]);
 const waitJsonPathPattern = /^\$(?:\.[a-zA-Z0-9_-]+){0,20}$/;
 const waitOperators = new Set(["equals", "not-equals", "contains", "exists"]);
@@ -440,6 +464,20 @@ function validateSparkXAgentAction(
     });
   }
   if (
+    action === "adapter:spark-x-agent/automation.create" &&
+    (resource === undefined ||
+      resource.type !== "spark-x-agent-automation" ||
+      !isObject(resource.cleanup) ||
+      resource.cleanup.action !== "adapter:spark-x-agent/automation.cleanup")
+  ) {
+    issues.push({
+      severity: "error",
+      code: "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
+      path: `${path}.resource`,
+      message: "创建星火 Agent 自动任务必须登记专用资源并声明版本化任务补偿。",
+    });
+  }
+  if (
     action === "adapter:spark-x-agent/conversation.create" &&
     typeof params.title === "string" &&
     !params.title.includes("${run.id}")
@@ -461,6 +499,18 @@ function validateSparkXAgentAction(
       code: "RUN_TRACEABILITY_REQUIRED",
       path: `${path}.params.name`,
       message: "测试知识库名称必须包含 ${run.id}，以便追踪和残留数据审计。",
+    });
+  }
+  if (
+    action === "adapter:spark-x-agent/automation.create" &&
+    ((typeof params.name === "string" && !params.name.includes("${run.id}")) ||
+      (typeof params.goal === "string" && !params.goal.includes("${run.id}")))
+  ) {
+    issues.push({
+      severity: "error",
+      code: "RUN_TRACEABILITY_REQUIRED",
+      path: `${path}.params`,
+      message: "测试自动任务名称和目标必须包含 ${run.id}，以便追踪和残留数据审计。",
     });
   }
   if (
@@ -827,22 +877,31 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
       }
     }
 
-    if (step.action === "adapter:spark-x-agent/knowledge-base.create") {
+    if (
+      step.action === "adapter:spark-x-agent/knowledge-base.create" ||
+      step.action === "adapter:spark-x-agent/automation.create"
+    ) {
       const resource = isObject(step.resource) ? step.resource : undefined;
       const resourceReference =
         typeof resource?.id === "string"
           ? /^\$\{step\.([a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*)\}$/i.exec(resource.id)
           : null;
       const capture = isObject(step.capture) ? step.capture : undefined;
+      const expectedCapturePath =
+        step.action === "adapter:spark-x-agent/knowledge-base.create"
+          ? "$.knowledgeBaseId"
+          : "$.automationId";
+      const resourceName =
+        step.action === "adapter:spark-x-agent/knowledge-base.create" ? "知识库" : "自动任务";
       if (
         resourceReference?.[1] === undefined ||
-        capture?.[resourceReference[1]] !== "$.knowledgeBaseId"
+        capture?.[resourceReference[1]] !== expectedCapturePath
       ) {
         issues.push({
           severity: "error",
           code: "ADAPTER_RESOURCE_ID_CAPTURE_REQUIRED",
           path: `$.steps.${id}.resource.id`,
-          message: "知识库资源 ID 必须精确引用该创建步骤从 $.knowledgeBaseId 捕获的变量。",
+          message: `${resourceName}资源 ID 必须精确引用该创建步骤从 ${expectedCapturePath} 捕获的变量。`,
         });
       }
     }
@@ -897,6 +956,17 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
           code: "CLEANUP_RESOURCE_SCOPE_REQUIRED",
           path: `$.steps.${id}.resource.cleanup.params.knowledgeBaseId`,
           message: "知识库补偿只能使用 ${resource.id} 清理本次登记资源。",
+        });
+      }
+      if (
+        cleanup.action === "adapter:spark-x-agent/automation.cleanup" &&
+        (!isObject(cleanup.params) || cleanup.params.automationId !== "${resource.id}")
+      ) {
+        issues.push({
+          severity: "error",
+          code: "CLEANUP_RESOURCE_SCOPE_REQUIRED",
+          path: `$.steps.${id}.resource.cleanup.params.automationId`,
+          message: "自动任务补偿只能使用 ${resource.id} 清理本次登记资源。",
         });
       }
       if (cleanup.action === "http:request" && isObject(cleanup.params)) {
@@ -954,7 +1024,8 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
       }
       if (
         (cleanup.action === "adapter:spark-x-agent/conversation.delete" ||
-          cleanup.action === "adapter:spark-x-agent/knowledge-base.cleanup") &&
+          cleanup.action === "adapter:spark-x-agent/knowledge-base.cleanup" ||
+          cleanup.action === "adapter:spark-x-agent/automation.cleanup") &&
         isObject(cleanup.params)
       ) {
         issues.push(
