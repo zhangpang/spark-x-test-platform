@@ -13,6 +13,7 @@ import {
 export const sparkXAgentActions = [
   "adapter:spark-x-agent/conversation.create",
   "adapter:spark-x-agent/conversation.assert-recent",
+  "adapter:spark-x-agent/conversation.rename-and-assert-pagination",
   "adapter:spark-x-agent/conversation.delete",
   "adapter:spark-x-agent/chat.ask",
   "adapter:spark-x-agent/chat.assert-history",
@@ -104,6 +105,67 @@ export const sparkXAgentActionCapabilities = [
         recentPosition: { type: "integer", minimum: 0 },
         messageCount: { type: "integer", minimum: 0 },
         messageCountSource: { const: "conversation-history" },
+      },
+    },
+  },
+  {
+    key: "conversation.rename-and-assert-pagination",
+    name: "重命名并校验会话分页",
+    description:
+      "重命名一个已登记会话，并以每页两条连续扫描两次最近会话，验证跨页无重复、遗漏和顺序漂移。",
+    actionLevel: "write",
+    defaultTimeoutMs: 30_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "conversationId", "title", "expectedOrder"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        conversationId: { type: "string", format: "uuid" },
+        title: { type: "string", minLength: 1, maxLength: 200 },
+        expectedOrder: {
+          type: "array",
+          minItems: 3,
+          maxItems: 3,
+          uniqueItems: true,
+          items: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "conversationId",
+        "renamed",
+        "titleSource",
+        "titleSha256",
+        "pageSize",
+        "expectedConversationCount",
+        "firstSweepPages",
+        "secondSweepPages",
+        "distinctExpectedPages",
+        "duplicateCount",
+        "missingCount",
+        "crossPage",
+        "orderStable",
+      ],
+      properties: {
+        conversationId: { type: "string", format: "uuid" },
+        renamed: { const: true },
+        titleSource: { const: "manual" },
+        titleSha256: { type: "string", minLength: 64, maxLength: 64 },
+        pageSize: { const: 2 },
+        expectedConversationCount: { const: 3 },
+        firstSweepPages: { type: "integer", minimum: 2, maximum: 100 },
+        secondSweepPages: { type: "integer", minimum: 2, maximum: 100 },
+        distinctExpectedPages: { type: "integer", minimum: 2, maximum: 3 },
+        duplicateCount: { const: 0 },
+        missingCount: { const: 0 },
+        crossPage: { const: true },
+        orderStable: { const: true },
       },
     },
   },
@@ -1039,7 +1101,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.8.2",
+  version: "0.9.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -1056,7 +1118,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   },
 };
 
-export const sparkXAgentAdapterPhase = "core-smoke-reopen" as const;
+export const sparkXAgentAdapterPhase = "full-regression-conversation-pagination" as const;
 
 const maxChatStreamBytes = 1_000_000;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -1192,6 +1254,44 @@ function requiredUuid(
     );
   }
   return value;
+}
+
+function requiredUuidArray(
+  params: Readonly<Record<string, unknown>>,
+  name: string,
+  variables: Readonly<Record<string, unknown>>,
+  expectedLength: number,
+): readonly string[] {
+  const value = params[name];
+  if (!Array.isArray(value) || value.length !== expectedLength) {
+    throw assertionFailure(
+      "SPARK_X_AGENT_PARAMETER_INVALID",
+      `星火 Agent 适配器参数 ${name} 必须恰好包含 ${expectedLength} 个 UUID。`,
+    );
+  }
+  const ids = value.map((item) => {
+    if (typeof item !== "string") {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        `星火 Agent 适配器参数 ${name} 只能包含 UUID 字符串。`,
+      );
+    }
+    const id = interpolateString(item, variables);
+    if (!uuidPattern.test(id)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        `星火 Agent 适配器参数 ${name} 包含无效 UUID。`,
+      );
+    }
+    return id;
+  });
+  if (new Set(ids).size !== ids.length) {
+    throw assertionFailure(
+      "SPARK_X_AGENT_PARAMETER_INVALID",
+      `星火 Agent 适配器参数 ${name} 不能包含重复 UUID。`,
+    );
+  }
+  return ids;
 }
 
 function requiredSafeToolName(
@@ -1957,6 +2057,145 @@ async function authenticatedRequest(
     options.signal,
     options.fetcher,
   );
+}
+
+interface ConversationPaginationSweep {
+  readonly pagesScanned: number;
+  readonly orderedExpectedIds: readonly string[];
+  readonly expectedLocations: readonly string[];
+  readonly distinctExpectedPages: number;
+}
+
+async function scanConversationPagination(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  expectedOrder: readonly string[],
+  renamedConversationId: string,
+  renamedTitle: string,
+  remainingOptions: () => SparkXAgentExecutionOptions,
+): Promise<ConversationPaginationSweep> {
+  const pageSize = 2;
+  const maxActiveConversations = 200;
+  const expectedIds = new Set(expectedOrder);
+  const seenIds = new Set<string>();
+  const orderedExpectedIds: string[] = [];
+  const expectedLocations: string[] = [];
+  const expectedPages = new Set<number>();
+  let page = 1;
+  let pagesScanned = 0;
+  let pageCount = 1;
+
+  for (;;) {
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "GET",
+        path: actionPath(`/conversations?page=${page}&per_page=${pageSize}&status=active`),
+      },
+      remainingOptions(),
+    );
+    accepted(response, "SPARK_X_AGENT_CONVERSATION_PAGINATION_LIST_FAILED");
+    const data = dataEnvelope(
+      response.body,
+      "SPARK_X_AGENT_CONVERSATION_PAGINATION_RESPONSE_INVALID",
+    );
+    const items = Array.isArray(data.items) ? data.items.map(objectValue) : null;
+    if (
+      items === null ||
+      items.some((item) => item === null) ||
+      typeof data.total !== "number" ||
+      !Number.isSafeInteger(data.total) ||
+      data.total < 0 ||
+      data.total > maxActiveConversations ||
+      data.page !== page ||
+      data.per_page !== pageSize ||
+      items.length > pageSize
+    ) {
+      if (
+        typeof data.total === "number" &&
+        Number.isSafeInteger(data.total) &&
+        data.total > maxActiveConversations
+      ) {
+        throw environmentFailure(
+          "SPARK_X_AGENT_CONVERSATION_PAGINATION_BOUND_EXCEEDED",
+          "星火 Agent 测试账号的活动会话超过分页回归安全上限，请先清理测试数据。",
+        );
+      }
+      throw apiFailure(
+        "SPARK_X_AGENT_CONVERSATION_PAGINATION_RESPONSE_INVALID",
+        "星火 Agent 会话分页响应缺少受限分页字段。",
+      );
+    }
+    pagesScanned += 1;
+    if (page === 1) pageCount = Math.max(1, Math.ceil(data.total / pageSize));
+
+    for (const [index, item] of (items as readonly Readonly<Record<string, unknown>>[]).entries()) {
+      if (typeof item.id !== "string" || !uuidPattern.test(item.id)) {
+        throw apiFailure(
+          "SPARK_X_AGENT_CONVERSATION_PAGINATION_RESPONSE_INVALID",
+          "星火 Agent 会话分页包含无效会话标识。",
+        );
+      }
+      if (seenIds.has(item.id)) {
+        throw apiFailure(
+          "SPARK_X_AGENT_CONVERSATION_PAGINATION_DUPLICATE",
+          "星火 Agent 会话分页扫描出现重复会话。",
+        );
+      }
+      seenIds.add(item.id);
+      if (!expectedIds.has(item.id)) continue;
+      if (
+        item.id === renamedConversationId &&
+        (item.title !== renamedTitle || item.title_source !== "manual")
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_CONVERSATION_RENAME_NOT_PERSISTED",
+          "星火 Agent 会话重命名结果未按手工标题持久化。",
+        );
+      }
+      orderedExpectedIds.push(item.id);
+      expectedLocations.push(`${page}:${index}`);
+      expectedPages.add(page);
+    }
+
+    if (page >= pageCount || items.length < pageSize) break;
+    page += 1;
+    if (page > 100) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_CONVERSATION_PAGINATION_BOUND_EXCEEDED",
+        "星火 Agent 会话分页扫描超过安全页数上限。",
+      );
+    }
+  }
+
+  if (
+    orderedExpectedIds.length !== expectedOrder.length ||
+    expectedOrder.some((id) => !seenIds.has(id))
+  ) {
+    throw apiFailure(
+      "SPARK_X_AGENT_CONVERSATION_PAGINATION_MISSING",
+      "星火 Agent 会话分页扫描遗漏了本次运行创建的会话。",
+    );
+  }
+  if (orderedExpectedIds.some((id, index) => id !== expectedOrder[index])) {
+    throw apiFailure(
+      "SPARK_X_AGENT_CONVERSATION_PAGINATION_ORDER_FAILED",
+      "星火 Agent 会话分页中的运行会话顺序与更新时间顺序不一致。",
+    );
+  }
+  if (expectedPages.size < 2) {
+    throw apiFailure(
+      "SPARK_X_AGENT_CONVERSATION_PAGINATION_NOT_CROSSED",
+      "星火 Agent 会话分页未让三个运行会话跨越至少两个分页。",
+    );
+  }
+  return {
+    pagesScanned,
+    orderedExpectedIds,
+    expectedLocations,
+    distinctExpectedPages: expectedPages.size,
+  };
 }
 
 interface UploadedFixtureProjection {
@@ -3869,6 +4108,85 @@ export async function executeSparkXAgentAction(
       );
     }
     return { conversationId: data.id, title: data.title };
+  }
+
+  if (action === "adapter:spark-x-agent/conversation.rename-and-assert-pagination") {
+    const conversationId = requiredUuid(params, "conversationId", variables);
+    const title = requiredString(params, "title", variables, 200);
+    const expectedOrder = requiredUuidArray(params, "expectedOrder", variables, 3);
+    if (expectedOrder[0] !== conversationId) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PARAMETER_INVALID",
+        "重命名会话必须是预期更新时间顺序中的第一条。",
+      );
+    }
+    const renameResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "PUT",
+        path: actionPath(`/conversations/${encodeURIComponent(conversationId)}`),
+        headers: { "Content-Type": "application/json" },
+        body: { title },
+      },
+      remainingOptions(),
+    );
+    accepted(renameResponse, "SPARK_X_AGENT_CONVERSATION_RENAME_FAILED");
+    const renamed = dataEnvelope(
+      renameResponse.body,
+      "SPARK_X_AGENT_CONVERSATION_RENAME_RESPONSE_INVALID",
+    );
+    if (
+      renamed.id !== conversationId ||
+      renamed.title !== title ||
+      renamed.title_source !== "manual"
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONVERSATION_RENAME_RESPONSE_INVALID",
+        "星火 Agent 会话重命名响应与目标会话或手工标题不一致。",
+      );
+    }
+
+    const firstSweep = await scanConversationPagination(
+      environment,
+      token,
+      expectedOrder,
+      conversationId,
+      title,
+      remainingOptions,
+    );
+    const secondSweep = await scanConversationPagination(
+      environment,
+      token,
+      expectedOrder,
+      conversationId,
+      title,
+      remainingOptions,
+    );
+    if (
+      firstSweep.orderedExpectedIds.join(",") !== secondSweep.orderedExpectedIds.join(",") ||
+      firstSweep.expectedLocations.join(",") !== secondSweep.expectedLocations.join(",")
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_CONVERSATION_PAGINATION_DRIFT",
+        "星火 Agent 连续两次会话分页扫描出现位置或顺序漂移。",
+      );
+    }
+    return {
+      conversationId,
+      renamed: true,
+      titleSource: "manual",
+      titleSha256: sha256(title),
+      pageSize: 2,
+      expectedConversationCount: expectedOrder.length,
+      firstSweepPages: firstSweep.pagesScanned,
+      secondSweepPages: secondSweep.pagesScanned,
+      distinctExpectedPages: firstSweep.distinctExpectedPages,
+      duplicateCount: 0,
+      missingCount: 0,
+      crossPage: true,
+      orderStable: true,
+    };
   }
 
   const conversationId = requiredString(params, "conversationId", variables, 100);

@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -81,6 +81,66 @@
             "recentPosition": { "type": "integer", "minimum": 0 },
             "messageCount": { "type": "integer", "minimum": 0 },
             "messageCountSource": { "const": "conversation-history" }
+          }
+        }
+      },
+      {
+        "key": "conversation.rename-and-assert-pagination",
+        "name": "重命名并校验会话分页",
+        "description": "重命名一个已登记会话，并以每页两条连续扫描两次最近会话，验证跨页无重复、遗漏和顺序漂移。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 30000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "conversationId", "title", "expectedOrder"],
+          "properties": {
+            "username": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "password": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "conversationId": { "type": "string", "format": "uuid" },
+            "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "expectedOrder": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "uniqueItems": true,
+              "items": { "type": "string", "format": "uuid" }
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "conversationId",
+            "renamed",
+            "titleSource",
+            "titleSha256",
+            "pageSize",
+            "expectedConversationCount",
+            "firstSweepPages",
+            "secondSweepPages",
+            "distinctExpectedPages",
+            "duplicateCount",
+            "missingCount",
+            "crossPage",
+            "orderStable"
+          ],
+          "properties": {
+            "conversationId": { "type": "string", "format": "uuid" },
+            "renamed": { "const": true },
+            "titleSource": { "const": "manual" },
+            "titleSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+            "pageSize": { "const": 2 },
+            "expectedConversationCount": { "const": 3 },
+            "firstSweepPages": { "type": "integer", "minimum": 2, "maximum": 100 },
+            "secondSweepPages": { "type": "integer", "minimum": 2, "maximum": 100 },
+            "distinctExpectedPages": { "type": "integer", "minimum": 2, "maximum": 3 },
+            "duplicateCount": { "const": 0 },
+            "missingCount": { "const": 0 },
+            "crossPage": { "const": true },
+            "orderStable": { "const": true }
           }
         }
       },

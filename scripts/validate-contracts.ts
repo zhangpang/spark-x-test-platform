@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 
+import { sparkXAgentAdapterManifest } from "@spark-x-test/adapter-spark-x-agent";
 import { validateAdapterManifest } from "@spark-x-test/adapter-sdk";
 import { validateTestCaseDefinition } from "@spark-x-test/case-schema";
 import { parse } from "yaml";
@@ -46,6 +47,21 @@ const adapterResult = validateAdapterManifest(adapterManifest);
 if (!adapterResult.valid) {
   throw new Error(
     `Adapter schema rejected the committed manifest: ${JSON.stringify(adapterResult.errors)}`,
+  );
+}
+const committedSparkXAgentManifest = adapterManifest as {
+  readonly key: string;
+  readonly version: string;
+  readonly capabilities: { readonly actions: readonly unknown[] };
+};
+if (
+  committedSparkXAgentManifest.key !== sparkXAgentAdapterManifest.key ||
+  committedSparkXAgentManifest.version !== sparkXAgentAdapterManifest.version ||
+  JSON.stringify(committedSparkXAgentManifest.capabilities.actions) !==
+    JSON.stringify(sparkXAgentAdapterManifest.capabilities.actions)
+) {
+  throw new Error(
+    "Committed Spark X Agent adapter manifest must exactly match the runtime action contracts",
   );
 }
 

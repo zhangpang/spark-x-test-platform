@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
@@ -66,6 +66,8 @@ const runSmoke = process.env.SPARK_X_AGENT_RUN_SMOKE === "true";
 const runContextSmoke = process.env.SPARK_X_AGENT_RUN_CONTEXT_SMOKE === "true";
 const runConversationReopenSmoke =
   process.env.SPARK_X_AGENT_RUN_CONVERSATION_REOPEN_SMOKE === "true";
+const runConversationPaginationSmoke =
+  process.env.SPARK_X_AGENT_RUN_CONVERSATION_PAGINATION_SMOKE === "true";
 const runKnowledgeSmoke = process.env.SPARK_X_AGENT_RUN_KNOWLEDGE_SMOKE === "true";
 const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
 const runMcpSmoke = process.env.SPARK_X_AGENT_RUN_MCP_SMOKE === "true";
@@ -337,6 +339,173 @@ function conversationDefinition(): Readonly<Record<string, unknown>> {
           username: "${case.admin-username}",
           password: "${case.admin-password}",
           conversationId: "${step.conversation-id}",
+        },
+      },
+    ],
+  };
+}
+
+function conversationPaginationDefinition(): Readonly<Record<string, unknown>> {
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: "CONV-003 会话重命名与分页稳定性",
+      description:
+        "创建三个运行隔离会话，重命名最早会话后以每页两条连续扫描两次，校验标题持久化、跨页无重复遗漏和顺序稳定，并逆序清理。",
+      systemKey: "spark-x-agent",
+      moduleKey: "recent-conversations",
+      priority: "P1",
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: ["adapter", "conversation", "p1", "full-regression", "pagination", "rename"],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 30_000,
+      caseTimeoutMs: 150_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:recent-conversations"],
+    steps: [
+      {
+        id: "create-pagination-oldest",
+        name: "创建分页顺序中的最早会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: "spark-x-page-oldest-${run.id}",
+        },
+        capture: { "pagination-oldest-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.pagination-oldest-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "create-pagination-middle",
+        name: "创建分页顺序中的中间会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: "spark-x-page-middle-${run.id}",
+        },
+        capture: { "pagination-middle-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.pagination-middle-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "create-pagination-newest",
+        name: "创建分页顺序中的最新会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.create",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          title: "spark-x-page-newest-${run.id}",
+        },
+        capture: { "pagination-newest-id": "$.conversationId" },
+        resource: {
+          type: "spark-x-agent-conversation",
+          id: "${step.pagination-newest-id}",
+          cleanup: {
+            action: "adapter:spark-x-agent/conversation.delete",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              conversationId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: "rename-and-assert-pagination",
+        name: "重命名并连续校验两次跨页顺序",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.rename-and-assert-pagination",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.pagination-oldest-id}",
+          title: "spark-x-page-renamed-${run.id}",
+          expectedOrder: [
+            "${step.pagination-oldest-id}",
+            "${step.pagination-newest-id}",
+            "${step.pagination-middle-id}",
+          ],
+        },
+      },
+    ],
+    finally: [
+      {
+        id: "delete-pagination-newest",
+        name: "删除分页最新会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.pagination-newest-id}",
+        },
+      },
+      {
+        id: "delete-pagination-middle",
+        name: "删除分页中间会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.pagination-middle-id}",
+        },
+      },
+      {
+        id: "delete-pagination-oldest",
+        name: "删除已重命名会话",
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: "${step.pagination-oldest-id}",
         },
       },
     ],
@@ -1982,6 +2151,127 @@ async function executeContextSmoke(
   return run;
 }
 
+function assertConversationPaginationEvidence(run: RunDetail): void {
+  const createSteps = run.steps.filter(
+    (step) => step.phase === "main" && step.action === "adapter:spark-x-agent/conversation.create",
+  );
+  const pagination = run.steps.find(
+    (step) =>
+      step.phase === "main" &&
+      step.action === "adapter:spark-x-agent/conversation.rename-and-assert-pagination",
+  );
+  check(
+    createSteps.length === 3 &&
+      createSteps.every(
+        (step) =>
+          typeof step.outputSummary?.conversationId === "string" &&
+          typeof step.outputSummary.title === "string",
+      ),
+    "CONV-003 did not create three structured run-scoped conversations",
+  );
+  const summary = pagination?.outputSummary;
+  check(
+    summary !== null &&
+      summary !== undefined &&
+      summary.conversationId === createSteps[0]?.outputSummary?.conversationId &&
+      summary.renamed === true &&
+      summary.titleSource === "manual" &&
+      summary.titleSha256 ===
+        createHash("sha256").update(`spark-x-page-renamed-${run.id}`).digest("hex") &&
+      summary.pageSize === 2 &&
+      summary.expectedConversationCount === 3 &&
+      typeof summary.firstSweepPages === "number" &&
+      summary.firstSweepPages >= 2 &&
+      typeof summary.secondSweepPages === "number" &&
+      summary.secondSweepPages >= 2 &&
+      typeof summary.distinctExpectedPages === "number" &&
+      summary.distinctExpectedPages >= 2 &&
+      summary.duplicateCount === 0 &&
+      summary.missingCount === 0 &&
+      summary.crossPage === true &&
+      summary.orderStable === true,
+    "CONV-003 rename, pagination or stable-order evidence is incomplete",
+  );
+  check(
+    !JSON.stringify(summary).includes(`spark-x-page-renamed-${run.id}`) &&
+      !JSON.stringify(summary).includes("memory-only-access-token"),
+    "CONV-003 renamed title or in-memory token leaked into pagination evidence",
+  );
+}
+
+async function executeConversationPaginationSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-conversation-pagination-p1-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-conversation-pagination-p1-verification",
+      priority: 90,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent conversation pagination run was not accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(
+    run.gateResult === "passed",
+    `Spark X Agent conversation pagination gate is ${String(run.gateResult)}`,
+  );
+  check(run.summary.passed === 1, "Spark X Agent conversation pagination case did not pass");
+  check(
+    run.firstFailure === null,
+    "Spark X Agent conversation pagination retained a first failure",
+  );
+  check(
+    run.cases.length === 1 &&
+      run.cases[0]?.result === "passed" &&
+      run.cases[0].cleanupStatus === "passed",
+    "Spark X Agent conversation pagination case or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/conversation.rename-and-assert-pagination",
+        "finally:adapter:spark-x-agent/conversation.delete",
+        "finally:adapter:spark-x-agent/conversation.delete",
+        "finally:adapter:spark-x-agent/conversation.delete",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent conversation pagination structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 3 &&
+      run.resources.every(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-conversation" &&
+          resource.cleanupDefinition.action === "adapter:spark-x-agent/conversation.delete" &&
+          resource.cleanupStatus === "passed",
+      ),
+    "Spark X Agent conversation pagination resource ledger or cleanup is incomplete",
+  );
+  check(
+    run.cleanupJob === null,
+    "normal conversation pagination run unexpectedly required compensation",
+  );
+  assertConversationPaginationEvidence(run);
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into CONV-003 evidence",
+    );
+  }
+  return run;
+}
+
 function assertConversationReopenEvidence(run: RunDetail): void {
   const firstAsk = run.steps.find((step) => step.stepId === "ask-reopen-first-turn");
   const recent = run.steps.find((step) => step.stepId === "reopen-from-recent-list");
@@ -2695,6 +2985,14 @@ const conversationReopenCase = await ensureCase(
   conversationReopenDefinition(),
   "新增最近列表重新定位、两轮上下文续接、空扩展范围和完整清理 P0 闭环",
 );
+const conversationPaginationCase = await ensureCase(
+  system.id,
+  recentConversations.id,
+  environment.id,
+  "CONV-003 会话重命名与分页稳定性",
+  conversationPaginationDefinition(),
+  "新增三个运行隔离会话、手工重命名、每页两条双重扫描和逆序清理 P1 闭环",
+);
 const chatCase = await ensureCase(
   system.id,
   chat.id,
@@ -2781,6 +3079,24 @@ const conversationReopenSuite = await ensureSuite(
   "CONV-002 首轮后从最近列表重新定位同一会话、续接第二轮、核对空扩展范围并完整清理。",
   [conversationReopenCase.testCase.id],
 );
+const conversationPaginationSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-conversation-pagination-p1",
+  "星火 Agent 会话重命名与分页 P1 纵向切片",
+  "CONV-003 三个运行隔离会话、手工重命名、每页两条连续双重扫描和逆序清理闭环。",
+  [conversationPaginationCase.testCase.id],
+);
+const recentConversationSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-recent-conversations",
+  "星火 Agent 最近会话回归",
+  "最近会话模块已实现的 CONV-001/002/003 创建排序、重新打开续接、重命名分页和完整清理。",
+  [
+    conversation.testCase.id,
+    conversationReopenCase.testCase.id,
+    conversationPaginationCase.testCase.id,
+  ],
+);
 const chatContextSuite = await ensureSuite(
   system.id,
   "spark-x-agent-chat-context-p0",
@@ -2842,11 +3158,32 @@ const suite = await ensureSuite(
     automationCase.testCase.id,
   ],
 );
+const fullRegressionSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-full-regression",
+  "星火 Agent 完整回归（建设中 12/32）",
+  "手动一键完整回归入口；当前已接入 12/32 条案例，覆盖七个模块的全部 P0 与 CONV-003 重命名分页 P1，后续持续追加且不改变套件 key。",
+  [
+    conversation.testCase.id,
+    conversationReopenCase.testCase.id,
+    conversationPaginationCase.testCase.id,
+    chatCase.testCase.id,
+    chatContextCase.testCase.id,
+    toolCatalogCase.testCase.id,
+    toolInvocationCase.testCase.id,
+    knowledgeBaseCase.testCase.id,
+    knowledgeScopeCase.testCase.id,
+    skillPublicationCase.testCase.id,
+    mcpConnectorCase.testCase.id,
+    automationCase.testCase.id,
+  ],
+);
 check(
   [
     runSmoke,
     runContextSmoke,
     runConversationReopenSmoke,
+    runConversationPaginationSmoke,
     runKnowledgeSmoke,
     runSkillSmoke,
     runMcpSmoke,
@@ -2865,33 +3202,42 @@ const run = runSmoke
           conversationReopenSuite.id,
           password,
         )
-      : runKnowledgeSmoke
-        ? await executeKnowledgeSmoke(system.id, environment.id, knowledgeBaseSuite.id, password)
-        : runSkillSmoke
-          ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
-          : runMcpSmoke
-            ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
-            : runAutomationSmoke
-              ? await executeAutomationSmoke(
-                  system.id,
-                  environment.id,
-                  automationSuite.id,
-                  password,
-                )
-              : undefined;
+      : runConversationPaginationSmoke
+        ? await executeConversationPaginationSmoke(
+            system.id,
+            environment.id,
+            conversationPaginationSuite.id,
+            password,
+          )
+        : runKnowledgeSmoke
+          ? await executeKnowledgeSmoke(system.id, environment.id, knowledgeBaseSuite.id, password)
+          : runSkillSmoke
+            ? await executeSkillSmoke(system.id, environment.id, skillSuite.id, password)
+            : runMcpSmoke
+              ? await executeMcpSmoke(system.id, environment.id, mcpSuite.id, password)
+              : runAutomationSmoke
+                ? await executeAutomationSmoke(
+                    system.id,
+                    environment.id,
+                    automationSuite.id,
+                    password,
+                  )
+                : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
   : runConversationReopenSmoke
     ? "spark-x-agent-conversation-reopen-p0"
-    : runKnowledgeSmoke
-      ? "spark-x-agent-knowledge-base-p0"
-      : runSkillSmoke
-        ? "spark-x-agent-skills-p0"
-        : runMcpSmoke
-          ? "spark-x-agent-mcp-p0"
-          : runAutomationSmoke
-            ? "spark-x-agent-automations-p0"
-            : "spark-x-agent-core-smoke";
+    : runConversationPaginationSmoke
+      ? "spark-x-agent-conversation-pagination-p1"
+      : runKnowledgeSmoke
+        ? "spark-x-agent-knowledge-base-p0"
+        : runSkillSmoke
+          ? "spark-x-agent-skills-p0"
+          : runMcpSmoke
+            ? "spark-x-agent-mcp-p0"
+            : runAutomationSmoke
+              ? "spark-x-agent-automations-p0"
+              : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -2904,18 +3250,21 @@ console.info(
           ? 28
           : runConversationReopenSmoke
             ? 23
-            : runKnowledgeSmoke
-              ? 32
-              : runSkillSmoke
-                ? 12
-                : runMcpSmoke
-                  ? expectMcpUnavailable
-                    ? 10
-                    : 12
-                  : runAutomationSmoke
-                    ? 20
-                    : 161,
-    caseCount: 11,
+            : runConversationPaginationSmoke
+              ? 24
+              : runKnowledgeSmoke
+                ? 32
+                : runSkillSmoke
+                  ? 12
+                  : runMcpSmoke
+                    ? expectMcpUnavailable
+                      ? 10
+                      : 12
+                    : runAutomationSmoke
+                      ? 20
+                      : 161,
+    caseCount: 12,
+    coreSmokeCaseCount: 11,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
     systemId: system.id,
@@ -2924,6 +3273,8 @@ console.info(
     conversationCaseVersionId: conversation.version.id,
     conversationReopenCaseId: conversationReopenCase.testCase.id,
     conversationReopenCaseVersionId: conversationReopenCase.version.id,
+    conversationPaginationCaseId: conversationPaginationCase.testCase.id,
+    conversationPaginationCaseVersionId: conversationPaginationCase.version.id,
     chatCaseId: chatCase.testCase.id,
     chatCaseVersionId: chatCase.version.id,
     chatContextCaseId: chatContextCase.testCase.id,
@@ -2944,6 +3295,8 @@ console.info(
     automationCaseVersionId: automationCase.version.id,
     conversationSuiteId: conversationSuite.id,
     conversationReopenSuiteId: conversationReopenSuite.id,
+    conversationPaginationSuiteId: conversationPaginationSuite.id,
+    recentConversationSuiteId: recentConversationSuite.id,
     chatContextSuiteId: chatContextSuite.id,
     toolSuiteId: toolSuite.id,
     knowledgeBaseSuiteId: knowledgeBaseSuite.id,
@@ -2951,6 +3304,7 @@ console.info(
     mcpSuiteId: mcpSuite.id,
     automationSuiteId: automationSuite.id,
     suiteId: suite.id,
+    fullRegressionSuiteId: fullRegressionSuite.id,
     ...(run === undefined ? {} : { runId: run.id, gateResult: run.gateResult }),
   }),
 );

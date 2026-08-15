@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { sparkXAgentActions } from "@spark-x-test/adapter-spark-x-agent";
 import { platformVersion, type RunCleanupJob, type TestRunJob } from "@spark-x-test/contracts";
 import {
   createServiceApplication,
@@ -39,25 +40,7 @@ const workerRegistration = {
   executorVersion: platformVersion,
   concurrencySlots: concurrency,
   capabilities: [
-    "adapter:spark-x-agent/conversation.create",
-    "adapter:spark-x-agent/conversation.assert-recent",
-    "adapter:spark-x-agent/conversation.delete",
-    "adapter:spark-x-agent/chat.ask",
-    "adapter:spark-x-agent/chat.assert-history",
-    "adapter:spark-x-agent/chat.assert-context-history",
-    "adapter:spark-x-agent/tool.assert-safe-catalog",
-    "adapter:spark-x-agent/tool.invoke-safe",
-    "adapter:spark-x-agent/tool.assert-history",
-    "adapter:spark-x-agent/knowledge-base.create",
-    "adapter:spark-x-agent/knowledge-base.upload-fixture",
-    "adapter:spark-x-agent/knowledge-base.attach-upload",
-    "adapter:spark-x-agent/knowledge-base.wait-ready",
-    "adapter:spark-x-agent/knowledge-base.assert-conversation-scope",
-    "adapter:spark-x-agent/knowledge-base.cleanup",
-    "adapter:spark-x-agent/skill.assert-trusted-publication",
-    "adapter:spark-x-agent/automation.create",
-    "adapter:spark-x-agent/automation.wait-fired",
-    "adapter:spark-x-agent/automation.cleanup",
+    ...sparkXAgentActions,
     "http:request",
     "wait:http",
     "json:extract",

@@ -33,6 +33,8 @@ const variables = {
   "run.id": "00000000-0000-4000-8000-000000000201",
 };
 const conversationId = "00000000-0000-4000-8000-000000000202";
+const secondConversationId = "00000000-0000-4000-8000-000000000203";
+const thirdConversationId = "00000000-0000-4000-8000-000000000204";
 const knowledgeBaseId = "00000000-0000-4000-8000-000000000210";
 const uploadedDocumentId = "00000000-0000-4000-8000-000000000211";
 const knowledgeDocumentId = "00000000-0000-4000-8000-000000000212";
@@ -134,7 +136,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.8.2",
+      version: "0.9.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -143,6 +145,10 @@ describe("spark-x-agent adapter", () => {
           }),
           expect.objectContaining({
             key: "conversation.assert-recent",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "conversation.rename-and-assert-pagination",
             actionLevel: "write",
           }),
           expect.objectContaining({ key: "chat.ask", producesResource: false }),
@@ -362,6 +368,337 @@ describe("spark-x-agent adapter", () => {
       failure: {
         code: "SPARK_X_AGENT_RECENT_CONVERSATION_MESSAGE_COUNT_FAILED",
         classification: "product_failed",
+      },
+    });
+  });
+
+  it("renames one run conversation and proves two stable cross-page scans without leaking titles", async () => {
+    const title = `renamed-${variables["run.id"]}`;
+    const pageOne = {
+      success: true,
+      data: {
+        items: [
+          {
+            id: conversationId,
+            title,
+            title_source: "manual",
+            is_pinned: false,
+          },
+          { id: secondConversationId, is_pinned: false },
+        ],
+        total: 3,
+        page: 1,
+        per_page: 2,
+      },
+    };
+    const pageTwo = {
+      success: true,
+      data: {
+        items: [{ id: thirdConversationId, is_pinned: false }],
+        total: 3,
+        page: 2,
+        per_page: 2,
+      },
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            id: conversationId,
+            title,
+            title_source: "manual",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(pageOne))
+      .mockResolvedValueOnce(jsonResponse(pageTwo))
+      .mockResolvedValueOnce(jsonResponse(pageOne))
+      .mockResolvedValueOnce(jsonResponse(pageTwo));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/conversation.rename-and-assert-pagination",
+      environment,
+      {
+        ...credentials,
+        conversationId,
+        title: "renamed-${run.id}",
+        expectedOrder: ["${step.renamed-id}", "${step.newest-id}", "${step.middle-id}"],
+      },
+      {
+        ...variables,
+        "step.renamed-id": conversationId,
+        "step.newest-id": secondConversationId,
+        "step.middle-id": thirdConversationId,
+      },
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      conversationId,
+      renamed: true,
+      titleSource: "manual",
+      titleSha256: createHash("sha256").update(title).digest("hex"),
+      pageSize: 2,
+      expectedConversationCount: 3,
+      firstSweepPages: 2,
+      secondSweepPages: 2,
+      distinctExpectedPages: 2,
+      duplicateCount: 0,
+      missingCount: 0,
+      crossPage: true,
+      orderStable: true,
+    });
+    expect(urlOf(fetcher.mock.calls[1]?.[0] as URL | RequestInfo)).toBe(
+      `http://192.168.110.136/trade/api/conversations/${conversationId}`,
+    );
+    expect(fetcher.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain(title);
+    expect(serialized).not.toContain("memory-only-access-token-value");
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("preserves the first pagination failure when an item is repeated across pages", async () => {
+    const title = `renamed-${variables["run.id"]}`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { id: conversationId, title, title_source: "manual" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { id: conversationId, title, title_source: "manual" },
+              { id: secondConversationId },
+            ],
+            total: 3,
+            page: 1,
+            per_page: 2,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [{ id: secondConversationId }],
+            total: 3,
+            page: 2,
+            per_page: 2,
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/conversation.rename-and-assert-pagination",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          title: "renamed-${run.id}",
+          expectedOrder: [conversationId, secondConversationId, thirdConversationId],
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_CONVERSATION_PAGINATION_DUPLICATE",
+        classification: "product_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
+  it("fails when a run conversation is omitted by pagination", async () => {
+    const title = `renamed-${variables["run.id"]}`;
+    const unrelatedConversationId = "00000000-0000-4000-8000-000000000205";
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { id: conversationId, title, title_source: "manual" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { id: conversationId, title, title_source: "manual" },
+              { id: secondConversationId },
+            ],
+            total: 3,
+            page: 1,
+            per_page: 2,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [{ id: unrelatedConversationId }],
+            total: 3,
+            page: 2,
+            per_page: 2,
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/conversation.rename-and-assert-pagination",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          title: "renamed-${run.id}",
+          expectedOrder: [conversationId, secondConversationId, thirdConversationId],
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_CONVERSATION_PAGINATION_MISSING",
+        classification: "product_failed",
+      },
+    });
+  });
+
+  it("fails when consecutive pagination sweeps move the run conversations", async () => {
+    const title = `renamed-${variables["run.id"]}`;
+    const unrelatedConversationId = "00000000-0000-4000-8000-000000000205";
+    const page = (
+      items: readonly Readonly<Record<string, unknown>>[],
+      total: number,
+      pageNumber: number,
+    ) => ({
+      success: true,
+      data: { items, total, page: pageNumber, per_page: 2 },
+    });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { id: conversationId, title, title_source: "manual" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          page(
+            [{ id: conversationId, title, title_source: "manual" }, { id: secondConversationId }],
+            3,
+            1,
+          ),
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse(page([{ id: thirdConversationId }], 3, 2)))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          page(
+            [
+              { id: unrelatedConversationId },
+              { id: conversationId, title, title_source: "manual" },
+            ],
+            4,
+            1,
+          ),
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(page([{ id: secondConversationId }, { id: thirdConversationId }], 4, 2)),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/conversation.rename-and-assert-pagination",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          title: "renamed-${run.id}",
+          expectedOrder: [conversationId, secondConversationId, thirdConversationId],
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_CONVERSATION_PAGINATION_DRIFT",
+        classification: "product_failed",
+      },
+    });
+  });
+
+  it("classifies an overfull pagination test account as an environment failure", async () => {
+    const title = `renamed-${variables["run.id"]}`;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { id: conversationId, title, title_source: "manual" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [
+              { id: conversationId, title, title_source: "manual" },
+              { id: secondConversationId },
+            ],
+            total: 201,
+            page: 1,
+            per_page: 2,
+          },
+        }),
+      );
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/conversation.rename-and-assert-pagination",
+        environment,
+        {
+          ...credentials,
+          conversationId,
+          title: "renamed-${run.id}",
+          expectedOrder: [conversationId, secondConversationId, thirdConversationId],
+        },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_CONVERSATION_PAGINATION_BOUND_EXCEEDED",
+        classification: "environment_failed",
       },
     });
   });

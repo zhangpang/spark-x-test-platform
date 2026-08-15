@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -31,6 +31,7 @@
     "actions": [
       { "key": "conversation.create" },
       { "key": "conversation.assert-recent" },
+      { "key": "conversation.rename-and-assert-pagination" },
       { "key": "chat.ask" },
       { "key": "chat.assert-history" },
       { "key": "chat.assert-context-history" },
@@ -188,7 +189,8 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.8.2` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、`chat.ask`、
+当前 `0.9.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+`conversation.rename-and-assert-pagination`、`chat.ask`、
 `chat.assert-history`、`chat.assert-context-history`、`tool.assert-safe-catalog`、`tool.invoke-safe`、`tool.assert-history` 和
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-conversation-scope`、`knowledge-base.cleanup` 和
@@ -199,6 +201,12 @@ telemetry.*
 结构化证据。`conversation.assert-recent` 不把列表响应缺失的 `message_count` 当作零，而是通过会话历史接口
 读取最多 99 条持久化消息；用例可以声明精确预期数，数量偏差直接归类为产品失败，不轮询或重试。旧用例
 未声明预期数时仍返回真实历史计数，保持兼容。
+`conversation.rename-and-assert-pagination` 只接受三个已经由本次用例创建并登记的会话 UUID：先通过固定
+`PUT /trade/api/conversations/{id}` 持久化手工标题，再以每页两条完整扫描两次活动会话。动作要求三个运行
+会话跨越至少两个分页、每次恰好出现一次、保持“重命名目标、最新创建、次新创建”的更新时间顺序，且两次
+扫描的页内位置一致；重复、遗漏、标题未持久化或顺序漂移分别保留稳定首错。活动会话超过 200 条时以测试
+环境数据超限返回 `environment_failed`，不无限扫描。结构化输出只保留会话 ID、页数、计数、布尔判定和
+标题 SHA-256，不返回列表标题或登录 Token。
 `chat.ask` 只向此前已创建并登记的测试会话发送消息，将 SSE 限制在 1 MB 内，要求流中会话
 ID 与登记 ID 一致、存在内容事件和唯一终态 `done`，并只输出事件计数、长度与最终回答 SHA-256；
 `chat.assert-history` 使用该哈希确认单轮落库回答与流式终态一致；`chat.assert-context-history` 同时核对两轮
