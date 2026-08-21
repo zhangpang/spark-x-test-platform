@@ -107,7 +107,12 @@ build_and_verify() {
 
   local marker="$VERIFIED_DIR/$RELEASE_COMMIT.ok"
   if [[ ! -f "$marker" ]]; then
-    run_compose run --rm --no-deps api npm run check
+    # The long-lived API service is intentionally capped at 1 GiB, but the
+    # full verification command uses multiple TypeScript/Vitest processes and
+    # needs a bounded one-off container with separate native-memory headroom.
+    docker run --rm --memory=2g \
+      -e NODE_OPTIONS=--max-old-space-size=1536 \
+      "spark-x-test-platform-service:$RELEASE_COMMIT" npm run check
     printf '%s\n' "$RELEASE_COMMIT" > "$marker.tmp"
     mv "$marker.tmp" "$marker"
   fi
