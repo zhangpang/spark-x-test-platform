@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { EnvironmentRecord, JsonObject } from "./model.js";
+import type { EnvironmentRecord, JsonObject, JsonValue } from "./model.js";
 import {
   contentHash,
   findPlaintextSecrets,
@@ -714,6 +714,269 @@ describe("M2 asset validation", () => {
         "ARBITRARY_ADAPTER_INPUT_FORBIDDEN",
         "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
         "RUN_TRACEABILITY_REQUIRED",
+      ]),
+    );
+  });
+
+  it("accepts only schema-declared bounded unique adapter arrays", () => {
+    const sparkEnvironment: EnvironmentRecord = {
+      ...environment,
+      systemId: "00000000-0000-4000-8000-000000000010",
+      baseUrl: "http://192.168.110.136/trade/",
+      actionLevel: "dangerous",
+      allowlist: [
+        {
+          protocol: "http",
+          host: "192.168.110.136",
+          ports: [80],
+          pathPrefixes: ["/trade/"],
+        },
+      ],
+      adapterKey: "spark-x-agent",
+    };
+    const inputs = [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ];
+    const createStep = (id: string, captureName: string): JsonObject => ({
+      id,
+      name: id,
+      kind: "action",
+      action: "adapter:spark-x-agent/conversation.create",
+      params: {
+        username: "${case.admin-username}",
+        password: "${case.admin-password}",
+        title: `${id}-\${run.id}`,
+      },
+      capture: { [captureName]: "$.conversationId" },
+      resource: {
+        type: "spark-x-agent-conversation",
+        id: `\${step.${captureName}}`,
+        cleanup: {
+          action: "adapter:spark-x-agent/conversation.delete",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${resource.id}",
+          },
+        },
+      },
+    });
+    const paginationDefinition = definition({
+      metadata: {
+        name: "CONV-003 bounded array",
+        systemKey: "spark-x-agent",
+        moduleKey: "recent-conversations",
+        priority: "P1",
+        classification: "blackbox",
+        actionLevel: "dangerous",
+        tags: ["adapter", "pagination"],
+      },
+      inputs,
+      steps: [
+        createStep("create-oldest", "oldest-id"),
+        createStep("create-middle", "middle-id"),
+        createStep("create-newest", "newest-id"),
+        {
+          id: "rename-and-assert-pagination",
+          name: "rename and assert",
+          kind: "action",
+          action: "adapter:spark-x-agent/conversation.rename-and-assert-pagination",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            conversationId: "${step.oldest-id}",
+            title: "spark-x-page-renamed-${run.id}",
+            expectedOrder: ["${step.oldest-id}", "${step.newest-id}", "${step.middle-id}"],
+          },
+        },
+      ],
+      finally: ["oldest-id", "middle-id", "newest-id"].map((captureName) => ({
+        id: `delete-${captureName}`,
+        name: `delete ${captureName}`,
+        kind: "action",
+        action: "adapter:spark-x-agent/conversation.delete",
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          conversationId: `\${step.${captureName}}`,
+        },
+      })),
+    });
+
+    expect(
+      validateDefinition(paginationDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "recent-conversations",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const steps = paginationDefinition.steps as readonly JsonObject[];
+    const assertion = steps[3] as JsonObject;
+    for (const expectedOrder of [
+      ["${step.oldest-id}", "${step.oldest-id}", "${step.middle-id}"],
+      "${step.oldest-id}",
+      ["${step.oldest-id}", { id: "${step.newest-id}" }, "${step.middle-id}"],
+    ] as readonly JsonValue[]) {
+      const invalid = {
+        ...paginationDefinition,
+        steps: [
+          ...steps.slice(0, 3),
+          {
+            ...assertion,
+            params: { ...(assertion.params as JsonObject), expectedOrder },
+          },
+        ],
+      } as JsonObject;
+      expect(
+        validateDefinition(invalid, {
+          systemKey: "spark-x-agent",
+          moduleKey: "recent-conversations",
+          environment: sparkEnvironment,
+        }).issues,
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "ADAPTER_PARAMETER_INVALID",
+            path: "$.steps.rename-and-assert-pagination.params.expectedOrder",
+          }),
+        ]),
+      );
+    }
+  });
+
+  it("derives MCP fixture compensation and resource capture from adapter capabilities", () => {
+    const sparkEnvironment: EnvironmentRecord = {
+      ...environment,
+      systemId: "00000000-0000-4000-8000-000000000010",
+      baseUrl: "http://192.168.110.136/trade/",
+      actionLevel: "dangerous",
+      allowlist: [
+        {
+          protocol: "http",
+          host: "192.168.110.136",
+          ports: [80],
+          pathPrefixes: ["/trade/"],
+        },
+      ],
+      adapterKey: "spark-x-agent",
+    };
+    const fixtureDefinition = definition({
+      metadata: {
+        name: "MCP fixture lifecycle",
+        systemKey: "spark-x-agent",
+        moduleKey: "mcp",
+        priority: "P0",
+        classification: "blackbox",
+        actionLevel: "dangerous",
+        tags: ["adapter", "mcp"],
+      },
+      inputs: [
+        {
+          name: "admin-username",
+          type: "string",
+          required: true,
+          secretRef: "spark-x-agent-admin-username",
+        },
+        {
+          name: "admin-password",
+          type: "string",
+          required: true,
+          secretRef: "spark-x-agent-admin-password",
+        },
+      ],
+      steps: [
+        {
+          id: "create-mcp-fixture",
+          name: "create MCP fixture",
+          kind: "action",
+          action: "adapter:spark-x-agent/mcp.create-fixture",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            name: "spark-x-mcp-fixture-${run.id}",
+          },
+          capture: { "mcp-resource-id": "$.mcpFixtureResourceId" },
+          resource: {
+            type: "spark-x-agent-mcp-fixture",
+            id: "${step.mcp-resource-id}",
+            cleanup: {
+              action: "adapter:spark-x-agent/mcp.cleanup-fixture",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                serverId: "${resource.id}",
+              },
+            },
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "cleanup-mcp-fixture",
+          name: "cleanup MCP fixture",
+          kind: "action",
+          action: "adapter:spark-x-agent/mcp.cleanup-fixture",
+          params: {
+            username: "${case.admin-username}",
+            password: "${case.admin-password}",
+            serverId: "${step.mcp-resource-id}",
+          },
+        },
+      ],
+    });
+    expect(
+      validateDefinition(fixtureDefinition, {
+        systemKey: "spark-x-agent",
+        moduleKey: "mcp",
+        environment: sparkEnvironment,
+      }),
+    ).toEqual({ valid: true, issues: [] });
+
+    const steps = fixtureDefinition.steps as readonly JsonObject[];
+    const create = steps[0] as JsonObject;
+    const invalid = {
+      ...fixtureDefinition,
+      steps: [
+        {
+          ...create,
+          capture: { "mcp-resource-id": "$.serverId" },
+          resource: {
+            ...(create.resource as JsonObject),
+            type: "spark-x-agent-conversation",
+            cleanup: {
+              action: "adapter:spark-x-agent/conversation.delete",
+              params: {
+                username: "${case.admin-username}",
+                password: "${case.admin-password}",
+                conversationId: "${resource.id}",
+              },
+            },
+          },
+        },
+      ],
+    } as JsonObject;
+    expect(
+      validateDefinition(invalid, {
+        systemKey: "spark-x-agent",
+        moduleKey: "mcp",
+        environment: sparkEnvironment,
+      }).issues.map((issue) => issue.code),
+    ).toEqual(
+      expect.arrayContaining([
+        "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
+        "ADAPTER_RESOURCE_ID_CAPTURE_REQUIRED",
       ]),
     );
   });

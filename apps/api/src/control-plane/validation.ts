@@ -43,10 +43,11 @@ const availableActions = new Set([
 ]);
 const availableCompensationActions = new Set([
   "http:request",
-  "adapter:spark-x-agent/conversation.delete",
-  "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
-  "adapter:spark-x-agent/knowledge-base.cleanup",
-  "adapter:spark-x-agent/automation.cleanup",
+  ...sparkXAgentActionCapabilities.flatMap((capability) =>
+    "cleanupAction" in capability && typeof capability.cleanupAction === "string"
+      ? [`adapter:spark-x-agent/${capability.cleanupAction}`]
+      : [],
+  ),
 ]);
 const availableAssertions = new Set(["status:equals"]);
 const sparkXAgentActionLevels = new Map<string, ActionLevel>(
@@ -64,6 +65,14 @@ interface AdapterInputSchemaProjection {
         type?: unknown;
         minimum?: unknown;
         maximum?: unknown;
+        minItems?: unknown;
+        maxItems?: unknown;
+        uniqueItems?: unknown;
+        items?: Readonly<{
+          type?: unknown;
+          minimum?: unknown;
+          maximum?: unknown;
+        }>;
       }>
     >
   >;
@@ -75,6 +84,77 @@ const sparkXAgentActionInputSchemas = new Map<string, AdapterInputSchemaProjecti
     capability.inputSchema as AdapterInputSchemaProjection,
   ]),
 );
+const sparkXAgentResourceRequirements = new Map<
+  string,
+  Readonly<{
+    resourceType: string;
+    cleanupAction: string;
+    capturePath: string;
+    label: string;
+  }>
+>([
+  [
+    "adapter:spark-x-agent/conversation.create",
+    {
+      resourceType: "spark-x-agent-conversation",
+      cleanupAction: "adapter:spark-x-agent/conversation.delete",
+      capturePath: "$.conversationId",
+      label: "会话",
+    },
+  ],
+  ...[
+    "adapter:spark-x-agent/provider.create-transient-failure-fixture",
+    "adapter:spark-x-agent/provider.create-context-compaction-fixture",
+    "adapter:spark-x-agent/provider.create-skill-injection-fixture",
+  ].map(
+    (action) =>
+      [
+        action,
+        {
+          resourceType: "spark-x-agent-provider-fixture",
+          cleanupAction: "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+          capturePath: "$.providerFixtureResourceId",
+          label: "Provider 夹具",
+        },
+      ] as const,
+  ),
+  [
+    "adapter:spark-x-agent/knowledge-base.create",
+    {
+      resourceType: "spark-x-agent-knowledge-base",
+      cleanupAction: "adapter:spark-x-agent/knowledge-base.cleanup",
+      capturePath: "$.knowledgeBaseId",
+      label: "知识库",
+    },
+  ],
+  [
+    "adapter:spark-x-agent/skill.create-lifecycle-fixture",
+    {
+      resourceType: "spark-x-agent-skill-fixture",
+      cleanupAction: "adapter:spark-x-agent/skill.cleanup-lifecycle-fixture",
+      capturePath: "$.skillFixtureResourceId",
+      label: "Skill 夹具",
+    },
+  ],
+  [
+    "adapter:spark-x-agent/mcp.create-fixture",
+    {
+      resourceType: "spark-x-agent-mcp-fixture",
+      cleanupAction: "adapter:spark-x-agent/mcp.cleanup-fixture",
+      capturePath: "$.mcpFixtureResourceId",
+      label: "MCP 夹具",
+    },
+  ],
+  [
+    "adapter:spark-x-agent/automation.create",
+    {
+      resourceType: "spark-x-agent-automation",
+      cleanupAction: "adapter:spark-x-agent/automation.cleanup",
+      capturePath: "$.automationId",
+      label: "自动任务",
+    },
+  ],
+]);
 const waitJsonPathPattern = /^\$(?:\.[a-zA-Z0-9_-]+){0,20}$/;
 const waitOperators = new Set(["equals", "not-equals", "contains", "exists"]);
 const jsonPathPattern = /^\$(?:(?:\.[a-zA-Z0-9_-]+)|(?:\[(?:0|[1-9][0-9]{0,5})\])){0,20}$/;
@@ -362,6 +442,52 @@ function validateSparkXAgentAction(
       });
       continue;
     }
+    if (propertySchema.type === "array") {
+      const minimumItems =
+        typeof propertySchema.minItems === "number" && Number.isSafeInteger(propertySchema.minItems)
+          ? propertySchema.minItems
+          : 0;
+      const maximumItems =
+        typeof propertySchema.maxItems === "number" && Number.isSafeInteger(propertySchema.maxItems)
+          ? propertySchema.maxItems
+          : 100;
+      const itemSchema = propertySchema.items;
+      const itemMatches = (item: JsonValue): boolean => {
+        if (itemSchema?.type === "string") {
+          return typeof item === "string" && item.trim() !== "";
+        }
+        if (itemSchema?.type === "integer") {
+          const minimum = typeof itemSchema.minimum === "number" ? itemSchema.minimum : undefined;
+          const maximum = typeof itemSchema.maximum === "number" ? itemSchema.maximum : undefined;
+          return (
+            typeof item === "number" &&
+            Number.isInteger(item) &&
+            (minimum === undefined || item >= minimum) &&
+            (maximum === undefined || item <= maximum)
+          );
+        }
+        if (itemSchema?.type === "boolean") return typeof item === "boolean";
+        return false;
+      };
+      if (
+        isJsonArray(value) &&
+        value.length >= minimumItems &&
+        value.length <= maximumItems &&
+        value.every(itemMatches) &&
+        (propertySchema.uniqueItems !== true ||
+          new Set(value.map((item) => canonicalize(item))).size === value.length) &&
+        !sensitiveInputNamePattern.test(name)
+      ) {
+        continue;
+      }
+      issues.push({
+        severity: "error",
+        code: "ADAPTER_PARAMETER_INVALID",
+        path: `${path}.params.${name}`,
+        message: `星火 Agent 适配器参数 ${name} 必须是符合已注册元素类型、数量和唯一性约束的清单。`,
+      });
+      continue;
+    }
     issues.push({
       severity: "error",
       code: "ADAPTER_PARAMETER_INVALID",
@@ -383,60 +509,19 @@ function validateSparkXAgentAction(
       message: `${action} 至少需要 ${requiredLevel} 动作等级。`,
     });
   }
+  const resourceRequirement = sparkXAgentResourceRequirements.get(action);
   if (
-    action === "adapter:spark-x-agent/conversation.create" &&
+    resourceRequirement !== undefined &&
     (resource === undefined ||
+      resource.type !== resourceRequirement.resourceType ||
       !isObject(resource.cleanup) ||
-      resource.cleanup.action !== "adapter:spark-x-agent/conversation.delete")
+      resource.cleanup.action !== resourceRequirement.cleanupAction)
   ) {
     issues.push({
       severity: "error",
       code: "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
       path: `${path}.resource`,
-      message: "创建星火 Agent 会话必须登记资源并声明适配器删除补偿。",
-    });
-  }
-  if (
-    action === "adapter:spark-x-agent/knowledge-base.create" &&
-    (resource === undefined ||
-      resource.type !== "spark-x-agent-knowledge-base" ||
-      !isObject(resource.cleanup) ||
-      resource.cleanup.action !== "adapter:spark-x-agent/knowledge-base.cleanup")
-  ) {
-    issues.push({
-      severity: "error",
-      code: "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
-      path: `${path}.resource`,
-      message: "创建星火 Agent 知识库必须登记专用资源并声明统一知识库补偿。",
-    });
-  }
-  if (
-    action === "adapter:spark-x-agent/automation.create" &&
-    (resource === undefined ||
-      resource.type !== "spark-x-agent-automation" ||
-      !isObject(resource.cleanup) ||
-      resource.cleanup.action !== "adapter:spark-x-agent/automation.cleanup")
-  ) {
-    issues.push({
-      severity: "error",
-      code: "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
-      path: `${path}.resource`,
-      message: "创建星火 Agent 自动任务必须登记专用资源并声明版本化任务补偿。",
-    });
-  }
-  if (
-    action === "adapter:spark-x-agent/provider.create-transient-failure-fixture" &&
-    (resource === undefined ||
-      resource.type !== "spark-x-agent-provider-fixture" ||
-      !isObject(resource.cleanup) ||
-      resource.cleanup.action !==
-        "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture")
-  ) {
-    issues.push({
-      severity: "error",
-      code: "ADAPTER_RESOURCE_REGISTRATION_REQUIRED",
-      path: `${path}.resource`,
-      message: "创建短暂 Provider 故障夹具必须登记专用资源并声明恢复补偿。",
+      message: `创建星火 Agent ${resourceRequirement.label}必须登记专用资源并声明已注册补偿。`,
     });
   }
   if (
@@ -868,38 +953,26 @@ function validateStepSemantics(definition: JsonObject): ValidationIssue[] {
       }
     }
 
-    if (
-      step.action === "adapter:spark-x-agent/knowledge-base.create" ||
-      step.action === "adapter:spark-x-agent/automation.create" ||
-      step.action === "adapter:spark-x-agent/provider.create-transient-failure-fixture"
-    ) {
+    const resourceRequirement =
+      typeof step.action === "string"
+        ? sparkXAgentResourceRequirements.get(step.action)
+        : undefined;
+    if (resourceRequirement !== undefined) {
       const resource = isObject(step.resource) ? step.resource : undefined;
       const resourceReference =
         typeof resource?.id === "string"
           ? /^\$\{step\.([a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*)\}$/i.exec(resource.id)
           : null;
       const capture = isObject(step.capture) ? step.capture : undefined;
-      const expectedCapturePath =
-        step.action === "adapter:spark-x-agent/knowledge-base.create"
-          ? "$.knowledgeBaseId"
-          : step.action === "adapter:spark-x-agent/automation.create"
-            ? "$.automationId"
-            : "$.providerFixtureResourceId";
-      const resourceName =
-        step.action === "adapter:spark-x-agent/knowledge-base.create"
-          ? "知识库"
-          : step.action === "adapter:spark-x-agent/automation.create"
-            ? "自动任务"
-            : "Provider 故障夹具";
       if (
         resourceReference?.[1] === undefined ||
-        capture?.[resourceReference[1]] !== expectedCapturePath
+        capture?.[resourceReference[1]] !== resourceRequirement.capturePath
       ) {
         issues.push({
           severity: "error",
           code: "ADAPTER_RESOURCE_ID_CAPTURE_REQUIRED",
           path: `$.steps.${id}.resource.id`,
-          message: `${resourceName}资源 ID 必须精确引用该创建步骤从 ${expectedCapturePath} 捕获的变量。`,
+          message: `${resourceRequirement.label}资源 ID 必须精确引用该创建步骤从 ${resourceRequirement.capturePath} 捕获的变量。`,
         });
       }
     }
