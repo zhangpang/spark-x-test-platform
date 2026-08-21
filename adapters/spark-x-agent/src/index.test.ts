@@ -30,7 +30,10 @@ const environment: HttpExecutionEnvironment = {
       protocol: "http",
       host: "192.168.110.136",
       ports: [9],
-      pathPrefixes: ["/spark-x-test-platform-provider-fault"],
+      pathPrefixes: [
+        "/spark-x-test-platform-provider-fault",
+        "/spark-x-test-platform-mcp-unavailable",
+      ],
     },
     {
       protocol: "http",
@@ -39,6 +42,7 @@ const environment: HttpExecutionEnvironment = {
       pathPrefixes: [
         "/api/v1/fixtures/openai/context-compaction",
         "/api/v1/fixtures/openai/skill-injection",
+        "/api/v1/fixtures/mcp/read-only",
       ],
     },
   ],
@@ -82,6 +86,8 @@ const forbiddenKnowledgeDocumentId = "00000000-0000-4000-8000-00000000021c";
 const knowledgeRetrievalId = "00000000-0000-4000-8000-00000000021d";
 const skillId = "00000000-0000-4000-8000-000000000213";
 const lifecycleSkillId = "00000000-0000-4000-8000-00000000023a";
+const mcpFixtureServerId = "00000000-0000-4000-8000-00000000023b";
+const mcpFixtureToolId = "00000000-0000-4000-8000-00000000023c";
 const automationId = "00000000-0000-4000-8000-000000000214";
 const automationMarker = `spark-x-auto-${variables["run.id"]}`;
 const automationName = automationMarker;
@@ -90,6 +96,10 @@ const skillPrompt = "Produce the trusted daily trade and port brief without expo
 const skillPromptSha256 = createHash("sha256").update(skillPrompt).digest("hex");
 const lifecycleSkillName = `spark-x-skill-lifecycle-${variables["run.id"]}`;
 const lifecycleSkillPrompt = `SKILL004_PROMPT:${variables["run.id"]}`;
+const mcpFixtureName = `spark-x-mcp-fixture-${variables["run.id"]}`;
+const mcpFixtureV1Address = "http://192.168.110.136:4173/api/v1/fixtures/mcp/read-only/v1";
+const mcpFixtureV2Address = "http://192.168.110.136:4173/api/v1/fixtures/mcp/read-only/v2";
+const mcpFixtureFaultAddress = "http://192.168.110.136:9/spark-x-test-platform-mcp-unavailable";
 
 function trustedSkillProjection(
   prompt = skillPrompt,
@@ -167,6 +177,146 @@ function emptyConversationDetail(): Readonly<Record<string, unknown>> {
       messages: [],
       message_count: 0,
     },
+  };
+}
+
+function mcpFixtureSchema(version: "v1" | "v2"): Readonly<Record<string, unknown>> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["reference", "limit"],
+    properties: {
+      reference: { type: "string", pattern: "^MCP-FIXTURE:[0-9a-f-]{36}$" },
+      limit: { type: "integer", minimum: 1, maximum: 1 },
+      ...(version === "v1"
+        ? {}
+        : { revision_hint: { type: "string", const: "v2", default: "v2" } }),
+    },
+  };
+}
+
+function mcpFixtureServerProjection(
+  variant: "v1" | "v2" | "fault" = "v1",
+  status: "stopped" | "running" | "error" = "stopped",
+  enabled = true,
+  toolsCount = status === "running" ? 1 : 0,
+  startedAt: string | null = status === "running" ? "2026-08-21T06:00:00.000001Z" : null,
+): Readonly<Record<string, unknown>> {
+  const address =
+    variant === "v1"
+      ? mcpFixtureV1Address
+      : variant === "v2"
+        ? mcpFixtureV2Address
+        : mcpFixtureFaultAddress;
+  return {
+    id: mcpFixtureServerId,
+    name: mcpFixtureName,
+    display_name: `Spark X MCP Fixture ${variables["run.id"]}`,
+    description: "Spark X Test Platform deterministic MCP lifecycle fixture",
+    command: "",
+    args: [],
+    env: {
+      Authorization: "***",
+      HEADER_X_SPARK_X_RUN_ID: variables["run.id"],
+    },
+    transport: "streamable_http",
+    address,
+    cwd: null,
+    filesystem_path: null,
+    capabilities: ["tools"],
+    auto_start: false,
+    is_enabled: enabled,
+    is_builtin: false,
+    status,
+    tools_count: toolsCount,
+    started_at: startedAt,
+    last_error: status === "error" ? "connection refused at fixed fixture target" : null,
+  };
+}
+
+function mcpFixtureToolProjection(version: "v1" | "v2" = "v1"): Readonly<Record<string, unknown>> {
+  return {
+    id: mcpFixtureToolId,
+    server_id: mcpFixtureServerId,
+    name: "lookup_fixture",
+    description:
+      version === "v1"
+        ? "Read one deterministic fixture record (revision one)."
+        : "Read one deterministic fixture record (revision two).",
+    input_schema: mcpFixtureSchema(version),
+    annotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+    is_enabled: true,
+    is_discovered: true,
+    risk_level: "low",
+    action_type: "read",
+    is_write: false,
+    requires_review: false,
+  };
+}
+
+function mcpStructuredResult(version: "v1" | "v2"): Readonly<Record<string, unknown>> {
+  return {
+    success: true,
+    fixture_version: version,
+    reference: `MCP-FIXTURE:${variables["run.id"]}`,
+    record_count: 1,
+    record: { status: "stable", revision: version === "v1" ? 1 : 2 },
+  };
+}
+
+function mcpInvocationResponse(version: "v1" | "v2"): Response {
+  const structuredContent = mcpStructuredResult(version);
+  return jsonResponse({
+    success: true,
+    data: {
+      qualified_name: `${mcpFixtureName}__lookup_fixture`,
+      result: {
+        success: true,
+        content: JSON.stringify(structuredContent),
+        structuredContent,
+        raw: {
+          content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+          structuredContent,
+          isError: false,
+        },
+      },
+    },
+  });
+}
+
+function mcpAdminList(
+  items: readonly Readonly<Record<string, unknown>>[],
+): Readonly<Record<string, unknown>> {
+  return { success: true, data: { items } };
+}
+
+function mcpUserList(
+  items: readonly Readonly<Record<string, unknown>>[],
+): Readonly<Record<string, unknown>> {
+  return { success: true, data: { items } };
+}
+
+function mcpUserProjection(
+  status: "running" | "error" | "stopped" = "running",
+  toolsCount = status === "running" ? 1 : 0,
+): Readonly<Record<string, unknown>> {
+  return {
+    id: mcpFixtureServerId,
+    name: mcpFixtureName,
+    display_name: `Spark X MCP Fixture ${variables["run.id"]}`,
+    description: "Spark X Test Platform deterministic MCP lifecycle fixture",
+    transport: "streamable_http",
+    capabilities: ["tools"],
+    is_enabled: true,
+    status,
+    tools_count: toolsCount,
+    started_at: status === "running" ? "2026-08-21T06:00:00.000001Z" : null,
+    updated_at: "2026-08-21T06:00:00.000001Z",
   };
 }
 
@@ -313,7 +463,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.24.0",
+      version: "0.25.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -474,6 +624,30 @@ describe("spark-x-agent adapter", () => {
           }),
           expect.objectContaining({
             key: "skill.cleanup-lifecycle-fixture",
+            actionLevel: "dangerous",
+          }),
+          expect.objectContaining({
+            key: "mcp.create-fixture",
+            producesResource: true,
+            cleanupAction: "mcp.cleanup-fixture",
+          }),
+          expect.objectContaining({
+            key: "mcp.assert-invocation",
+            actionLevel: "dangerous",
+            producesResource: false,
+          }),
+          expect.objectContaining({
+            key: "mcp.assert-reconnect",
+            actionLevel: "dangerous",
+            producesResource: false,
+          }),
+          expect.objectContaining({
+            key: "mcp.assert-disconnect-disable-delete",
+            actionLevel: "dangerous",
+            producesResource: false,
+          }),
+          expect.objectContaining({
+            key: "mcp.cleanup-fixture",
             actionLevel: "dangerous",
           }),
           expect.objectContaining({
@@ -6530,6 +6704,410 @@ describe("spark-x-agent adapter", () => {
       },
     });
     expect(fetcher).toHaveBeenCalledTimes(7);
+  });
+
+  it("creates only a run-bound fixed-address MCP fixture with masked credential projection", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse(mcpAdminList([])))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: mcpFixtureServerProjection() }))
+      .mockResolvedValueOnce(jsonResponse(mcpAdminList([mcpFixtureServerProjection()])));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/mcp.create-fixture",
+      environment,
+      { ...credentials, name: "spark-x-mcp-fixture-${run.id}" },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      mcpFixtureResourceId: mcpFixtureServerId,
+      serverId: mcpFixtureServerId,
+      serverNameSha256: createHash("sha256").update(mcpFixtureName).digest("hex"),
+      addressSha256: createHash("sha256").update(mcpFixtureV1Address).digest("hex"),
+      created: true,
+      enabled: true,
+      builtin: false,
+      stopped: true,
+      fixedTargetAllowed: true,
+      credentialProjectionMasked: true,
+      adminCatalogOccurrences: 1,
+    });
+    const createBody = fetcher.mock.calls[2]?.[1]?.body;
+    expect(typeof createBody).toBe("string");
+    if (typeof createBody !== "string") throw new Error("expected MCP fixture create body");
+    expect(JSON.parse(createBody)).toEqual({
+      name: mcpFixtureName,
+      display_name: `Spark X MCP Fixture ${variables["run.id"]}`,
+      description: "Spark X Test Platform deterministic MCP lifecycle fixture",
+      command: "",
+      args: [],
+      env: {
+        Authorization: "Bearer spark-x-test-platform-noncredential-mcp-fixture",
+        HEADER_X_SPARK_X_RUN_ID: variables["run.id"],
+      },
+      transport: "streamable_http",
+      address: mcpFixtureV1Address,
+      capabilities: ["tools"],
+      auto_start: false,
+      is_enabled: true,
+    });
+    const evidence = JSON.stringify(output);
+    expect(evidence).not.toContain(mcpFixtureName);
+    expect(evidence).not.toContain(mcpFixtureV1Address);
+    expect(evidence).not.toContain("noncredential-mcp-fixture");
+    expect(evidence).not.toContain("memory-only-access-token-value");
+    expect(evidence).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("starts the MCP fixture and executes one governed read-only call with exact parameters", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: mcpFixtureServerProjection() }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "服务已启动" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: mcpFixtureServerProjection("v1", "running"),
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { items: [mcpFixtureToolProjection()] } }),
+      )
+      .mockResolvedValueOnce(jsonResponse(mcpUserList([mcpUserProjection()])))
+      .mockResolvedValueOnce(mcpInvocationResponse("v1"));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/mcp.assert-invocation",
+      environment,
+      { ...credentials, serverId: mcpFixtureServerId },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    const argumentsValue = {
+      reference: `MCP-FIXTURE:${variables["run.id"]}`,
+      limit: 1,
+    };
+    expect(output).toEqual({
+      serverId: mcpFixtureServerId,
+      toolId: mcpFixtureToolId,
+      serverNameSha256: createHash("sha256").update(mcpFixtureName).digest("hex"),
+      qualifiedNameSha256: createHash("sha256")
+        .update(`${mcpFixtureName}__lookup_fixture`)
+        .digest("hex"),
+      inputSchemaSha256: hashCanonical(mcpFixtureSchema("v1")),
+      argumentsSha256: hashCanonical(argumentsValue),
+      resultSha256: hashCanonical(mcpStructuredResult("v1")),
+      running: true,
+      userProjectionMatched: true,
+      credentialFieldsAbsent: true,
+      toolGovernanceMatched: true,
+      invoked: true,
+      recordCount: 1,
+      revision: 1,
+    });
+    const invokeBody = fetcher.mock.calls[6]?.[1]?.body;
+    expect(typeof invokeBody).toBe("string");
+    if (typeof invokeBody !== "string") throw new Error("expected MCP invoke body");
+    expect(JSON.parse(invokeBody)).toEqual({
+      tool_id: mcpFixtureToolId,
+      parameters: argumentsValue,
+    });
+    const evidence = JSON.stringify(output);
+    expect(evidence).not.toContain(`MCP-FIXTURE:${variables["run.id"]}`);
+    expect(evidence).not.toContain("lookup_fixture");
+  });
+
+  it("keeps v1 active until restart then refreshes the same tool identity and v2 result", async () => {
+    const firstStartedAt = "2026-08-21T06:00:00.000001Z";
+    const secondStartedAt = "2026-08-21T06:00:01.000001Z";
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: mcpFixtureServerProjection() }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "服务已启动" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: mcpFixtureServerProjection("v1", "running", true, 1, firstStartedAt),
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { items: [mcpFixtureToolProjection("v1")] } }),
+      )
+      .mockResolvedValueOnce(mcpInvocationResponse("v1"))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: mcpFixtureServerProjection("v2", "running", true, 1, firstStartedAt),
+          needs_restart: true,
+        }),
+      )
+      .mockResolvedValueOnce(mcpInvocationResponse("v1"))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "服务已重启" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: mcpFixtureServerProjection("v2", "running", true, 1, secondStartedAt),
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { items: [mcpFixtureToolProjection("v2")] } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { items: [mcpFixtureToolProjection("v2")] } }),
+      )
+      .mockResolvedValueOnce(mcpInvocationResponse("v2"));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/mcp.assert-reconnect",
+      environment,
+      { ...credentials, serverId: mcpFixtureServerId },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      serverId: mcpFixtureServerId,
+      toolId: mcpFixtureToolId,
+      serverNameSha256: createHash("sha256").update(mcpFixtureName).digest("hex"),
+      v1AddressSha256: createHash("sha256").update(mcpFixtureV1Address).digest("hex"),
+      v2AddressSha256: createHash("sha256").update(mcpFixtureV2Address).digest("hex"),
+      v1SchemaSha256: hashCanonical(mcpFixtureSchema("v1")),
+      v2SchemaSha256: hashCanonical(mcpFixtureSchema("v2")),
+      v1ResultSha256: hashCanonical(mcpStructuredResult("v1")),
+      v2ResultSha256: hashCanonical(mcpStructuredResult("v2")),
+      needsRestart: true,
+      oldConnectionUsedBeforeRestart: true,
+      restarted: true,
+      startedAtChanged: true,
+      toolIdentityStable: true,
+      descriptorChanged: true,
+      cacheRefreshed: true,
+    });
+    const updateBody = fetcher.mock.calls[6]?.[1]?.body;
+    expect(typeof updateBody).toBe("string");
+    if (typeof updateBody !== "string") throw new Error("expected MCP update body");
+    expect(JSON.parse(updateBody)).toMatchObject({
+      name: mcpFixtureName,
+      address: mcpFixtureV2Address,
+      is_enabled: true,
+    });
+  });
+
+  it("preserves the disconnect failure then disables, denies and deletes the connector", async () => {
+    const disconnectBody = { success: false, error: "连接测试失败: fixed target unavailable" };
+    const disabledBody = { success: false, error: "工具已禁用、撤权或未登记" };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: mcpFixtureServerProjection() }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "服务已启动" }))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { items: [mcpFixtureToolProjection()] } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: mcpFixtureServerProjection("fault", "running"),
+          needs_restart: true,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(disconnectBody, 400))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: mcpFixtureServerProjection("fault", "error", true, 0, null),
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: mcpFixtureServerProjection("fault", "stopped", false, 0, null),
+          needs_restart: false,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(mcpUserList([])))
+      .mockResolvedValueOnce(jsonResponse(disabledBody, 400))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "服务已删除" }))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "服务不存在" }, 404))
+      .mockResolvedValueOnce(jsonResponse(mcpAdminList([])))
+      .mockResolvedValueOnce(jsonResponse(mcpUserList([])));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/mcp.assert-disconnect-disable-delete",
+      environment,
+      { ...credentials, serverId: mcpFixtureServerId },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      serverId: mcpFixtureServerId,
+      toolId: mcpFixtureToolId,
+      serverNameSha256: createHash("sha256").update(mcpFixtureName).digest("hex"),
+      disconnectErrorSha256: hashCanonical(disconnectBody),
+      disabledInvocationErrorSha256: hashCanonical(disabledBody),
+      disconnectFailureVisible: true,
+      errorStateMatched: true,
+      runtimeToolsUnavailable: true,
+      disabled: true,
+      disabledUserCatalogOccurrences: 0,
+      disabledInvocationDenied: true,
+      deleted: true,
+      deletedAdminDetailAbsent: true,
+      deletedAdminCatalogOccurrences: 0,
+      deletedUserCatalogOccurrences: 0,
+    });
+    expect(fetcher.mock.calls[4]?.[1]?.method).toBe("PUT");
+    expect(fetcher.mock.calls[5]?.[1]?.method).toBe("POST");
+    expect(fetcher.mock.calls[7]?.[1]?.method).toBe("PUT");
+    expect(fetcher.mock.calls[10]?.[1]?.method).toBe("DELETE");
+    const evidence = JSON.stringify(output);
+    expect(evidence).not.toContain("fixed target unavailable");
+    expect(evidence).not.toContain("已禁用");
+  });
+
+  it("preserves an unexpectedly successful disconnect probe as the first product failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: mcpFixtureServerProjection() }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "服务已启动" }))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { items: [mcpFixtureToolProjection()] } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: mcpFixtureServerProjection("fault", "running"),
+          needs_restart: true,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "unexpected restart" }));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/mcp.assert-disconnect-disable-delete",
+        environment,
+        { ...credentials, serverId: mcpFixtureServerId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_MCP_DISCONNECT_NOT_VISIBLE",
+        classification: "product_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(6);
+  });
+
+  it("cleans only an existing run-owned MCP fixture and verifies no catalog residue", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: mcpFixtureServerProjection("v2", "running"),
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "服务已停止" }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "服务已删除" }))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "服务不存在" }, 404))
+      .mockResolvedValueOnce(jsonResponse(mcpAdminList([])));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/mcp.cleanup-fixture",
+        environment,
+        { ...credentials, serverId: mcpFixtureServerId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).resolves.toEqual({
+      serverId: mcpFixtureServerId,
+      serverNameSha256: createHash("sha256").update(mcpFixtureName).digest("hex"),
+      stopped: true,
+      deleted: true,
+      alreadyMissing: false,
+      adminDetailAbsent: true,
+      adminCatalogOccurrences: 0,
+    });
+  });
+
+  it("keeps MCP cleanup idempotent after the main action already deleted the connector", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "服务不存在" }, 404))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: "服务不存在" }, 404))
+      .mockResolvedValueOnce(jsonResponse(mcpAdminList([])));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/mcp.cleanup-fixture",
+      environment,
+      { ...credentials, serverId: mcpFixtureServerId },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toMatchObject({
+      serverId: mcpFixtureServerId,
+      stopped: true,
+      deleted: true,
+      alreadyMissing: true,
+      adminDetailAbsent: true,
+      adminCatalogOccurrences: 0,
+    });
+    expect(fetcher.mock.calls.some((call) => call[1]?.method === "DELETE")).toBe(false);
+  });
+
+  it("rejects a foreign MCP server before issuing any lifecycle mutation", async () => {
+    const foreign = { ...mcpFixtureServerProjection(), name: "foreign-connector" };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: foreign }));
+
+    await expect(
+      executeSparkXAgentAction(
+        "adapter:spark-x-agent/mcp.assert-reconnect",
+        environment,
+        { ...credentials, serverId: mcpFixtureServerId },
+        variables,
+        { timeoutMs: 5_000, fetcher },
+      ),
+    ).rejects.toMatchObject({
+      failure: {
+        code: "SPARK_X_AGENT_MCP_BASELINE_INVALID",
+        classification: "product_failed",
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls.some((call) => call[1]?.method === "POST")).toBe(true);
+    expect(fetcher.mock.calls.slice(1).some((call) => call[1]?.method === "POST")).toBe(false);
   });
 
   it("classifies a missing trusted Skill as an environment failure", async () => {

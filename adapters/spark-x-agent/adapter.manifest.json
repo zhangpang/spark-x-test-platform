@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -4392,6 +4392,490 @@
               "type": "string",
               "minLength": 64,
               "maxLength": 64
+            },
+            "deleted": {
+              "const": true
+            },
+            "alreadyMissing": {
+              "type": "boolean"
+            },
+            "adminDetailAbsent": {
+              "const": true
+            },
+            "adminCatalogOccurrences": {
+              "const": 0
+            }
+          }
+        }
+      },
+      {
+        "key": "mcp.create-fixture",
+        "name": "创建 MCP 确定性夹具连接器",
+        "description": "只创建名称绑定当前 run_id、固定同主机 Streamable HTTP 地址且可完整删除的只读连接器。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 30000,
+        "producesResource": true,
+        "cleanupAction": "mcp.cleanup-fixture",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "name"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mcpFixtureResourceId",
+            "serverId",
+            "serverNameSha256",
+            "addressSha256",
+            "created",
+            "enabled",
+            "builtin",
+            "stopped",
+            "fixedTargetAllowed",
+            "credentialProjectionMasked",
+            "adminCatalogOccurrences"
+          ],
+          "properties": {
+            "mcpFixtureResourceId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "serverId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "serverNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "addressSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "created": {
+              "const": true
+            },
+            "enabled": {
+              "const": true
+            },
+            "builtin": {
+              "const": false
+            },
+            "stopped": {
+              "const": true
+            },
+            "fixedTargetAllowed": {
+              "const": true
+            },
+            "credentialProjectionMasked": {
+              "const": true
+            },
+            "adminCatalogOccurrences": {
+              "const": 1
+            }
+          }
+        }
+      },
+      {
+        "key": "mcp.assert-invocation",
+        "name": "校验 MCP 参数与实际调用",
+        "description": "启动已登记只读夹具，核对用户/管理员目录和正式治理后，通过管理诊断入口执行一次固定参数调用。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 90000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "serverId"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "serverId": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "serverId",
+            "toolId",
+            "serverNameSha256",
+            "qualifiedNameSha256",
+            "inputSchemaSha256",
+            "argumentsSha256",
+            "resultSha256",
+            "running",
+            "userProjectionMatched",
+            "credentialFieldsAbsent",
+            "toolGovernanceMatched",
+            "invoked",
+            "recordCount",
+            "revision"
+          ],
+          "properties": {
+            "serverId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "toolId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "serverNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "qualifiedNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "inputSchemaSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "argumentsSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "resultSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "running": {
+              "const": true
+            },
+            "userProjectionMatched": {
+              "const": true
+            },
+            "credentialFieldsAbsent": {
+              "const": true
+            },
+            "toolGovernanceMatched": {
+              "const": true
+            },
+            "invoked": {
+              "const": true
+            },
+            "recordCount": {
+              "const": 1
+            },
+            "revision": {
+              "const": 1
+            }
+          }
+        }
+      },
+      {
+        "key": "mcp.assert-reconnect",
+        "name": "校验 MCP 配置修改、重连与缓存刷新",
+        "description": "证明运行中配置修改在重启前仍使用旧连接，重启后切换固定 v2 地址并刷新同一工具的描述符与结果。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 120000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "serverId"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "serverId": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "serverId",
+            "toolId",
+            "serverNameSha256",
+            "v1AddressSha256",
+            "v2AddressSha256",
+            "v1SchemaSha256",
+            "v2SchemaSha256",
+            "v1ResultSha256",
+            "v2ResultSha256",
+            "needsRestart",
+            "oldConnectionUsedBeforeRestart",
+            "restarted",
+            "startedAtChanged",
+            "toolIdentityStable",
+            "descriptorChanged",
+            "cacheRefreshed"
+          ],
+          "properties": {
+            "serverId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "toolId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "serverNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "v1AddressSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "v2AddressSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "v1SchemaSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "v2SchemaSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "v1ResultSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "v2ResultSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "needsRestart": {
+              "const": true
+            },
+            "oldConnectionUsedBeforeRestart": {
+              "const": true
+            },
+            "restarted": {
+              "const": true
+            },
+            "startedAtChanged": {
+              "const": true
+            },
+            "toolIdentityStable": {
+              "const": true
+            },
+            "descriptorChanged": {
+              "const": true
+            },
+            "cacheRefreshed": {
+              "const": true
+            }
+          }
+        }
+      },
+      {
+        "key": "mcp.assert-disconnect-disable-delete",
+        "name": "校验 MCP 断线、停用与删除",
+        "description": "切换到固定同主机不可达目标，保留首次断线错误，再停用并证明不可见、不可调用，最后删除且无残留。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 120000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "serverId"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "serverId": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "serverId",
+            "toolId",
+            "serverNameSha256",
+            "disconnectErrorSha256",
+            "disabledInvocationErrorSha256",
+            "disconnectFailureVisible",
+            "errorStateMatched",
+            "runtimeToolsUnavailable",
+            "disabled",
+            "disabledUserCatalogOccurrences",
+            "disabledInvocationDenied",
+            "deleted",
+            "deletedAdminDetailAbsent",
+            "deletedAdminCatalogOccurrences",
+            "deletedUserCatalogOccurrences"
+          ],
+          "properties": {
+            "serverId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "toolId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "serverNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "disconnectErrorSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "disabledInvocationErrorSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "disconnectFailureVisible": {
+              "const": true
+            },
+            "errorStateMatched": {
+              "const": true
+            },
+            "runtimeToolsUnavailable": {
+              "const": true
+            },
+            "disabled": {
+              "const": true
+            },
+            "disabledUserCatalogOccurrences": {
+              "const": 0
+            },
+            "disabledInvocationDenied": {
+              "const": true
+            },
+            "deleted": {
+              "const": true
+            },
+            "deletedAdminDetailAbsent": {
+              "const": true
+            },
+            "deletedAdminCatalogOccurrences": {
+              "const": 0
+            },
+            "deletedUserCatalogOccurrences": {
+              "const": 0
+            }
+          }
+        }
+      },
+      {
+        "key": "mcp.cleanup-fixture",
+        "name": "清理 MCP 确定性夹具",
+        "description": "只停止并删除名称严格绑定当前 run_id、地址属于固定 v1/v2/不可达集合的非内置连接器，重放幂等成功。",
+        "actionLevel": "dangerous",
+        "defaultTimeoutMs": 30000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password", "serverId"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "serverId": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "serverId",
+            "serverNameSha256",
+            "stopped",
+            "deleted",
+            "alreadyMissing",
+            "adminDetailAbsent",
+            "adminCatalogOccurrences"
+          ],
+          "properties": {
+            "serverId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "serverNameSha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "stopped": {
+              "const": true
             },
             "deleted": {
               "const": true

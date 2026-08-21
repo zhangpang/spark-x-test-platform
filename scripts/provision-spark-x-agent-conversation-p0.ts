@@ -85,6 +85,7 @@ const runSkillSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_SMOKE === "true";
 const runSkillInjectionSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_INJECTION_SMOKE === "true";
 const runSkillLifecycleSmoke = process.env.SPARK_X_AGENT_RUN_SKILL_LIFECYCLE_SMOKE === "true";
 const runMcpSmoke = process.env.SPARK_X_AGENT_RUN_MCP_SMOKE === "true";
+const runMcpFixtureSmoke = process.env.SPARK_X_AGENT_RUN_MCP_FIXTURE_SMOKE === "true";
 const expectMcpUnavailable = process.env.SPARK_X_AGENT_EXPECT_MCP_UNAVAILABLE === "true";
 const runAutomationSmoke = process.env.SPARK_X_AGENT_RUN_AUTOMATION_SMOKE === "true";
 const useExistingSecrets = process.env.SPARK_X_AGENT_USE_EXISTING_SECRETS === "true";
@@ -226,7 +227,10 @@ async function ensureEnvironment(systemId: string): Promise<EnvironmentRecord> {
         protocol: "http",
         host: "192.168.110.136",
         ports: [9],
-        pathPrefixes: ["/spark-x-test-platform-provider-fault"],
+        pathPrefixes: [
+          "/spark-x-test-platform-provider-fault",
+          "/spark-x-test-platform-mcp-unavailable",
+        ],
       },
       {
         protocol: "http",
@@ -235,6 +239,7 @@ async function ensureEnvironment(systemId: string): Promise<EnvironmentRecord> {
         pathPrefixes: [
           "/api/v1/fixtures/openai/context-compaction",
           "/api/v1/fixtures/openai/skill-injection",
+          "/api/v1/fixtures/mcp/read-only",
         ],
       },
     ],
@@ -3368,6 +3373,147 @@ function mcpConnectorDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function mcpFixtureDefinition(
+  caseId: "MCP-002" | "MCP-003" | "MCP-004",
+  name: string,
+  description: string,
+  priority: "P0" | "P1",
+  assertionAction:
+    | "adapter:spark-x-agent/mcp.assert-invocation"
+    | "adapter:spark-x-agent/mcp.assert-reconnect"
+    | "adapter:spark-x-agent/mcp.assert-disconnect-disable-delete",
+): Readonly<Record<string, unknown>> {
+  const stepPrefix = caseId.toLowerCase().replace("-", "");
+  return {
+    schemaVersion: "1.0",
+    kind: "automated",
+    metadata: {
+      name: `${caseId} ${name}`,
+      description,
+      systemKey: "spark-x-agent",
+      moduleKey: "mcp",
+      priority,
+      classification: "blackbox",
+      actionLevel: "dangerous",
+      owner: "spark-x-test-platform",
+      tags: [
+        "adapter",
+        "mcp",
+        priority.toLowerCase(),
+        "full-regression",
+        "streamable-http",
+        "fixed-fixture",
+        "cleanup",
+      ],
+    },
+    inputs: [
+      {
+        name: "admin-username",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员用户名",
+        secretRef: "spark-x-agent-admin-username",
+      },
+      {
+        name: "admin-password",
+        type: "string",
+        required: true,
+        description: "星火 Agent 测试管理员密码",
+        secretRef: "spark-x-agent-admin-password",
+      },
+    ],
+    execution: {
+      stepTimeoutMs: 120_000,
+      caseTimeoutMs: 240_000,
+      diagnosticRetries: 0,
+    },
+    resourceLocks: ["spark-x-agent:admin:mcp-catalog"],
+    steps: [
+      {
+        id: `create-${stepPrefix}-fixture`,
+        name: `创建并登记 ${caseId} 固定 MCP 夹具`,
+        kind: "action",
+        action: "adapter:spark-x-agent/mcp.create-fixture",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          name: "spark-x-mcp-fixture-${run.id}",
+        },
+        capture: { [`${stepPrefix}-mcp-resource-id`]: "$.mcpFixtureResourceId" },
+        resource: {
+          type: "spark-x-agent-mcp-fixture",
+          id: `\${step.${stepPrefix}-mcp-resource-id}`,
+          cleanup: {
+            action: "adapter:spark-x-agent/mcp.cleanup-fixture",
+            params: {
+              username: "${case.admin-username}",
+              password: "${case.admin-password}",
+              serverId: "${resource.id}",
+            },
+          },
+        },
+      },
+      {
+        id: `assert-${stepPrefix}`,
+        name: `${caseId} ${name}`,
+        kind: "action",
+        action: assertionAction,
+        timeoutMs: 120_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          serverId: `\${step.${stepPrefix}-mcp-resource-id}`,
+        },
+      },
+    ],
+    finally: [
+      {
+        id: `cleanup-${stepPrefix}-fixture`,
+        name: `幂等清理 ${caseId} MCP 夹具`,
+        kind: "action",
+        action: "adapter:spark-x-agent/mcp.cleanup-fixture",
+        timeoutMs: 30_000,
+        params: {
+          username: "${case.admin-username}",
+          password: "${case.admin-password}",
+          serverId: `\${step.${stepPrefix}-mcp-resource-id}`,
+        },
+      },
+    ],
+  };
+}
+
+function mcpInvocationDefinition(): Readonly<Record<string, unknown>> {
+  return mcpFixtureDefinition(
+    "MCP-002",
+    "MCP 工具参数与实际调用",
+    "创建固定 Streamable HTTP 只读连接器，验证唯一工具的参数层级、正式治理、实际结果映射、用户投影和完整清理。",
+    "P0",
+    "adapter:spark-x-agent/mcp.assert-invocation",
+  );
+}
+
+function mcpReconnectDefinition(): Readonly<Record<string, unknown>> {
+  return mcpFixtureDefinition(
+    "MCP-003",
+    "MCP 配置修改与重连",
+    "运行中从固定 v1 地址修改到 v2，证明重启前旧连接仍生效，重启后连接、描述符缓存和实际结果同步刷新。",
+    "P1",
+    "adapter:spark-x-agent/mcp.assert-reconnect",
+  );
+}
+
+function mcpLifecycleDefinition(): Readonly<Record<string, unknown>> {
+  return mcpFixtureDefinition(
+    "MCP-004",
+    "MCP 断线、停用与删除",
+    "切换到固定不可达同主机目标保留首次断线，随后停用并证明用户不可见、真实调用为零，最后删除且无残留。",
+    "P1",
+    "adapter:spark-x-agent/mcp.assert-disconnect-disable-delete",
+  );
+}
+
 function skillPublicationDefinition(): Readonly<Record<string, unknown>> {
   return {
     schemaVersion: "1.0",
@@ -5548,6 +5694,231 @@ function assertMcpEvidence(run: RunDetail): void {
   );
 }
 
+function assertMcpFixtureEvidence(
+  run: RunDetail,
+  stepPrefix: "mcp002" | "mcp003" | "mcp004",
+): void {
+  const create = run.steps.find((step) => step.stepId === `create-${stepPrefix}-fixture`);
+  const assertion = run.steps.find((step) => step.stepId === `assert-${stepPrefix}`);
+  const cleanup = run.steps.find((step) => step.stepId === `cleanup-${stepPrefix}-fixture`);
+  check(
+    create?.outputSummary !== null &&
+      create?.outputSummary !== undefined &&
+      assertion?.outputSummary !== null &&
+      assertion?.outputSummary !== undefined &&
+      cleanup?.outputSummary !== null &&
+      cleanup?.outputSummary !== undefined,
+    `${stepPrefix.toUpperCase()} structured MCP evidence is missing`,
+  );
+  const fixture = create.outputSummary;
+  const result = assertion.outputSummary;
+  const cleaned = cleanup.outputSummary;
+  check(
+    fixture.mcpFixtureResourceId === fixture.serverId &&
+      typeof fixture.serverId === "string" &&
+      fixture.created === true &&
+      fixture.enabled === true &&
+      fixture.builtin === false &&
+      fixture.stopped === true &&
+      fixture.fixedTargetAllowed === true &&
+      fixture.credentialProjectionMasked === true &&
+      fixture.adminCatalogOccurrences === 1 &&
+      [fixture.serverNameSha256, fixture.addressSha256].every(
+        (hash) => typeof hash === "string" && /^[0-9a-f]{64}$/u.test(hash),
+      ),
+    `${stepPrefix.toUpperCase()} MCP fixture creation evidence is incomplete`,
+  );
+  check(
+    Object.keys(fixture).sort().join(",") ===
+      [
+        "addressSha256",
+        "adminCatalogOccurrences",
+        "builtin",
+        "created",
+        "credentialProjectionMasked",
+        "enabled",
+        "fixedTargetAllowed",
+        "mcpFixtureResourceId",
+        "serverId",
+        "serverNameSha256",
+        "stopped",
+      ]
+        .sort()
+        .join(","),
+    `${stepPrefix.toUpperCase()} MCP fixture evidence contains unregistered fields`,
+  );
+  check(
+    cleaned.serverId === fixture.serverId &&
+      cleaned.serverNameSha256 === fixture.serverNameSha256 &&
+      cleaned.stopped === true &&
+      cleaned.deleted === true &&
+      cleaned.alreadyMissing === (stepPrefix === "mcp004") &&
+      cleaned.adminDetailAbsent === true &&
+      cleaned.adminCatalogOccurrences === 0,
+    `${stepPrefix.toUpperCase()} MCP cleanup evidence is incomplete`,
+  );
+  check(
+    Object.keys(cleaned).sort().join(",") ===
+      [
+        "adminCatalogOccurrences",
+        "adminDetailAbsent",
+        "alreadyMissing",
+        "deleted",
+        "serverId",
+        "serverNameSha256",
+        "stopped",
+      ]
+        .sort()
+        .join(","),
+    `${stepPrefix.toUpperCase()} MCP cleanup evidence contains unregistered fields`,
+  );
+  if (stepPrefix === "mcp002") {
+    check(
+      result.serverId === fixture.serverId &&
+        typeof result.toolId === "string" &&
+        result.serverNameSha256 === fixture.serverNameSha256 &&
+        result.running === true &&
+        result.userProjectionMatched === true &&
+        result.credentialFieldsAbsent === true &&
+        result.toolGovernanceMatched === true &&
+        result.invoked === true &&
+        result.recordCount === 1 &&
+        result.revision === 1 &&
+        [
+          result.qualifiedNameSha256,
+          result.inputSchemaSha256,
+          result.argumentsSha256,
+          result.resultSha256,
+        ].every((hash) => typeof hash === "string" && /^[0-9a-f]{64}$/u.test(hash)),
+      "MCP-002 parameter binding, governance or actual invocation evidence is incomplete",
+    );
+    check(
+      Object.keys(result).sort().join(",") ===
+        [
+          "argumentsSha256",
+          "credentialFieldsAbsent",
+          "inputSchemaSha256",
+          "invoked",
+          "qualifiedNameSha256",
+          "recordCount",
+          "resultSha256",
+          "revision",
+          "running",
+          "serverId",
+          "serverNameSha256",
+          "toolGovernanceMatched",
+          "toolId",
+          "userProjectionMatched",
+        ]
+          .sort()
+          .join(","),
+      "MCP-002 evidence contains unregistered fields",
+    );
+  } else if (stepPrefix === "mcp003") {
+    check(
+      result.serverId === fixture.serverId &&
+        typeof result.toolId === "string" &&
+        result.serverNameSha256 === fixture.serverNameSha256 &&
+        result.needsRestart === true &&
+        result.oldConnectionUsedBeforeRestart === true &&
+        result.restarted === true &&
+        result.startedAtChanged === true &&
+        result.toolIdentityStable === true &&
+        result.descriptorChanged === true &&
+        result.cacheRefreshed === true &&
+        [
+          result.v1AddressSha256,
+          result.v2AddressSha256,
+          result.v1SchemaSha256,
+          result.v2SchemaSha256,
+          result.v1ResultSha256,
+          result.v2ResultSha256,
+        ].every((hash) => typeof hash === "string" && /^[0-9a-f]{64}$/u.test(hash)) &&
+        result.v1AddressSha256 !== result.v2AddressSha256 &&
+        result.v1SchemaSha256 !== result.v2SchemaSha256 &&
+        result.v1ResultSha256 !== result.v2ResultSha256,
+      "MCP-003 old/new connection, descriptor or cache evidence is incomplete",
+    );
+    check(
+      Object.keys(result).sort().join(",") ===
+        [
+          "cacheRefreshed",
+          "descriptorChanged",
+          "needsRestart",
+          "oldConnectionUsedBeforeRestart",
+          "restarted",
+          "serverId",
+          "serverNameSha256",
+          "startedAtChanged",
+          "toolId",
+          "toolIdentityStable",
+          "v1AddressSha256",
+          "v1ResultSha256",
+          "v1SchemaSha256",
+          "v2AddressSha256",
+          "v2ResultSha256",
+          "v2SchemaSha256",
+        ]
+          .sort()
+          .join(","),
+      "MCP-003 evidence contains unregistered fields",
+    );
+  } else {
+    check(
+      result.serverId === fixture.serverId &&
+        typeof result.toolId === "string" &&
+        result.serverNameSha256 === fixture.serverNameSha256 &&
+        result.disconnectFailureVisible === true &&
+        result.errorStateMatched === true &&
+        result.runtimeToolsUnavailable === true &&
+        result.disabled === true &&
+        result.disabledUserCatalogOccurrences === 0 &&
+        result.disabledInvocationDenied === true &&
+        result.deleted === true &&
+        result.deletedAdminDetailAbsent === true &&
+        result.deletedAdminCatalogOccurrences === 0 &&
+        result.deletedUserCatalogOccurrences === 0 &&
+        [result.disconnectErrorSha256, result.disabledInvocationErrorSha256].every(
+          (hash) => typeof hash === "string" && /^[0-9a-f]{64}$/u.test(hash),
+        ),
+      "MCP-004 disconnect, disable, denial or deletion evidence is incomplete",
+    );
+    check(
+      Object.keys(result).sort().join(",") ===
+        [
+          "deleted",
+          "deletedAdminCatalogOccurrences",
+          "deletedAdminDetailAbsent",
+          "deletedUserCatalogOccurrences",
+          "disabled",
+          "disabledInvocationDenied",
+          "disabledInvocationErrorSha256",
+          "disabledUserCatalogOccurrences",
+          "disconnectErrorSha256",
+          "disconnectFailureVisible",
+          "errorStateMatched",
+          "runtimeToolsUnavailable",
+          "serverId",
+          "serverNameSha256",
+          "toolId",
+        ]
+          .sort()
+          .join(","),
+      "MCP-004 evidence contains unregistered fields",
+    );
+  }
+  const evidence = JSON.stringify({ create, assertion, cleanup });
+  check(
+    !evidence.includes("spark-x-mcp-fixture-") &&
+      !evidence.includes("lookup_fixture") &&
+      !evidence.includes("MCP-FIXTURE:") &&
+      !evidence.includes("fixtures/mcp/read-only") &&
+      !evidence.includes("spark-x-test-platform-mcp-unavailable") &&
+      !evidence.includes("noncredential-mcp-fixture"),
+    `${stepPrefix.toUpperCase()} MCP name, target, arguments or noncredential marker leaked`,
+  );
+}
+
 function assertSkillEvidence(run: RunDetail): void {
   const skill = run.steps.find(
     (step) => step.action === "adapter:spark-x-agent/skill.assert-trusted-publication",
@@ -7269,6 +7640,73 @@ async function executeMcpSmoke(
   return run;
 }
 
+async function executeMcpFixtureSmoke(
+  systemId: string,
+  environmentId: string,
+  suiteId: string,
+  password: string | undefined,
+): Promise<RunDetail> {
+  const accepted = await api<RunDetail>("/runs", {
+    method: "POST",
+    idempotencyKey: `spark-x-agent-mcp-fixture-${randomUUID()}`,
+    body: {
+      systemId,
+      environmentId,
+      suiteId,
+      triggerType: "api",
+      triggerSource: "spark-x-agent-mcp-fixture-verification",
+      priority: 90,
+      testedVersion,
+    },
+  });
+  check(accepted.status === 202, "Spark X Agent MCP fixture run was not newly accepted");
+  const run = await waitForRun(accepted.body.id);
+  check(run.gateResult === "passed", `Spark X Agent MCP fixture gate is ${String(run.gateResult)}`);
+  check(run.summary.passed === 3, "Spark X Agent MCP fixture cases did not pass");
+  check(run.firstFailure === null, "Spark X Agent MCP fixture run retained a first failure");
+  check(
+    run.cases.length === 3 &&
+      run.cases.every((item) => item.result === "passed" && item.cleanupStatus === "passed"),
+    "Spark X Agent MCP fixture cases or finally cleanup failed",
+  );
+  check(
+    run.steps.map((step) => `${step.phase}:${step.action}`).join(",") ===
+      [
+        "main:adapter:spark-x-agent/mcp.create-fixture",
+        "main:adapter:spark-x-agent/mcp.assert-invocation",
+        "finally:adapter:spark-x-agent/mcp.cleanup-fixture",
+        "main:adapter:spark-x-agent/mcp.create-fixture",
+        "main:adapter:spark-x-agent/mcp.assert-reconnect",
+        "finally:adapter:spark-x-agent/mcp.cleanup-fixture",
+        "main:adapter:spark-x-agent/mcp.create-fixture",
+        "main:adapter:spark-x-agent/mcp.assert-disconnect-disable-delete",
+        "finally:adapter:spark-x-agent/mcp.cleanup-fixture",
+      ].join(",") && run.steps.every((step) => step.status === "passed"),
+    "Spark X Agent MCP fixture structured step sequence is incomplete",
+  );
+  check(
+    run.resources.length === 3 &&
+      run.resources.every(
+        (resource) =>
+          resource.resourceType === "spark-x-agent-mcp-fixture" &&
+          resource.cleanupStatus === "passed" &&
+          resource.cleanupDefinition.action === "adapter:spark-x-agent/mcp.cleanup-fixture",
+      ),
+    "Spark X Agent MCP fixture resource ledger or cleanup definition is incomplete",
+  );
+  check(run.cleanupJob === null, "normal MCP fixture run unexpectedly required compensation");
+  assertMcpFixtureEvidence(run, "mcp002");
+  assertMcpFixtureEvidence(run, "mcp003");
+  assertMcpFixtureEvidence(run, "mcp004");
+  if (password !== undefined) {
+    check(
+      !JSON.stringify(run).includes(password),
+      "administrator password leaked into MCP fixture evidence",
+    );
+  }
+  return run;
+}
+
 function assertAutomationEvidence(run: RunDetail): void {
   const create = run.steps.find(
     (step) => step.action === "adapter:spark-x-agent/automation.create",
@@ -7599,6 +8037,30 @@ const mcpConnectorCase = await ensureCase(
   mcpConnectorDefinition(),
   "新增内置连接器用户投影、运行前置条件、工具发现、只读风险策略和凭据边界 P0 校验",
 );
+const mcpInvocationCase = await ensureCase(
+  system.id,
+  mcp.id,
+  environment.id,
+  "MCP-002 MCP 工具参数与实际调用",
+  mcpInvocationDefinition(),
+  "新增固定 Streamable HTTP 只读连接器、正式治理、参数绑定、实际调用结果映射和完整清理 P0 闭环",
+);
+const mcpReconnectCase = await ensureCase(
+  system.id,
+  mcp.id,
+  environment.id,
+  "MCP-003 MCP 配置修改与重连",
+  mcpReconnectDefinition(),
+  "新增 v1/v2 固定地址修改、重启前旧连接、重启后描述符缓存与结果刷新及完整清理 P1 闭环",
+);
+const mcpLifecycleCase = await ensureCase(
+  system.id,
+  mcp.id,
+  environment.id,
+  "MCP-004 MCP 断线、停用与删除",
+  mcpLifecycleDefinition(),
+  "新增固定不可达目标首错、error 状态、停用不可见/不可调用、删除无残留和幂等清理 P1 闭环",
+);
 const automationCase = await ensureCase(
   system.id,
   automations.id,
@@ -7825,6 +8287,25 @@ const mcpSuite = await ensureSuite(
   "MCP-001 内置连接器注册、运行状态、工具发现、只读风险策略和凭据边界证据闭环。",
   [mcpConnectorCase.testCase.id],
 );
+const mcpFixtureSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-mcp-fixture",
+  "星火 Agent MCP 确定性夹具回归",
+  "MCP-002/003/004 固定 Streamable HTTP 只读调用、配置重连、描述符缓存刷新、断线、停用、删除和完整补偿闭环。",
+  [mcpInvocationCase.testCase.id, mcpReconnectCase.testCase.id, mcpLifecycleCase.testCase.id],
+);
+const mcpModuleSuite = await ensureSuite(
+  system.id,
+  "spark-x-agent-mcp",
+  "星火 Agent MCP 回归",
+  "MCP-001/002/003/004 内置目录前置条件、固定只读实际调用、配置重连、断线停用删除和结构化证据闭环。",
+  [
+    mcpConnectorCase.testCase.id,
+    mcpInvocationCase.testCase.id,
+    mcpReconnectCase.testCase.id,
+    mcpLifecycleCase.testCase.id,
+  ],
+);
 const automationSuite = await ensureSuite(
   system.id,
   "spark-x-agent-automations-p0",
@@ -7881,8 +8362,8 @@ const suite = await ensureSuite(
 const fullRegressionSuite = await ensureSuite(
   system.id,
   "spark-x-agent-full-regression",
-  "星火 Agent 完整回归（建设中 28/32）",
-  "手动一键完整回归入口；当前已接入 28/32 条案例，覆盖七个模块的当前 P0、CHAT-003/004/005、TOOL-004、KB-005/006、SKILL-004、AUTO-003/004 与 CONV-003/004 P1，后续持续追加且不改变套件 key。",
+  "星火 Agent 完整回归（建设中 31/32）",
+  "手动一键完整回归入口；当前已接入 31/32 条案例，覆盖七个模块除 SKILL-003 外的全部规划 P0/P1 场景；后续原 key 追加最后一条且不改变入口。",
   [
     conversation.testCase.id,
     conversationReopenCase.testCase.id,
@@ -7908,6 +8389,9 @@ const fullRegressionSuite = await ensureSuite(
     skillInjectionCase.testCase.id,
     skillLifecycleCase.testCase.id,
     mcpConnectorCase.testCase.id,
+    mcpInvocationCase.testCase.id,
+    mcpReconnectCase.testCase.id,
+    mcpLifecycleCase.testCase.id,
     automationCase.testCase.id,
     automationTimezoneCase.testCase.id,
     automationLifecycleCase.testCase.id,
@@ -7933,6 +8417,7 @@ check(
     runSkillInjectionSmoke,
     runSkillLifecycleSmoke,
     runMcpSmoke,
+    runMcpFixtureSmoke,
     runAutomationSmoke,
   ].filter(Boolean).length <= 1,
   "only one Spark X Agent smoke mode can be true",
@@ -8034,21 +8519,28 @@ const run = runSmoke
                                     skillSuite.id,
                                     password,
                                   )
-                                : runMcpSmoke
-                                  ? await executeMcpSmoke(
+                                : runMcpFixtureSmoke
+                                  ? await executeMcpFixtureSmoke(
                                       system.id,
                                       environment.id,
-                                      mcpSuite.id,
+                                      mcpFixtureSuite.id,
                                       password,
                                     )
-                                  : runAutomationSmoke
-                                    ? await executeAutomationSmoke(
+                                  : runMcpSmoke
+                                    ? await executeMcpSmoke(
                                         system.id,
                                         environment.id,
-                                        automationSuite.id,
+                                        mcpSuite.id,
                                         password,
                                       )
-                                    : undefined;
+                                    : runAutomationSmoke
+                                      ? await executeAutomationSmoke(
+                                          system.id,
+                                          environment.id,
+                                          automationSuite.id,
+                                          password,
+                                        )
+                                      : undefined;
 const scenario = runContextSmoke
   ? "spark-x-agent-chat-context-p0"
   : runCancelSmoke
@@ -8079,11 +8571,13 @@ const scenario = runContextSmoke
                             ? "spark-x-agent-skill-lifecycle-p1"
                             : runSkillSmoke
                               ? "spark-x-agent-skills-p0"
-                              : runMcpSmoke
-                                ? "spark-x-agent-mcp-p0"
-                                : runAutomationSmoke
-                                  ? "spark-x-agent-automations-p0"
-                                  : "spark-x-agent-core-smoke";
+                              : runMcpFixtureSmoke
+                                ? "spark-x-agent-mcp-fixture"
+                                : runMcpSmoke
+                                  ? "spark-x-agent-mcp-p0"
+                                  : runAutomationSmoke
+                                    ? "spark-x-agent-automations-p0"
+                                    : "spark-x-agent-core-smoke";
 
 console.info(
   JSON.stringify({
@@ -8122,14 +8616,16 @@ console.info(
                                     ? 36
                                     : runSkillSmoke
                                       ? 78
-                                      : runMcpSmoke
-                                        ? expectMcpUnavailable
-                                          ? 10
-                                          : 12
-                                        : runAutomationSmoke
-                                          ? 20
-                                          : 191,
-    caseCount: 28,
+                                      : runMcpFixtureSmoke
+                                        ? 92
+                                        : runMcpSmoke
+                                          ? expectMcpUnavailable
+                                            ? 10
+                                            : 12
+                                          : runAutomationSmoke
+                                            ? 20
+                                            : 191,
+    caseCount: 31,
     coreSmokeCaseCount: 12,
     targetCaseCount: "10-12",
     secretsUpdated: password !== undefined,
@@ -8183,6 +8679,12 @@ console.info(
     skillLifecycleCaseVersionId: skillLifecycleCase.version.id,
     mcpConnectorCaseId: mcpConnectorCase.testCase.id,
     mcpConnectorCaseVersionId: mcpConnectorCase.version.id,
+    mcpInvocationCaseId: mcpInvocationCase.testCase.id,
+    mcpInvocationCaseVersionId: mcpInvocationCase.version.id,
+    mcpReconnectCaseId: mcpReconnectCase.testCase.id,
+    mcpReconnectCaseVersionId: mcpReconnectCase.version.id,
+    mcpLifecycleCaseId: mcpLifecycleCase.testCase.id,
+    mcpLifecycleCaseVersionId: mcpLifecycleCase.version.id,
     automationCaseId: automationCase.testCase.id,
     automationCaseVersionId: automationCase.version.id,
     automationTimezoneCaseId: automationTimezoneCase.testCase.id,
@@ -8214,6 +8716,8 @@ console.info(
     skillLifecycleSuiteId: skillLifecycleSuite.id,
     skillSuiteId: skillSuite.id,
     mcpSuiteId: mcpSuite.id,
+    mcpFixtureSuiteId: mcpFixtureSuite.id,
+    mcpModuleSuiteId: mcpModuleSuite.id,
     automationSuiteId: automationSuite.id,
     automationTimezoneSuiteId: automationTimezoneSuite.id,
     automationIdempotencySuiteId: automationIdempotencySuite.id,

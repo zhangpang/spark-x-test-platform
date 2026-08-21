@@ -104,11 +104,13 @@ CHAT-005 的确定性 Provider 夹具只用于受控测试环境。API 容器必
 
 SKILL-002 使用独立的确定性 Provider 夹具验证选中 Skill 正文和 active 上下文确实进入模型请求。API 容器只在 `PLATFORM_SKILL_INJECTION_FIXTURE_ENABLED=true` 时注册固定端点；默认值为 `false`。该夹具只接受固定模型、固定非凭据 Bearer 和受限消息结构，不转发请求、不回显 Prompt，也不接受任意 URL、脚本或扩展字段。
 
+MCP-002/003/004 使用独立的确定性 Streamable HTTP 夹具。API 容器只在 `PLATFORM_MCP_FIXTURE_ENABLED=true` 时注册固定 v1/v2 端点；默认值为 `false`。夹具要求固定非凭据 Bearer、有效 `run_id` 和 run 绑定会话，只允许初始化、工具/资源/Prompt 列表及唯一只读工具调用，不转发请求，也不接受 URL、命令、脚本或真实凭据。
+
 ## 7. 当前实施边界
 
 - Scheduler继续通过内部控制队列维护心跳；Worker另消费优先级运行队列；
 - Worker已支持受控HTTP用例、步骤捕获变量、密钥引用、状态码断言、诊断重试、超时/取消传播与`finally`清理；
-- Chromium、受限 HTTP 轮询、JSON 提取/断言变量链、资源锁和补偿任务已进入 M3 验证闭环；MCP-001 已有只读诊断，其余 MCP 生命周期、只读数据库和隔离容器尚未完成；
+- Chromium、受限 HTTP 轮询、JSON 提取/断言变量链、资源锁和补偿任务已进入 M3 验证闭环；MCP-001/002/003/004 已有只读诊断、实际调用、重连和生命周期闭环，只读数据库和隔离容器尚未完成；
 - 星火 Agent 适配器已提供版本化的会话、聊天、工具、知识库、Skill、MCP 和自动任务受限动作；
 - Web已开放系统与环境、用例库、测试套件和运行中心；公共资产与定时计划仍在后续里程碑；
 - 平台没有登录和Worker认证，只允许部署在受控内网。

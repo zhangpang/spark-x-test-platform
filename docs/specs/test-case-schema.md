@@ -85,6 +85,11 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/skill.create-lifecycle-fixture`：只创建名称严格绑定 `${run.id}` 的可逆 Skill 元数据，不接受 Prompt、文件、URL 或脚本输入，不创建不可变发布版本且不写对象存储；必须登记专用资源和所有权校验清理；
 - `adapter:spark-x-agent/skill.assert-disabled-and-deleted`：只操作本次运行登记的 Skill 与会话，先停用再删除，分别校验管理/用户投影、选择拒绝、空 active Skill 和零消息副作用；失败不重试且保留首次失败；
 - `adapter:spark-x-agent/skill.cleanup-lifecycle-fixture`：按当前 `run_id` 的精确 UUID/名称映射幂等删除元数据夹具并验证管理投影无残留，用于普通 `finally` 与独立补偿；
+- `adapter:spark-x-agent/mcp.create-fixture`：只创建名称绑定 `${run.id}`、地址由环境同主机和固定 allowlist 端口推导的非内置 Streamable HTTP 连接器，不接受 URL、命令、脚本或凭据输入；必须登记资源与清理；
+- `adapter:spark-x-agent/mcp.assert-invocation`：启动固定 v1 夹具，校验用户投影凭据边界、唯一只读工具正式治理、精确参数和实际结构化结果映射；正文只在内存比较；
+- `adapter:spark-x-agent/mcp.assert-reconnect`：运行中切换固定 v1/v2 地址，证明重启前旧连接仍生效，重启后同一工具身份、描述符缓存和实际结果同步刷新；不以重试掩盖失败；
+- `adapter:spark-x-agent/mcp.assert-disconnect-disable-delete`：切换固定不可达目标保留首次断线与 error 状态，停用后证明用户不可见和调用为零，删除后管理/用户投影无残留；
+- `adapter:spark-x-agent/mcp.cleanup-fixture`：只停止并删除当前 `run_id` 所有且地址属于固定 v1/v2/不可达集合的连接器，验证目录零残留并支持幂等重放；
 - `adapter:spark-x-agent/provider.cleanup-transient-failure-fixture`：先恢复资源标识中的原 Provider，再幂等删除夹具并验证唯一活跃 Provider，用于普通 `finally` 与独立补偿；
 - `adapter:spark-x-agent/chat.assert-history`：重新登录并校验唯一用户消息、唯一助手回复、`stop` 终止原因，以及落库回答 SHA-256 与流式最终回答一致；
 - `adapter:spark-x-agent/chat.assert-context-history`：校验同一主会话两轮用户/助手消息顺序、两次流式哈希、`stop` 终态、零工具消息，并拒绝独立干扰会话标识串入；

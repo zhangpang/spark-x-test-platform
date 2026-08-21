@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -188,7 +188,7 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.24.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+当前 `0.25.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
 `conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
 `chat.cancel-and-resume`、`chat.assert-provider-failure-retry`、`chat.assert-context-compaction-continuity`、`chat.assert-history`、`chat.assert-context-history`、
 `provider.create-transient-failure-fixture`、`provider.create-context-compaction-fixture`、`provider.create-skill-injection-fixture`、`provider.cleanup-transient-failure-fixture`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
@@ -196,9 +196,9 @@ telemetry.*
 `conversation.delete`，以及 `knowledge-base.create`、`knowledge-base.upload-fixture`、
 `knowledge-base.attach-upload`、`knowledge-base.wait-ready`、`knowledge-base.assert-large-table-continuation`、`knowledge-base.assert-conversation-scope`、
 `knowledge-base.query-and-assert-evidence`、`knowledge-base.assert-cleaned-state`、`knowledge-base.cleanup` 和
-`skill.assert-trusted-publication`、`skill.assert-selected-injection`、`skill.create-lifecycle-fixture`、`skill.assert-disabled-and-deleted`、`skill.cleanup-lifecycle-fixture`，以及 `automation.create`、`automation.wait-fired`、`automation.assert-no-duplicate-delivery`、`automation.assert-lifecycle` 和
+`skill.assert-trusted-publication`、`skill.assert-selected-injection`、`skill.create-lifecycle-fixture`、`skill.assert-disabled-and-deleted`、`skill.cleanup-lifecycle-fixture`、`mcp.create-fixture`、`mcp.assert-invocation`、`mcp.assert-reconnect`、`mcp.assert-disconnect-disable-delete`、`mcp.cleanup-fixture`，以及 `automation.create`、`automation.wait-fired`、`automation.assert-no-duplicate-delivery`、`automation.assert-lifecycle` 和
 `automation.cleanup`。动作只调用适配器内固定的 `/trade/api`、`/trade-domain-api` 路径、KB-006 所需且与被测环境同主机的固定
-`http://<environment-host>:18121/mcp/document` 解析检索端点、CHAT-004 固定的同主机不可达 Provider 故障端点，以及同主机端口 4173 上 CHAT-005 上下文压缩和 SKILL-002 选择注入夹具；所有目标必须先命中
+`http://<environment-host>:18121/mcp/document` 解析检索端点、CHAT-004 固定的同主机不可达 Provider 故障端点，以及同主机端口 4173 上 CHAT-005 上下文压缩、SKILL-002 选择注入与 MCP-002/003/004 固定 Streamable HTTP 夹具；所有目标必须先命中
 环境 allowlist，所有实际请求与
 重定向执行环境 allowlist 校验；登录 Token、用户密码和模型回答正文都不进入输出、日志、资源台账或
 结构化证据。`conversation.assert-recent` 不把列表响应缺失的 `message_count` 当作零，而是通过会话历史接口
@@ -330,6 +330,8 @@ active Skill 上下文、唯一选中 Skill 正文和未选中 Skill 正文缺�
 `active_skill_name/active_skill_activated_at`、两条消息和助手消息 `public_execution_trace` 互相一致，且不得出现工具或复核事件。普通 `finally` 和独立补偿都先恢复原 Provider，
 再删除夹具和会话；输出只保留 UUID、计数、布尔判定和 SHA-256，首次失败不被清理结果或重试覆盖。
 `skill.create-lifecycle-fixture` 只创建名称严格绑定当前 `run_id` 的可逆元数据记录，不上传文件、不创建 V12 不可变版本、不写对象存储；创建后要求管理与用户投影唯一一致、资产投影为空。`skill.assert-disabled-and-deleted` 先停用并验证用户清单、详情和会话选择均拒绝，再删除并验证管理/用户投影无残留；每次拒绝后会话必须保持零消息和空 active Skill。`skill.cleanup-lifecycle-fixture` 只允许删除当前运行所有的精确 UUID/名称映射，删除后重放幂等成功。三项动作不接受任意 Prompt、文件、URL 或脚本输入，证据只保留 UUID、计数、布尔判定和 SHA-256；首次产品失败不重试且仍进入 `finally`。
+
+MCP 夹具动作只创建名称严格绑定当前 `run_id` 的非内置连接器；地址固定为环境同主机、allowlist 端口 4173 的 v1/v2 端点或端口 9 的不可达故障目标，不能由用例传入。`mcp.assert-invocation` 启动 v1 后要求用户目录不含私有配置、唯一工具为正式治理的 pure-read 能力，并通过管理诊断入口执行一次精确参数调用。`mcp.assert-reconnect` 要求运行中更新返回 `needs_restart=true`，重启前仍命中 v1，重启后启动时间推进、同一工具 UUID 保持、描述符与结果切换到 v2。`mcp.assert-disconnect-disable-delete` 保留固定断线首错和 `error` 状态，停用后用户目录零出现且调用被正式治理阻断，删除后管理/用户目录无残留。`mcp.cleanup-fixture` 只停止和删除当前 run 所有且地址属于固定集合的连接器；普通 `finally` 与独立补偿共用该动作。所有输出只含 UUID、计数、布尔判定和 SHA-256，不保存连接地址、参数、结果、错误正文或遮罩前环境变量。
 
 AUTOMATION 动作固定创建 `selected_skill_id=null`、300 秒周期且首次执行时间为当前时刻的无工具任务，不接受
 任意 Skill、周期或执行脚本参数。等待动作把所有者任务定义中的 `state_version`、`last_fire_at`、`next_fire_at`

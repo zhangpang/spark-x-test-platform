@@ -12,6 +12,7 @@ import { registerControlPlaneRoutes } from "./control-plane/routes.js";
 import { SecretVault } from "./control-plane/secrets.js";
 import { ControlPlaneService } from "./control-plane/service.js";
 import { registerContextCompactionFixtureRoutes } from "./context-compaction-fixture-routes.js";
+import { registerMcpFixtureRoutes } from "./mcp-fixture-routes.js";
 import { registerReleaseHookRoutes, resolveReleaseHookConfig } from "./release-hook-routes.js";
 import { registerRunRoutes, type RunQueue, type RunRouteStore } from "./run-routes.js";
 import { registerSkillInjectionFixtureRoutes } from "./skill-injection-fixture-routes.js";
@@ -115,6 +116,11 @@ export function buildApiApplication(
   registerSkillInjectionFixtureRoutes(
     application.app,
     environment.PLATFORM_SKILL_INJECTION_FIXTURE_ENABLED === "true",
+    `/api/${apiVersion}`,
+  );
+  registerMcpFixtureRoutes(
+    application.app,
+    environment.PLATFORM_MCP_FIXTURE_ENABLED === "true",
     `/api/${apiVersion}`,
   );
 

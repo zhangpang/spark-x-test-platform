@@ -45,6 +45,11 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/skill.create-lifecycle-fixture",
   "adapter:spark-x-agent/skill.assert-disabled-and-deleted",
   "adapter:spark-x-agent/skill.cleanup-lifecycle-fixture",
+  "adapter:spark-x-agent/mcp.create-fixture",
+  "adapter:spark-x-agent/mcp.assert-invocation",
+  "adapter:spark-x-agent/mcp.assert-reconnect",
+  "adapter:spark-x-agent/mcp.assert-disconnect-disable-delete",
+  "adapter:spark-x-agent/mcp.cleanup-fixture",
   "adapter:spark-x-agent/automation.create",
   "adapter:spark-x-agent/automation.wait-fired",
   "adapter:spark-x-agent/automation.assert-no-duplicate-delivery",
@@ -2349,6 +2354,268 @@ export const sparkXAgentActionCapabilities = [
     },
   },
   {
+    key: "mcp.create-fixture",
+    name: "创建 MCP 确定性夹具连接器",
+    description:
+      "只创建名称绑定当前 run_id、固定同主机 Streamable HTTP 地址且可完整删除的只读连接器。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 30_000,
+    producesResource: true,
+    cleanupAction: "mcp.cleanup-fixture",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "name"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        name: { type: "string", minLength: 1, maxLength: 128 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "mcpFixtureResourceId",
+        "serverId",
+        "serverNameSha256",
+        "addressSha256",
+        "created",
+        "enabled",
+        "builtin",
+        "stopped",
+        "fixedTargetAllowed",
+        "credentialProjectionMasked",
+        "adminCatalogOccurrences",
+      ],
+      properties: {
+        mcpFixtureResourceId: { type: "string", format: "uuid" },
+        serverId: { type: "string", format: "uuid" },
+        serverNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        addressSha256: { type: "string", minLength: 64, maxLength: 64 },
+        created: { const: true },
+        enabled: { const: true },
+        builtin: { const: false },
+        stopped: { const: true },
+        fixedTargetAllowed: { const: true },
+        credentialProjectionMasked: { const: true },
+        adminCatalogOccurrences: { const: 1 },
+      },
+    },
+  },
+  {
+    key: "mcp.assert-invocation",
+    name: "校验 MCP 参数与实际调用",
+    description:
+      "启动已登记只读夹具，核对用户/管理员目录和正式治理后，通过管理诊断入口执行一次固定参数调用。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 90_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "serverId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        serverId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "serverId",
+        "toolId",
+        "serverNameSha256",
+        "qualifiedNameSha256",
+        "inputSchemaSha256",
+        "argumentsSha256",
+        "resultSha256",
+        "running",
+        "userProjectionMatched",
+        "credentialFieldsAbsent",
+        "toolGovernanceMatched",
+        "invoked",
+        "recordCount",
+        "revision",
+      ],
+      properties: {
+        serverId: { type: "string", format: "uuid" },
+        toolId: { type: "string", format: "uuid" },
+        serverNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        qualifiedNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        inputSchemaSha256: { type: "string", minLength: 64, maxLength: 64 },
+        argumentsSha256: { type: "string", minLength: 64, maxLength: 64 },
+        resultSha256: { type: "string", minLength: 64, maxLength: 64 },
+        running: { const: true },
+        userProjectionMatched: { const: true },
+        credentialFieldsAbsent: { const: true },
+        toolGovernanceMatched: { const: true },
+        invoked: { const: true },
+        recordCount: { const: 1 },
+        revision: { const: 1 },
+      },
+    },
+  },
+  {
+    key: "mcp.assert-reconnect",
+    name: "校验 MCP 配置修改、重连与缓存刷新",
+    description:
+      "证明运行中配置修改在重启前仍使用旧连接，重启后切换固定 v2 地址并刷新同一工具的描述符与结果。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 120_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "serverId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        serverId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "serverId",
+        "toolId",
+        "serverNameSha256",
+        "v1AddressSha256",
+        "v2AddressSha256",
+        "v1SchemaSha256",
+        "v2SchemaSha256",
+        "v1ResultSha256",
+        "v2ResultSha256",
+        "needsRestart",
+        "oldConnectionUsedBeforeRestart",
+        "restarted",
+        "startedAtChanged",
+        "toolIdentityStable",
+        "descriptorChanged",
+        "cacheRefreshed",
+      ],
+      properties: {
+        serverId: { type: "string", format: "uuid" },
+        toolId: { type: "string", format: "uuid" },
+        serverNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        v1AddressSha256: { type: "string", minLength: 64, maxLength: 64 },
+        v2AddressSha256: { type: "string", minLength: 64, maxLength: 64 },
+        v1SchemaSha256: { type: "string", minLength: 64, maxLength: 64 },
+        v2SchemaSha256: { type: "string", minLength: 64, maxLength: 64 },
+        v1ResultSha256: { type: "string", minLength: 64, maxLength: 64 },
+        v2ResultSha256: { type: "string", minLength: 64, maxLength: 64 },
+        needsRestart: { const: true },
+        oldConnectionUsedBeforeRestart: { const: true },
+        restarted: { const: true },
+        startedAtChanged: { const: true },
+        toolIdentityStable: { const: true },
+        descriptorChanged: { const: true },
+        cacheRefreshed: { const: true },
+      },
+    },
+  },
+  {
+    key: "mcp.assert-disconnect-disable-delete",
+    name: "校验 MCP 断线、停用与删除",
+    description:
+      "切换到固定同主机不可达目标，保留首次断线错误，再停用并证明不可见、不可调用，最后删除且无残留。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 120_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "serverId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        serverId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "serverId",
+        "toolId",
+        "serverNameSha256",
+        "disconnectErrorSha256",
+        "disabledInvocationErrorSha256",
+        "disconnectFailureVisible",
+        "errorStateMatched",
+        "runtimeToolsUnavailable",
+        "disabled",
+        "disabledUserCatalogOccurrences",
+        "disabledInvocationDenied",
+        "deleted",
+        "deletedAdminDetailAbsent",
+        "deletedAdminCatalogOccurrences",
+        "deletedUserCatalogOccurrences",
+      ],
+      properties: {
+        serverId: { type: "string", format: "uuid" },
+        toolId: { type: "string", format: "uuid" },
+        serverNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        disconnectErrorSha256: { type: "string", minLength: 64, maxLength: 64 },
+        disabledInvocationErrorSha256: { type: "string", minLength: 64, maxLength: 64 },
+        disconnectFailureVisible: { const: true },
+        errorStateMatched: { const: true },
+        runtimeToolsUnavailable: { const: true },
+        disabled: { const: true },
+        disabledUserCatalogOccurrences: { const: 0 },
+        disabledInvocationDenied: { const: true },
+        deleted: { const: true },
+        deletedAdminDetailAbsent: { const: true },
+        deletedAdminCatalogOccurrences: { const: 0 },
+        deletedUserCatalogOccurrences: { const: 0 },
+      },
+    },
+  },
+  {
+    key: "mcp.cleanup-fixture",
+    name: "清理 MCP 确定性夹具",
+    description:
+      "只停止并删除名称严格绑定当前 run_id、地址属于固定 v1/v2/不可达集合的非内置连接器，重放幂等成功。",
+    actionLevel: "dangerous",
+    defaultTimeoutMs: 30_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password", "serverId"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+        serverId: { type: "string", format: "uuid" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "serverId",
+        "serverNameSha256",
+        "stopped",
+        "deleted",
+        "alreadyMissing",
+        "adminDetailAbsent",
+        "adminCatalogOccurrences",
+      ],
+      properties: {
+        serverId: { type: "string", format: "uuid" },
+        serverNameSha256: { type: "string", minLength: 64, maxLength: 64 },
+        stopped: { const: true },
+        deleted: { const: true },
+        alreadyMissing: { type: "boolean" },
+        adminDetailAbsent: { const: true },
+        adminCatalogOccurrences: { const: 0 },
+      },
+    },
+  },
+  {
     key: "conversation.delete",
     name: "删除会话",
     description: "重新登录后按会话 ID 执行幂等清理，可用于 finally 与独立补偿任务。",
@@ -2382,7 +2649,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.24.0",
+  version: "0.25.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -2417,6 +2684,10 @@ const trustedSkillMainFile = "trade-port-daily-brief.md";
 const lifecycleSkillNamePrefix = "spark-x-skill-lifecycle-";
 const lifecycleSkillSource = "spark-x-test-platform-lifecycle-fixture";
 const lifecycleSkillCategory = "testing";
+const mcpFixtureNamePrefix = "spark-x-mcp-fixture-";
+const mcpFixtureDescription = "Spark X Test Platform deterministic MCP lifecycle fixture";
+const mcpFixtureToolName = "lookup_fixture";
+const mcpFixtureAuthorization = "Bearer spark-x-test-platform-noncredential-mcp-fixture";
 const privateCatalogFields = [
   "command",
   "args",
@@ -2866,6 +3137,13 @@ function knowledgeSnapshotProjection(
 function acceptedSkillRuntime(response: HttpExecutionResult, code: string): void {
   if (response.status >= 500) {
     throw environmentFailure(code, `星火 Agent Skill 运行时返回 HTTP ${response.status}。`);
+  }
+  accepted(response, code);
+}
+
+function acceptedMcpRuntime(response: HttpExecutionResult, code: string): void {
+  if (response.status >= 500) {
+    throw environmentFailure(code, `星火 Agent MCP 运行时返回 HTTP ${response.status}。`);
   }
   accepted(response, code);
 }
@@ -4104,6 +4382,25 @@ function skillInjectionFixtureBaseUrl(environment: HttpExecutionEnvironment): st
   return target.toString().replace(/\/$/u, "");
 }
 
+type McpFixtureVariant = "v1" | "v2" | "fault";
+
+function mcpFixtureAddress(
+  environment: HttpExecutionEnvironment,
+  variant: McpFixtureVariant,
+): string {
+  const target = new URL(environment.baseUrl);
+  target.protocol = "http:";
+  target.port = variant === "fault" ? "9" : "4173";
+  target.pathname =
+    variant === "fault"
+      ? "/spark-x-test-platform-mcp-unavailable"
+      : `/api/v1/fixtures/mcp/read-only/${variant}`;
+  target.search = "";
+  target.hash = "";
+  assertHttpTargetAllowed(target, environment.allowlist);
+  return target.toString().replace(/\/$/u, "");
+}
+
 function sparkXProviderProjection(
   value: unknown,
   code = "SPARK_X_AGENT_PROVIDER_RESPONSE_INVALID",
@@ -4390,6 +4687,384 @@ async function assertEmptySkillLifecycleConversation(
       "被拒绝的 Skill 选择产生了 active 状态或消息副作用。",
     );
   }
+}
+
+interface SparkXMcpFixtureServerProjection {
+  readonly id: string;
+  readonly name: string;
+  readonly variant: McpFixtureVariant;
+  readonly enabled: boolean;
+  readonly status: "running" | "stopped" | "error" | "starting";
+  readonly toolsCount: number;
+  readonly startedAt: string | null;
+}
+
+interface SparkXMcpFixtureToolProjection {
+  readonly id: string;
+  readonly schema: Readonly<Record<string, unknown>>;
+}
+
+interface SparkXMcpInvocationEvidence {
+  readonly argumentsSha256: string;
+  readonly resultSha256: string;
+  readonly recordCount: 1;
+  readonly revision: 1 | 2;
+}
+
+function mcpFixtureName(runId: string): string {
+  return `${mcpFixtureNamePrefix}${runId}`;
+}
+
+function mcpFixtureDisplayName(runId: string): string {
+  return `Spark X MCP Fixture ${runId}`;
+}
+
+function mcpFixtureInput(
+  environment: HttpExecutionEnvironment,
+  runId: string,
+  variant: McpFixtureVariant,
+  enabled: boolean,
+): Readonly<Record<string, unknown>> {
+  return {
+    name: mcpFixtureName(runId),
+    display_name: mcpFixtureDisplayName(runId),
+    description: mcpFixtureDescription,
+    command: "",
+    args: [],
+    env: {
+      Authorization: mcpFixtureAuthorization,
+      HEADER_X_SPARK_X_RUN_ID: runId,
+    },
+    transport: "streamable_http",
+    address: mcpFixtureAddress(environment, variant),
+    capabilities: ["tools"],
+    auto_start: false,
+    is_enabled: enabled,
+  };
+}
+
+function mcpFixtureSchema(version: "v1" | "v2"): Readonly<Record<string, unknown>> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["reference", "limit"],
+    properties: {
+      reference: { type: "string", pattern: "^MCP-FIXTURE:[0-9a-f-]{36}$" },
+      limit: { type: "integer", minimum: 1, maximum: 1 },
+      ...(version === "v1"
+        ? {}
+        : { revision_hint: { type: "string", const: "v2", default: "v2" } }),
+    },
+  };
+}
+
+function mcpFixtureArguments(
+  runId: string,
+  version: "v1" | "v2",
+): Readonly<Record<string, unknown>> {
+  return {
+    reference: `MCP-FIXTURE:${runId}`,
+    limit: 1,
+    ...(version === "v1" ? {} : { revision_hint: "v2" }),
+  };
+}
+
+function mcpFixtureStructuredResult(
+  runId: string,
+  version: "v1" | "v2",
+): Readonly<Record<string, unknown>> {
+  return {
+    success: true,
+    fixture_version: version,
+    reference: `MCP-FIXTURE:${runId}`,
+    record_count: 1,
+    record: { status: "stable", revision: version === "v1" ? 1 : 2 },
+  };
+}
+
+function mcpFixtureServerProjection(
+  value: unknown,
+  environment: HttpExecutionEnvironment,
+  runId: string,
+  allowedVariants: readonly McpFixtureVariant[],
+  code: string,
+): SparkXMcpFixtureServerProjection {
+  const server = objectValue(value);
+  const env = objectValue(server?.env);
+  const variants = allowedVariants.filter(
+    (variant) => server?.address === mcpFixtureAddress(environment, variant),
+  );
+  if (
+    server === null ||
+    typeof server.id !== "string" ||
+    !uuidPattern.test(server.id) ||
+    server.name !== mcpFixtureName(runId) ||
+    server.display_name !== mcpFixtureDisplayName(runId) ||
+    server.description !== mcpFixtureDescription ||
+    server.command !== "" ||
+    !Array.isArray(server.args) ||
+    server.args.length !== 0 ||
+    env === null ||
+    env.Authorization !== "***" ||
+    env.HEADER_X_SPARK_X_RUN_ID !== runId ||
+    Object.keys(env).sort().join(",") !== "Authorization,HEADER_X_SPARK_X_RUN_ID" ||
+    server.transport !== "streamable_http" ||
+    variants.length !== 1 ||
+    server.cwd !== null ||
+    server.filesystem_path !== null ||
+    !Array.isArray(server.capabilities) ||
+    canonicalJson(server.capabilities) !== canonicalJson(["tools"]) ||
+    server.auto_start !== false ||
+    typeof server.is_enabled !== "boolean" ||
+    server.is_builtin !== false ||
+    !["running", "stopped", "error", "starting"].includes(String(server.status)) ||
+    typeof server.tools_count !== "number" ||
+    !Number.isSafeInteger(server.tools_count) ||
+    server.tools_count < 0 ||
+    server.tools_count > 10 ||
+    !(
+      server.started_at === null ||
+      (typeof server.started_at === "string" && Number.isFinite(Date.parse(server.started_at)))
+    ) ||
+    !(
+      server.last_error === null ||
+      (typeof server.last_error === "string" && server.last_error.length <= 4_000)
+    )
+  ) {
+    throw apiFailure(code, "MCP 夹具服务投影超出固定地址、凭据遮罩或可补偿边界。");
+  }
+  return {
+    id: server.id,
+    name: mcpFixtureName(runId),
+    variant: variants[0] as McpFixtureVariant,
+    enabled: server.is_enabled,
+    status: server.status as SparkXMcpFixtureServerProjection["status"],
+    toolsCount: server.tools_count,
+    startedAt: server.started_at,
+  };
+}
+
+async function listAdminMcpOccurrences(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  expectedName: string,
+  options: SparkXAgentExecutionOptions,
+): Promise<number> {
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    { method: "GET", path: actionPath("/admin/mcp/servers") },
+    options,
+  );
+  acceptedMcpRuntime(response, "SPARK_X_AGENT_MCP_ADMIN_LIST_FAILED");
+  const data = dataEnvelope(response.body, "SPARK_X_AGENT_MCP_ADMIN_LIST_INVALID");
+  const items = Array.isArray(data.items) ? data.items.map(objectValue) : null;
+  if (
+    items === null ||
+    items.length > 100 ||
+    items.some(
+      (item) =>
+        item === null ||
+        typeof item.id !== "string" ||
+        !uuidPattern.test(item.id) ||
+        typeof item.name !== "string",
+    )
+  ) {
+    throw environmentFailure(
+      "SPARK_X_AGENT_MCP_CATALOG_BOUND_EXCEEDED",
+      "MCP 管理清单无效或超过 100 条安全上限。",
+    );
+  }
+  return items.filter((item) => item?.name === expectedName).length;
+}
+
+async function listUserMcpOccurrences(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  expected: Readonly<{
+    name: string;
+    serverId?: string;
+    status?: string;
+    toolsCount?: number;
+  }>,
+  options: SparkXAgentExecutionOptions,
+): Promise<Readonly<{ occurrences: number; privateFieldsAbsent: boolean }>> {
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    { method: "GET", path: actionPath("/mcp/servers") },
+    options,
+  );
+  acceptedMcpRuntime(response, "SPARK_X_AGENT_MCP_USER_LIST_FAILED");
+  const data = dataEnvelope(response.body, "SPARK_X_AGENT_MCP_USER_LIST_INVALID");
+  const items = Array.isArray(data.items) ? data.items.map(objectValue) : null;
+  if (items === null || items.length > 100 || items.some((item) => item === null)) {
+    throw environmentFailure(
+      "SPARK_X_AGENT_MCP_CATALOG_BOUND_EXCEEDED",
+      "MCP 用户清单无效或超过 100 条安全上限。",
+    );
+  }
+  const matches = items.filter((item) => item?.name === expected.name);
+  const privateFieldsAbsent = matches.every((item) =>
+    privateCatalogFields.every((field) => !Object.hasOwn(item ?? {}, field)),
+  );
+  if (
+    matches.some(
+      (item) =>
+        (expected.serverId !== undefined && item?.id !== expected.serverId) ||
+        item?.is_enabled !== true ||
+        (expected.status !== undefined && item.status !== expected.status) ||
+        (expected.toolsCount !== undefined && item.tools_count !== expected.toolsCount),
+    )
+  ) {
+    throw apiFailure(
+      "SPARK_X_AGENT_MCP_USER_PROJECTION_MISMATCH",
+      "MCP 用户投影身份、状态或工具数量不一致。",
+    );
+  }
+  if (!privateFieldsAbsent) {
+    throw apiFailure(
+      "SPARK_X_AGENT_MCP_PRIVATE_FIELDS_LEAKED",
+      "MCP 用户投影暴露了管理员连接配置或错误字段。",
+    );
+  }
+  return { occurrences: matches.length, privateFieldsAbsent };
+}
+
+function mcpFixtureToolProjection(
+  value: unknown,
+  serverId: string,
+  version: "v1" | "v2",
+  code: string,
+): SparkXMcpFixtureToolProjection {
+  const tool = objectValue(value);
+  const expectedDescription =
+    version === "v1"
+      ? "Read one deterministic fixture record (revision one)."
+      : "Read one deterministic fixture record (revision two).";
+  const expectedAnnotations = {
+    readOnlyHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: false,
+  };
+  if (
+    tool === null ||
+    typeof tool.id !== "string" ||
+    !uuidPattern.test(tool.id) ||
+    tool.server_id !== serverId ||
+    tool.name !== mcpFixtureToolName ||
+    tool.description !== expectedDescription ||
+    canonicalJson(tool.input_schema) !== canonicalJson(mcpFixtureSchema(version)) ||
+    canonicalJson(tool.annotations) !== canonicalJson(expectedAnnotations) ||
+    tool.is_enabled !== true ||
+    tool.is_discovered !== true ||
+    tool.risk_level !== "low" ||
+    tool.action_type !== "read" ||
+    tool.is_write !== false ||
+    tool.requires_review !== false
+  ) {
+    throw apiFailure(code, "MCP 夹具工具描述符或正式只读治理投影不一致。");
+  }
+  return { id: tool.id, schema: mcpFixtureSchema(version) };
+}
+
+async function readMcpFixtureTool(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  serverId: string,
+  version: "v1" | "v2",
+  options: SparkXAgentExecutionOptions,
+): Promise<SparkXMcpFixtureToolProjection> {
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    { method: "GET", path: actionPath(`/admin/mcp/servers/${encodeURIComponent(serverId)}/tools`) },
+    options,
+  );
+  acceptedMcpRuntime(response, "SPARK_X_AGENT_MCP_TOOL_LIST_FAILED");
+  const data = dataEnvelope(response.body, "SPARK_X_AGENT_MCP_TOOL_LIST_INVALID");
+  if (!Array.isArray(data.items) || data.items.length !== 1) {
+    throw apiFailure(
+      "SPARK_X_AGENT_MCP_TOOL_CARDINALITY_MISMATCH",
+      "MCP 夹具必须且只能发现一个固定工具。",
+    );
+  }
+  return mcpFixtureToolProjection(
+    data.items[0],
+    serverId,
+    version,
+    "SPARK_X_AGENT_MCP_TOOL_PROJECTION_MISMATCH",
+  );
+}
+
+async function invokeMcpFixtureTool(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  runId: string,
+  toolId: string,
+  version: "v1" | "v2",
+  options: SparkXAgentExecutionOptions,
+): Promise<SparkXMcpInvocationEvidence> {
+  const parameters = mcpFixtureArguments(runId, version);
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    {
+      method: "POST",
+      path: actionPath("/admin/mcp/tools/invoke"),
+      headers: { "Content-Type": "application/json" },
+      body: { tool_id: toolId, parameters },
+    },
+    options,
+  );
+  acceptedMcpRuntime(response, "SPARK_X_AGENT_MCP_INVOCATION_FAILED");
+  const data = dataEnvelope(response.body, "SPARK_X_AGENT_MCP_INVOCATION_INVALID");
+  const result = objectValue(data.result);
+  const structured = objectValue(result?.structuredContent);
+  const raw = objectValue(result?.raw);
+  const rawStructured = objectValue(raw?.structuredContent);
+  const expected = mcpFixtureStructuredResult(runId, version);
+  const expectedText = JSON.stringify(expected);
+  if (
+    data.qualified_name !== `${mcpFixtureName(runId)}__${mcpFixtureToolName}` ||
+    result?.success !== true ||
+    result.content !== expectedText ||
+    structured === null ||
+    canonicalJson(structured) !== canonicalJson(expected) ||
+    raw === null ||
+    raw.isError !== false ||
+    rawStructured === null ||
+    canonicalJson(rawStructured) !== canonicalJson(expected)
+  ) {
+    throw apiFailure(
+      "SPARK_X_AGENT_MCP_INVOCATION_RESULT_MISMATCH",
+      "MCP 夹具实际调用的限定名称、参数结果或结构化映射不一致。",
+    );
+  }
+  return {
+    argumentsSha256: sha256(canonicalJson(parameters)),
+    resultSha256: sha256(canonicalJson(expected)),
+    recordCount: 1,
+    revision: version === "v1" ? 1 : 2,
+  };
+}
+
+function expectedMcpFailureSha256(
+  response: HttpExecutionResult,
+  code: string,
+  message: string,
+): string {
+  if (
+    response.status >= 500 ||
+    response.status === 401 ||
+    response.status === 403 ||
+    response.status === 429
+  ) {
+    throw environmentFailure(code, `星火 Agent MCP 依赖返回 HTTP ${response.status}。`);
+  }
+  if (response.status < 400) throw apiFailure(code, message, response.status);
+  return sha256(canonicalJson(response.body));
 }
 
 interface SparkXTurnAdmission {
@@ -6909,6 +7584,730 @@ export async function executeSparkXAgentAction(
     return {
       skillId,
       skillNameSha256: sha256(name),
+      deleted: true,
+      alreadyMissing,
+      adminDetailAbsent: true,
+      adminCatalogOccurrences,
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/mcp.create-fixture") {
+    const runId = variables["run.id"];
+    const name = requiredString(params, "name", variables, 128);
+    if (typeof runId !== "string" || !uuidPattern.test(runId) || name !== mcpFixtureName(runId)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_MCP_TRACEABILITY_REQUIRED",
+        "MCP 夹具名称必须严格绑定当前 run_id。",
+      );
+    }
+    const beforeOccurrences = await listAdminMcpOccurrences(
+      environment,
+      token,
+      name,
+      remainingOptions(),
+    );
+    if (beforeOccurrences !== 0) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_MCP_NAME_CONFLICT",
+        "当前 run_id 的 MCP 夹具已经存在，需先清理残留。",
+      );
+    }
+    const response = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath("/admin/mcp/servers"),
+        headers: { "Content-Type": "application/json" },
+        body: mcpFixtureInput(environment, runId, "v1", true),
+      },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(response, "SPARK_X_AGENT_MCP_CREATE_FAILED");
+    const data = dataEnvelope(response.body, "SPARK_X_AGENT_MCP_CREATE_INVALID");
+    let createdId: string | undefined;
+    try {
+      const created = mcpFixtureServerProjection(
+        data,
+        environment,
+        runId,
+        ["v1"],
+        "SPARK_X_AGENT_MCP_CREATE_INVALID",
+      );
+      createdId = created.id;
+      if (!created.enabled || created.status !== "stopped" || created.toolsCount !== 0) {
+        throw apiFailure(
+          "SPARK_X_AGENT_MCP_CREATE_BASELINE_MISMATCH",
+          "MCP 夹具创建后未保持已启用、未启动和零工具运行时基线。",
+        );
+      }
+      const adminCatalogOccurrences = await listAdminMcpOccurrences(
+        environment,
+        token,
+        name,
+        remainingOptions(),
+      );
+      if (adminCatalogOccurrences !== 1) {
+        throw apiFailure(
+          "SPARK_X_AGENT_MCP_CREATE_CATALOG_MISMATCH",
+          "MCP 夹具创建后未形成唯一管理投影。",
+        );
+      }
+      return {
+        mcpFixtureResourceId: created.id,
+        serverId: created.id,
+        serverNameSha256: sha256(name),
+        addressSha256: sha256(mcpFixtureAddress(environment, "v1")),
+        created: true,
+        enabled: true,
+        builtin: false,
+        stopped: true,
+        fixedTargetAllowed: true,
+        credentialProjectionMasked: true,
+        adminCatalogOccurrences,
+      };
+    } catch (firstError) {
+      const possibleId =
+        createdId ??
+        (data.name === name && typeof data.id === "string" && uuidPattern.test(data.id)
+          ? data.id
+          : undefined);
+      if (possibleId !== undefined) {
+        try {
+          await authenticatedRequest(
+            environment,
+            token,
+            { method: "DELETE", path: actionPath(`/admin/mcp/servers/${possibleId}`) },
+            remainingOptions(),
+          );
+        } catch {
+          // Preserve the first projection failure; bounded deletion is best-effort here.
+        }
+      }
+      throw firstError;
+    }
+  }
+
+  if (action === "adapter:spark-x-agent/mcp.assert-invocation") {
+    const runId = variables["run.id"];
+    if (typeof runId !== "string" || !uuidPattern.test(runId)) {
+      throw assertionFailure("SPARK_X_AGENT_MCP_RUN_ID_REQUIRED", "MCP 调用必须绑定有效 run_id。");
+    }
+    const serverId = requiredUuid(params, "serverId", variables);
+    const baselineResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(baselineResponse, "SPARK_X_AGENT_MCP_BASELINE_FAILED");
+    const baseline = mcpFixtureServerProjection(
+      successfulData(baselineResponse.body, "SPARK_X_AGENT_MCP_BASELINE_INVALID"),
+      environment,
+      runId,
+      ["v1"],
+      "SPARK_X_AGENT_MCP_BASELINE_INVALID",
+    );
+    if (
+      baseline.id !== serverId ||
+      !baseline.enabled ||
+      baseline.status !== "stopped" ||
+      baseline.toolsCount !== 0
+    ) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_MCP_BASELINE_MISMATCH",
+        "MCP 调用夹具不存在或已偏离未启动基线。",
+      );
+    }
+    const startResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "POST", path: actionPath(`/admin/mcp/servers/${serverId}/start`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(startResponse, "SPARK_X_AGENT_MCP_START_FAILED");
+    const runningResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(runningResponse, "SPARK_X_AGENT_MCP_RUNNING_READ_FAILED");
+    const running = mcpFixtureServerProjection(
+      successfulData(runningResponse.body, "SPARK_X_AGENT_MCP_RUNNING_INVALID"),
+      environment,
+      runId,
+      ["v1"],
+      "SPARK_X_AGENT_MCP_RUNNING_INVALID",
+    );
+    if (
+      running.id !== serverId ||
+      !running.enabled ||
+      running.status !== "running" ||
+      running.toolsCount !== 1 ||
+      running.startedAt === null
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_RUNNING_STATE_MISMATCH",
+        "MCP 夹具启动后未形成唯一运行中工具投影。",
+      );
+    }
+    const tool = await readMcpFixtureTool(environment, token, serverId, "v1", remainingOptions());
+    const user = await listUserMcpOccurrences(
+      environment,
+      token,
+      { name: running.name, serverId, status: "running", toolsCount: 1 },
+      remainingOptions(),
+    );
+    if (user.occurrences !== 1) {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_USER_PROJECTION_MISMATCH",
+        "运行中的 MCP 夹具未形成唯一用户投影。",
+      );
+    }
+    const invocation = await invokeMcpFixtureTool(
+      environment,
+      token,
+      runId,
+      tool.id,
+      "v1",
+      remainingOptions(),
+    );
+    return {
+      serverId,
+      toolId: tool.id,
+      serverNameSha256: sha256(running.name),
+      qualifiedNameSha256: sha256(`${running.name}__${mcpFixtureToolName}`),
+      inputSchemaSha256: sha256(canonicalJson(tool.schema)),
+      argumentsSha256: invocation.argumentsSha256,
+      resultSha256: invocation.resultSha256,
+      running: true,
+      userProjectionMatched: true,
+      credentialFieldsAbsent: user.privateFieldsAbsent,
+      toolGovernanceMatched: true,
+      invoked: true,
+      recordCount: invocation.recordCount,
+      revision: invocation.revision,
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/mcp.assert-reconnect") {
+    const runId = variables["run.id"];
+    if (typeof runId !== "string" || !uuidPattern.test(runId)) {
+      throw assertionFailure("SPARK_X_AGENT_MCP_RUN_ID_REQUIRED", "MCP 重连必须绑定有效 run_id。");
+    }
+    const serverId = requiredUuid(params, "serverId", variables);
+    const baselineResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(baselineResponse, "SPARK_X_AGENT_MCP_BASELINE_FAILED");
+    const baseline = mcpFixtureServerProjection(
+      successfulData(baselineResponse.body, "SPARK_X_AGENT_MCP_BASELINE_INVALID"),
+      environment,
+      runId,
+      ["v1"],
+      "SPARK_X_AGENT_MCP_BASELINE_INVALID",
+    );
+    if (
+      baseline.id !== serverId ||
+      !baseline.enabled ||
+      baseline.status !== "stopped" ||
+      baseline.toolsCount !== 0
+    ) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_MCP_BASELINE_MISMATCH",
+        "MCP 重连夹具不存在或已偏离未启动基线。",
+      );
+    }
+    const startResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "POST", path: actionPath(`/admin/mcp/servers/${serverId}/start`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(startResponse, "SPARK_X_AGENT_MCP_START_FAILED");
+    const v1DetailResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(v1DetailResponse, "SPARK_X_AGENT_MCP_RUNNING_READ_FAILED");
+    const v1Detail = mcpFixtureServerProjection(
+      successfulData(v1DetailResponse.body, "SPARK_X_AGENT_MCP_RUNNING_INVALID"),
+      environment,
+      runId,
+      ["v1"],
+      "SPARK_X_AGENT_MCP_RUNNING_INVALID",
+    );
+    if (
+      v1Detail.id !== serverId ||
+      v1Detail.status !== "running" ||
+      v1Detail.toolsCount !== 1 ||
+      v1Detail.startedAt === null
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_RUNNING_STATE_MISMATCH",
+        "MCP 重连夹具未进入 v1 运行基线。",
+      );
+    }
+    const v1Tool = await readMcpFixtureTool(environment, token, serverId, "v1", remainingOptions());
+    const v1Invocation = await invokeMcpFixtureTool(
+      environment,
+      token,
+      runId,
+      v1Tool.id,
+      "v1",
+      remainingOptions(),
+    );
+    const updateResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "PUT",
+        path: actionPath(`/admin/mcp/servers/${serverId}`),
+        headers: { "Content-Type": "application/json" },
+        body: mcpFixtureInput(environment, runId, "v2", true),
+      },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(updateResponse, "SPARK_X_AGENT_MCP_UPDATE_FAILED");
+    const updateEnvelope = objectValue(updateResponse.body);
+    const updated = mcpFixtureServerProjection(
+      successfulData(updateResponse.body, "SPARK_X_AGENT_MCP_UPDATE_INVALID"),
+      environment,
+      runId,
+      ["v2"],
+      "SPARK_X_AGENT_MCP_UPDATE_INVALID",
+    );
+    if (
+      updateEnvelope?.needs_restart !== true ||
+      updated.id !== serverId ||
+      updated.status !== "running" ||
+      updated.toolsCount !== 1
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_UPDATE_RESTART_MARKER_MISSING",
+        "MCP 运行中配置修改未保留旧连接或未返回需重启标记。",
+      );
+    }
+    const beforeRestart = await invokeMcpFixtureTool(
+      environment,
+      token,
+      runId,
+      v1Tool.id,
+      "v1",
+      remainingOptions(),
+    );
+    const restartResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "POST", path: actionPath(`/admin/mcp/servers/${serverId}/restart`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(restartResponse, "SPARK_X_AGENT_MCP_RESTART_FAILED");
+    const v2DetailResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(v2DetailResponse, "SPARK_X_AGENT_MCP_RESTART_READ_FAILED");
+    const v2Detail = mcpFixtureServerProjection(
+      successfulData(v2DetailResponse.body, "SPARK_X_AGENT_MCP_RESTART_INVALID"),
+      environment,
+      runId,
+      ["v2"],
+      "SPARK_X_AGENT_MCP_RESTART_INVALID",
+    );
+    if (
+      v2Detail.id !== serverId ||
+      v2Detail.status !== "running" ||
+      v2Detail.toolsCount !== 1 ||
+      v2Detail.startedAt === null ||
+      v2Detail.startedAt === v1Detail.startedAt
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_RESTART_STATE_MISMATCH",
+        "MCP 重启后未切换到新连接或启动时间未推进。",
+      );
+    }
+    const refreshResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "POST", path: actionPath(`/admin/mcp/servers/${serverId}/refresh`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(refreshResponse, "SPARK_X_AGENT_MCP_REFRESH_FAILED");
+    const refreshData = dataEnvelope(refreshResponse.body, "SPARK_X_AGENT_MCP_REFRESH_INVALID");
+    if (!Array.isArray(refreshData.items) || refreshData.items.length !== 1) {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_REFRESH_CARDINALITY_MISMATCH",
+        "MCP 重连后刷新未返回唯一工具。",
+      );
+    }
+    const refreshedTool = mcpFixtureToolProjection(
+      refreshData.items[0],
+      serverId,
+      "v2",
+      "SPARK_X_AGENT_MCP_REFRESH_PROJECTION_MISMATCH",
+    );
+    const v2Tool = await readMcpFixtureTool(environment, token, serverId, "v2", remainingOptions());
+    if (refreshedTool.id !== v1Tool.id || v2Tool.id !== v1Tool.id) {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_TOOL_IDENTITY_DRIFT",
+        "MCP 重连刷新后同名工具身份发生漂移。",
+      );
+    }
+    const v2Invocation = await invokeMcpFixtureTool(
+      environment,
+      token,
+      runId,
+      v2Tool.id,
+      "v2",
+      remainingOptions(),
+    );
+    const v1SchemaSha256 = sha256(canonicalJson(v1Tool.schema));
+    const v2SchemaSha256 = sha256(canonicalJson(v2Tool.schema));
+    if (v1SchemaSha256 === v2SchemaSha256) {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_DESCRIPTOR_NOT_REFRESHED",
+        "MCP 重连后的工具描述符未刷新到 v2。",
+      );
+    }
+    return {
+      serverId,
+      toolId: v1Tool.id,
+      serverNameSha256: sha256(v2Detail.name),
+      v1AddressSha256: sha256(mcpFixtureAddress(environment, "v1")),
+      v2AddressSha256: sha256(mcpFixtureAddress(environment, "v2")),
+      v1SchemaSha256,
+      v2SchemaSha256,
+      v1ResultSha256: v1Invocation.resultSha256,
+      v2ResultSha256: v2Invocation.resultSha256,
+      needsRestart: true,
+      oldConnectionUsedBeforeRestart: beforeRestart.revision === 1,
+      restarted: true,
+      startedAtChanged: true,
+      toolIdentityStable: true,
+      descriptorChanged: true,
+      cacheRefreshed: true,
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/mcp.assert-disconnect-disable-delete") {
+    const runId = variables["run.id"];
+    if (typeof runId !== "string" || !uuidPattern.test(runId)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_MCP_RUN_ID_REQUIRED",
+        "MCP 断线生命周期必须绑定有效 run_id。",
+      );
+    }
+    const serverId = requiredUuid(params, "serverId", variables);
+    const baselineResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(baselineResponse, "SPARK_X_AGENT_MCP_BASELINE_FAILED");
+    const baseline = mcpFixtureServerProjection(
+      successfulData(baselineResponse.body, "SPARK_X_AGENT_MCP_BASELINE_INVALID"),
+      environment,
+      runId,
+      ["v1"],
+      "SPARK_X_AGENT_MCP_BASELINE_INVALID",
+    );
+    if (
+      baseline.id !== serverId ||
+      !baseline.enabled ||
+      baseline.status !== "stopped" ||
+      baseline.toolsCount !== 0
+    ) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_MCP_BASELINE_MISMATCH",
+        "MCP 断线夹具不存在或已偏离未启动基线。",
+      );
+    }
+    const startResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "POST", path: actionPath(`/admin/mcp/servers/${serverId}/start`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(startResponse, "SPARK_X_AGENT_MCP_START_FAILED");
+    const tool = await readMcpFixtureTool(environment, token, serverId, "v1", remainingOptions());
+    const updateResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "PUT",
+        path: actionPath(`/admin/mcp/servers/${serverId}`),
+        headers: { "Content-Type": "application/json" },
+        body: mcpFixtureInput(environment, runId, "fault", true),
+      },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(updateResponse, "SPARK_X_AGENT_MCP_FAULT_UPDATE_FAILED");
+    const updateEnvelope = objectValue(updateResponse.body);
+    const updated = mcpFixtureServerProjection(
+      successfulData(updateResponse.body, "SPARK_X_AGENT_MCP_FAULT_UPDATE_INVALID"),
+      environment,
+      runId,
+      ["fault"],
+      "SPARK_X_AGENT_MCP_FAULT_UPDATE_INVALID",
+    );
+    if (
+      updateEnvelope?.needs_restart !== true ||
+      updated.id !== serverId ||
+      updated.status !== "running"
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_FAULT_UPDATE_RESTART_MARKER_MISSING",
+        "MCP 断线配置未在旧连接仍运行时要求重启。",
+      );
+    }
+    const restartResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "POST", path: actionPath(`/admin/mcp/servers/${serverId}/restart`) },
+      remainingOptions(),
+    );
+    const disconnectErrorSha256 = expectedMcpFailureSha256(
+      restartResponse,
+      "SPARK_X_AGENT_MCP_DISCONNECT_NOT_VISIBLE",
+      "MCP 固定不可达目标重启没有返回可见失败。",
+    );
+    const errorResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(errorResponse, "SPARK_X_AGENT_MCP_ERROR_READ_FAILED");
+    const errorState = mcpFixtureServerProjection(
+      successfulData(errorResponse.body, "SPARK_X_AGENT_MCP_ERROR_STATE_INVALID"),
+      environment,
+      runId,
+      ["fault"],
+      "SPARK_X_AGENT_MCP_ERROR_STATE_INVALID",
+    );
+    if (
+      errorState.id !== serverId ||
+      errorState.status !== "error" ||
+      errorState.toolsCount !== 0
+    ) {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_ERROR_STATE_MISMATCH",
+        "MCP 断线后未持久化 error 状态或仍保留运行时工具。",
+      );
+    }
+    const disableResponse = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "PUT",
+        path: actionPath(`/admin/mcp/servers/${serverId}`),
+        headers: { "Content-Type": "application/json" },
+        body: mcpFixtureInput(environment, runId, "fault", false),
+      },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(disableResponse, "SPARK_X_AGENT_MCP_DISABLE_FAILED");
+    const disabled = mcpFixtureServerProjection(
+      successfulData(disableResponse.body, "SPARK_X_AGENT_MCP_DISABLE_INVALID"),
+      environment,
+      runId,
+      ["fault"],
+      "SPARK_X_AGENT_MCP_DISABLE_INVALID",
+    );
+    if (disabled.id !== serverId || disabled.enabled || disabled.status !== "stopped") {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_DISABLE_STATE_MISMATCH",
+        "MCP 停用后未持久化 stopped 状态。",
+      );
+    }
+    const disabledUser = await listUserMcpOccurrences(
+      environment,
+      token,
+      { name: disabled.name },
+      remainingOptions(),
+    );
+    if (disabledUser.occurrences !== 0) {
+      throw apiFailure("SPARK_X_AGENT_MCP_DISABLED_STILL_VISIBLE", "MCP 停用后仍出现在用户目录。");
+    }
+    const disabledInvocation = await authenticatedRequest(
+      environment,
+      token,
+      {
+        method: "POST",
+        path: actionPath("/admin/mcp/tools/invoke"),
+        headers: { "Content-Type": "application/json" },
+        body: {
+          tool_id: tool.id,
+          parameters: mcpFixtureArguments(runId, "v1"),
+        },
+      },
+      remainingOptions(),
+    );
+    const disabledInvocationErrorSha256 = expectedMcpFailureSha256(
+      disabledInvocation,
+      "SPARK_X_AGENT_MCP_DISABLED_INVOCATION_NOT_DENIED",
+      "MCP 停用后诊断调用未被阻断。",
+    );
+    const deleteResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "DELETE", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+      remainingOptions(),
+    );
+    acceptedMcpRuntime(deleteResponse, "SPARK_X_AGENT_MCP_DELETE_FAILED");
+    const deleteBody = objectValue(deleteResponse.body);
+    if (deleteBody?.success !== true || deleteBody.message !== "服务已删除") {
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_DELETE_RESPONSE_INVALID",
+        "MCP 删除回执缺少稳定成功证据。",
+      );
+    }
+    const deletedDetail = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+      remainingOptions(),
+    );
+    if (deletedDetail.status !== 404) {
+      if (deletedDetail.status >= 500) {
+        throw environmentFailure(
+          "SPARK_X_AGENT_MCP_DEPENDENCY_UNAVAILABLE",
+          `MCP 删除后管理详情返回 HTTP ${deletedDetail.status}。`,
+        );
+      }
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_DELETE_RESIDUE",
+        "MCP 删除后管理详情仍可读。",
+        deletedDetail.status,
+      );
+    }
+    const deletedAdminCatalogOccurrences = await listAdminMcpOccurrences(
+      environment,
+      token,
+      disabled.name,
+      remainingOptions(),
+    );
+    const deletedUser = await listUserMcpOccurrences(
+      environment,
+      token,
+      { name: disabled.name },
+      remainingOptions(),
+    );
+    if (deletedAdminCatalogOccurrences !== 0 || deletedUser.occurrences !== 0) {
+      throw apiFailure("SPARK_X_AGENT_MCP_DELETE_RESIDUE", "MCP 删除后管理或用户目录仍有残留。");
+    }
+    return {
+      serverId,
+      toolId: tool.id,
+      serverNameSha256: sha256(disabled.name),
+      disconnectErrorSha256,
+      disabledInvocationErrorSha256,
+      disconnectFailureVisible: true,
+      errorStateMatched: true,
+      runtimeToolsUnavailable: true,
+      disabled: true,
+      disabledUserCatalogOccurrences: disabledUser.occurrences,
+      disabledInvocationDenied: true,
+      deleted: true,
+      deletedAdminDetailAbsent: true,
+      deletedAdminCatalogOccurrences,
+      deletedUserCatalogOccurrences: deletedUser.occurrences,
+    };
+  }
+
+  if (action === "adapter:spark-x-agent/mcp.cleanup-fixture") {
+    const runId = variables["run.id"];
+    if (typeof runId !== "string" || !uuidPattern.test(runId)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_MCP_RUN_ID_REQUIRED",
+        "MCP 夹具清理必须绑定有效 run_id。",
+      );
+    }
+    const serverId = requiredUuid(params, "serverId", variables);
+    const name = mcpFixtureName(runId);
+    const detailResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+      remainingOptions(),
+    );
+    let alreadyMissing = detailResponse.status === 404;
+    if (!alreadyMissing) {
+      acceptedMcpRuntime(detailResponse, "SPARK_X_AGENT_MCP_CLEANUP_READ_FAILED");
+      const detail = mcpFixtureServerProjection(
+        successfulData(detailResponse.body, "SPARK_X_AGENT_MCP_CLEANUP_READ_INVALID"),
+        environment,
+        runId,
+        ["v1", "v2", "fault"],
+        "SPARK_X_AGENT_MCP_CLEANUP_READ_INVALID",
+      );
+      if (detail.id !== serverId) {
+        throw assertionFailure(
+          "SPARK_X_AGENT_MCP_CLEANUP_OWNERSHIP_FAILED",
+          "MCP 夹具清理目标与当前 run_id 资源不一致。",
+        );
+      }
+      const stopResponse = await authenticatedRequest(
+        environment,
+        token,
+        { method: "POST", path: actionPath(`/admin/mcp/servers/${serverId}/stop`) },
+        remainingOptions(),
+      );
+      acceptedMcpRuntime(stopResponse, "SPARK_X_AGENT_MCP_CLEANUP_STOP_FAILED");
+      const deleteResponse = await authenticatedRequest(
+        environment,
+        token,
+        { method: "DELETE", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+        remainingOptions(),
+      );
+      if (deleteResponse.status === 404) {
+        alreadyMissing = true;
+      } else {
+        acceptedMcpRuntime(deleteResponse, "SPARK_X_AGENT_MCP_CLEANUP_DELETE_FAILED");
+      }
+    }
+    const verifyResponse = await authenticatedRequest(
+      environment,
+      token,
+      { method: "GET", path: actionPath(`/admin/mcp/servers/${serverId}`) },
+      remainingOptions(),
+    );
+    if (verifyResponse.status !== 404) {
+      if (verifyResponse.status >= 500) {
+        throw environmentFailure(
+          "SPARK_X_AGENT_MCP_DEPENDENCY_UNAVAILABLE",
+          `MCP 清理复核返回 HTTP ${verifyResponse.status}。`,
+        );
+      }
+      throw apiFailure(
+        "SPARK_X_AGENT_MCP_CLEANUP_RESIDUE",
+        "MCP 清理后管理详情仍可读。",
+        verifyResponse.status,
+      );
+    }
+    const adminCatalogOccurrences = await listAdminMcpOccurrences(
+      environment,
+      token,
+      name,
+      remainingOptions(),
+    );
+    if (adminCatalogOccurrences !== 0) {
+      throw apiFailure("SPARK_X_AGENT_MCP_CLEANUP_RESIDUE", "MCP 清理后管理目录仍有同名残留。");
+    }
+    return {
+      serverId,
+      serverNameSha256: sha256(name),
+      stopped: true,
       deleted: true,
       alreadyMissing,
       adminDetailAbsent: true,

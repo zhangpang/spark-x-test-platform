@@ -189,6 +189,69 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /fixtures/mcp/read-only/v1:
+    post:
+      tags: [Fixtures]
+      operationId: callReadOnlyMcpFixtureV1
+      summary: Deterministic Streamable HTTP MCP revision-one fixture for the controlled test environment.
+      description: |
+        Registered only when PLATFORM_MCP_FIXTURE_ENABLED=true. It accepts a fixed noncredential
+        Bearer, a valid run identifier, a run-bound MCP session, and a strict JSON-RPC method
+        allowlist. It never forwards requests and advertises one read-only deterministic tool.
+      parameters:
+        - $ref: "#/components/parameters/McpFixtureAuthorization"
+        - $ref: "#/components/parameters/McpFixtureRunId"
+        - $ref: "#/components/parameters/McpFixtureSessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/McpFixtureJsonRpcRequest"
+      responses:
+        "200":
+          description: Deterministic JSON-RPC result with a run-bound MCP session header.
+          content:
+            application/json:
+              schema:
+                type: object
+        "202":
+          description: Initialization notification accepted without a response body.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /fixtures/mcp/read-only/v2:
+    post:
+      tags: [Fixtures]
+      operationId: callReadOnlyMcpFixtureV2
+      summary: Deterministic Streamable HTTP MCP revision-two fixture for reconnect validation.
+      description: |
+        Uses the same fixed security boundary as v1 while changing only the tool descriptor and
+        deterministic result revision, allowing MCP-003 to prove connection and cache refresh.
+      parameters:
+        - $ref: "#/components/parameters/McpFixtureAuthorization"
+        - $ref: "#/components/parameters/McpFixtureRunId"
+        - $ref: "#/components/parameters/McpFixtureSessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/McpFixtureJsonRpcRequest"
+      responses:
+        "200":
+          description: Deterministic revision-two JSON-RPC result.
+          content:
+            application/json:
+              schema:
+                type: object
+        "202":
+          description: Initialization notification accepted without a response body.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /systems:
     get:
       tags: [Systems]
@@ -1416,6 +1479,27 @@ paths:
                 $ref: "#/components/schemas/AuditPage"
 components:
   parameters:
+    McpFixtureAuthorization:
+      name: Authorization
+      in: header
+      required: true
+      schema:
+        type: string
+        maxLength: 200
+    McpFixtureRunId:
+      name: X-Spark-X-Run-Id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+    McpFixtureSessionId:
+      name: Mcp-Session-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 128
     Cursor:
       name: cursor
       in: query
@@ -1533,6 +1617,26 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    McpFixtureJsonRpcRequest:
+      type: object
+      additionalProperties: false
+      required: [jsonrpc, method]
+      properties:
+        jsonrpc:
+          const: "2.0"
+        id:
+          type: integer
+          minimum: 0
+        method:
+          enum:
+            - initialize
+            - notifications/initialized
+            - tools/list
+            - resources/list
+            - prompts/list
+            - tools/call
+        params:
+          type: [object, "null"]
     Health:
       type: object
       required: [status, time]
