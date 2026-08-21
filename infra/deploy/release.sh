@@ -78,6 +78,10 @@ if ! grep -q '^PLATFORM_SKILL_INJECTION_FIXTURE_ENABLED=' "$ENV_FILE"; then
   printf 'PLATFORM_SKILL_INJECTION_FIXTURE_ENABLED=true\n' >> "$ENV_FILE"
 fi
 
+if ! grep -q '^PLATFORM_MCP_FIXTURE_ENABLED=' "$ENV_FILE"; then
+  printf 'PLATFORM_MCP_FIXTURE_ENABLED=true\n' >> "$ENV_FILE"
+fi
+
 if grep -q "change-me-local-only" "$ENV_FILE"; then
   echo "runtime environment still contains an example secret" >&2
   exit 67
