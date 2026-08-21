@@ -76,7 +76,7 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/conversation.create`：以内存密钥登录，创建标题含 `${run.id}` 的会话并返回非敏感会话 ID；必须同步登记资源和删除补偿；
 - `adapter:spark-x-agent/conversation.assert-recent`：重新登录并验证新会话位于最近会话列表的首个非置顶位置，输出列表位置与消息数摘要；
 - `adapter:spark-x-agent/chat.ask`：向此前已创建并登记的测试会话发送消息含 `${run.id}` 的受控真实模型请求，逐次校验重定向目标，限制 SSE 为 1 MB，只输出终态、事件计数、长度和最终回答 SHA-256；流中会话 ID 必须与登记 ID 一致；
-- `adapter:spark-x-agent/provider.create-transient-failure-fixture`：固定创建同环境主机、白名单端口 9 的不可达 Provider 夹具，输出仅登记夹具/原 Provider 标识及哈希；必须同步登记专用资源和恢复补偿；
+- `adapter:spark-x-agent/provider.create-transient-failure-fixture`：准备同环境主机、白名单端口 9 的不可达 Provider 夹具；首次创建后清理回唯一显式测试池，后续按同一 UUID 复用，以兼容不可变 Turn–Provider 绑定；输出仅登记夹具/原 Provider 标识、创建/复用判定及哈希；
 - `adapter:spark-x-agent/chat.assert-provider-failure-retry`：用已登记夹具产生 `provider_unavailable` 可见首错，恢复原 Provider 后以新幂等键提交独立 Turn，严格校验三条消息基数且不输出正文或 Provider 配置；
 - `adapter:spark-x-agent/provider.create-context-compaction-fixture`：固定创建同环境主机、白名单端口 4173 的受限 OpenAI 兼容 Provider 夹具，只输出夹具/原 Provider 标识及哈希；必须同步登记专用资源和恢复补偿；
 - `adapter:spark-x-agent/chat.assert-context-compaction-continuity`：用已登记夹具产生一组真实内置只读 `document_search` 调用/结果，在 24 轮有界消息内按序观察唯一压缩阶段，再以独立请求验证关键事实、工具状态和持久化游标连续；只输出计数、判定和 SHA-256；
@@ -90,7 +90,7 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/mcp.assert-reconnect`：运行中切换固定 v1/v2 地址，证明重启前旧连接仍生效，重启后同一工具身份、描述符缓存和实际结果同步刷新；不以重试掩盖失败；
 - `adapter:spark-x-agent/mcp.assert-disconnect-disable-delete`：切换固定不可达目标保留首次断线与 error 状态，停用后证明用户不可见和调用为零，删除后管理/用户投影无残留；
 - `adapter:spark-x-agent/mcp.cleanup-fixture`：只停止并删除当前 `run_id` 所有且地址属于固定 v1/v2/不可达集合的连接器，验证目录零残留并支持幂等重放；
-- `adapter:spark-x-agent/provider.cleanup-transient-failure-fixture`：先恢复资源标识中的原 Provider，再幂等删除夹具并验证唯一活跃 Provider，用于普通 `finally` 与独立补偿；
+- `adapter:spark-x-agent/provider.cleanup-transient-failure-fixture`：先恢复资源标识中的原 Provider；短暂故障夹具恢复到固定非活跃测试池，未形成不可变引用的其他 Provider 夹具幂等删除，并验证唯一活跃 Provider；用于普通 `finally` 与独立补偿；
 - `adapter:spark-x-agent/chat.assert-history`：重新登录并校验唯一用户消息、唯一助手回复、`stop` 终止原因，以及落库回答 SHA-256 与流式最终回答一致；
 - `adapter:spark-x-agent/chat.assert-context-history`：校验同一主会话两轮用户/助手消息顺序、两次流式哈希、`stop` 终态、零工具消息，并拒绝独立干扰会话标识串入；
 - `adapter:spark-x-agent/tool.assert-safe-catalog`：校验 `builtin-demo` 三个内置只读工具在普通用户与管理员目录中一致，且用户投影不暴露连接配置；
@@ -136,7 +136,7 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - 用例总超时包含主步骤，不包含被平台限制的清理宽限期；
 - 主步骤失败后停止后续普通步骤，除非显式 `continueOnFailure=true`；
 - 无论通过、失败、取消或超时，`finally` 都执行；
-- `finally` 失败单独分类，并创建补偿清理任务；
+- `finally` 失败单独分类；存在未清理登记资源时，剩余案例立即收敛为 cancelled，不再等待同一资源锁，运行直接进入补偿任务；
 - 诊断重试从用例开头运行，不从失败步骤继续；
 - 首次失败输入摘要、输出摘要和附件不得被覆盖。
 

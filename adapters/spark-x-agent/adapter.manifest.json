@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -323,7 +323,7 @@
       {
         "key": "provider.create-transient-failure-fixture",
         "name": "创建短暂 Provider 故障夹具",
-        "description": "登记一个固定不可达且不具备真实凭据的临时 Provider，并冻结原活跃 Provider 标识供中断补偿。",
+        "description": "准备一个固定不可达且不具备真实凭据的显式测试 Provider；可复用已回收池资源，并冻结原活跃 Provider 标识供中断补偿。",
         "actionLevel": "dangerous",
         "defaultTimeoutMs": 20000,
         "producesResource": true,
@@ -358,6 +358,7 @@
             "fixtureProviderId",
             "originalProviderId",
             "fixtureCreated",
+            "fixtureReused",
             "originalProviderActive",
             "faultTargetAllowed",
             "faultBaseUrlSha256",
@@ -378,7 +379,10 @@
               "format": "uuid"
             },
             "fixtureCreated": {
-              "const": true
+              "type": "boolean"
+            },
+            "fixtureReused": {
+              "type": "boolean"
             },
             "originalProviderActive": {
               "const": true
@@ -402,7 +406,7 @@
       {
         "key": "provider.cleanup-transient-failure-fixture",
         "name": "清理短暂 Provider 故障夹具",
-        "description": "重新激活故障前 Provider，幂等删除临时故障夹具，并验证活跃 Provider 唯一。",
+        "description": "重新激活故障前 Provider；不可变 Turn 已引用的故障夹具回收到显式测试池，其他夹具幂等删除，并验证活跃 Provider 唯一。",
         "actionLevel": "dangerous",
         "defaultTimeoutMs": 20000,
         "producesResource": false,
@@ -435,6 +439,7 @@
             "providerFixtureResourceIdSha256",
             "originalProviderActive",
             "fixtureDeleted",
+            "fixtureReturnedToPool",
             "activeProviderCount"
           ],
           "properties": {
@@ -447,7 +452,10 @@
               "const": true
             },
             "fixtureDeleted": {
-              "const": true
+              "type": "boolean"
+            },
+            "fixtureReturnedToPool": {
+              "type": "boolean"
             },
             "activeProviderCount": {
               "const": 1
@@ -493,6 +501,7 @@
             "fixtureProviderId",
             "originalProviderId",
             "fixtureCreated",
+            "fixtureReused",
             "originalProviderActive",
             "contextFixtureTargetAllowed",
             "contextBaseUrlSha256",
@@ -514,6 +523,9 @@
             },
             "fixtureCreated": {
               "const": true
+            },
+            "fixtureReused": {
+              "const": false
             },
             "originalProviderActive": {
               "const": true
@@ -572,6 +584,7 @@
             "fixtureProviderId",
             "originalProviderId",
             "fixtureCreated",
+            "fixtureReused",
             "originalProviderActive",
             "skillFixtureTargetAllowed",
             "skillBaseUrlSha256",
@@ -593,6 +606,9 @@
             },
             "fixtureCreated": {
               "const": true
+            },
+            "fixtureReused": {
+              "const": false
             },
             "originalProviderActive": {
               "const": true

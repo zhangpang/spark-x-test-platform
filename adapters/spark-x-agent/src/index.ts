@@ -240,7 +240,7 @@ export const sparkXAgentActionCapabilities = [
     key: "provider.create-transient-failure-fixture",
     name: "创建短暂 Provider 故障夹具",
     description:
-      "登记一个固定不可达且不具备真实凭据的临时 Provider，并冻结原活跃 Provider 标识供中断补偿。",
+      "准备一个固定不可达且不具备真实凭据的显式测试 Provider；可复用已回收池资源，并冻结原活跃 Provider 标识供中断补偿。",
     actionLevel: "dangerous",
     defaultTimeoutMs: 20_000,
     producesResource: true,
@@ -263,6 +263,7 @@ export const sparkXAgentActionCapabilities = [
         "fixtureProviderId",
         "originalProviderId",
         "fixtureCreated",
+        "fixtureReused",
         "originalProviderActive",
         "faultTargetAllowed",
         "faultBaseUrlSha256",
@@ -272,7 +273,8 @@ export const sparkXAgentActionCapabilities = [
         providerFixtureResourceId: { type: "string", minLength: 73, maxLength: 73 },
         fixtureProviderId: { type: "string", format: "uuid" },
         originalProviderId: { type: "string", format: "uuid" },
-        fixtureCreated: { const: true },
+        fixtureCreated: { type: "boolean" },
+        fixtureReused: { type: "boolean" },
         originalProviderActive: { const: true },
         faultTargetAllowed: { const: true },
         faultBaseUrlSha256: { type: "string", minLength: 64, maxLength: 64 },
@@ -283,7 +285,8 @@ export const sparkXAgentActionCapabilities = [
   {
     key: "provider.cleanup-transient-failure-fixture",
     name: "清理短暂 Provider 故障夹具",
-    description: "重新激活故障前 Provider，幂等删除临时故障夹具，并验证活跃 Provider 唯一。",
+    description:
+      "重新激活故障前 Provider；不可变 Turn 已引用的故障夹具回收到显式测试池，其他夹具幂等删除，并验证活跃 Provider 唯一。",
     actionLevel: "dangerous",
     defaultTimeoutMs: 20_000,
     producesResource: false,
@@ -304,12 +307,14 @@ export const sparkXAgentActionCapabilities = [
         "providerFixtureResourceIdSha256",
         "originalProviderActive",
         "fixtureDeleted",
+        "fixtureReturnedToPool",
         "activeProviderCount",
       ],
       properties: {
         providerFixtureResourceIdSha256: { type: "string", minLength: 64, maxLength: 64 },
         originalProviderActive: { const: true },
-        fixtureDeleted: { const: true },
+        fixtureDeleted: { type: "boolean" },
+        fixtureReturnedToPool: { type: "boolean" },
         activeProviderCount: { const: 1 },
       },
     },
@@ -341,6 +346,7 @@ export const sparkXAgentActionCapabilities = [
         "fixtureProviderId",
         "originalProviderId",
         "fixtureCreated",
+        "fixtureReused",
         "originalProviderActive",
         "contextFixtureTargetAllowed",
         "contextBaseUrlSha256",
@@ -351,6 +357,7 @@ export const sparkXAgentActionCapabilities = [
         fixtureProviderId: { type: "string", format: "uuid" },
         originalProviderId: { type: "string", format: "uuid" },
         fixtureCreated: { const: true },
+        fixtureReused: { const: false },
         originalProviderActive: { const: true },
         contextFixtureTargetAllowed: { const: true },
         contextBaseUrlSha256: { type: "string", minLength: 64, maxLength: 64 },
@@ -385,6 +392,7 @@ export const sparkXAgentActionCapabilities = [
         "fixtureProviderId",
         "originalProviderId",
         "fixtureCreated",
+        "fixtureReused",
         "originalProviderActive",
         "skillFixtureTargetAllowed",
         "skillBaseUrlSha256",
@@ -395,6 +403,7 @@ export const sparkXAgentActionCapabilities = [
         fixtureProviderId: { type: "string", format: "uuid" },
         originalProviderId: { type: "string", format: "uuid" },
         fixtureCreated: { const: true },
+        fixtureReused: { const: false },
         originalProviderActive: { const: true },
         skillFixtureTargetAllowed: { const: true },
         skillBaseUrlSha256: { type: "string", minLength: 64, maxLength: 64 },
@@ -2649,7 +2658,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.25.0",
+  version: "0.26.0",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -4342,6 +4351,7 @@ interface SparkXProviderFixtureResource {
 
 const transientProviderFixtureApiKey = "spark-x-test-platform-noncredential-fault-fixture";
 const transientProviderFixtureModel = "spark-x-test-platform-fault-model";
+const transientProviderFixturePoolName = "spark-x-test-platform-provider-fault-pool";
 const contextCompactionFixtureApiKey =
   "spark-x-test-platform-noncredential-context-compaction-fixture";
 const contextCompactionFixtureModel = "spark-x-test-platform-context-compaction-model";
@@ -4476,6 +4486,42 @@ async function activateSparkXProvider(
     options,
   );
   accepted(response, "SPARK_X_AGENT_PROVIDER_ACTIVATION_FAILED");
+}
+
+async function updateSparkXProviderFixture(
+  environment: HttpExecutionEnvironment,
+  token: string,
+  providerId: string,
+  input: Readonly<{
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+  }>,
+  options: SparkXAgentExecutionOptions,
+): Promise<SparkXProviderProjection> {
+  const response = await authenticatedRequest(
+    environment,
+    token,
+    {
+      method: "PUT",
+      path: actionPath(`/providers/${encodeURIComponent(providerId)}`),
+      headers: { "Content-Type": "application/json" },
+      body: {
+        name: input.name,
+        base_url: input.baseUrl,
+        api_key: input.apiKey,
+        model: input.model,
+        protocol: "openai",
+      },
+    },
+    options,
+  );
+  accepted(response, "SPARK_X_AGENT_PROVIDER_FIXTURE_UPDATE_FAILED");
+  return sparkXProviderProjection(
+    successfulData(response.body, "SPARK_X_AGENT_PROVIDER_FIXTURE_UPDATE_RESPONSE_INVALID"),
+    "SPARK_X_AGENT_PROVIDER_FIXTURE_UPDATE_RESPONSE_INVALID",
+  );
 }
 
 function providerFixtureResource(value: string): SparkXProviderFixtureResource {
@@ -5765,34 +5811,78 @@ export async function executeSparkXAgentAction(
         "本次运行的短暂 Provider 故障夹具名称已存在，需先完成残留清理。",
       );
     }
-    const response = await authenticatedRequest(
-      environment,
-      token,
-      {
-        method: "POST",
-        path: actionPath("/providers"),
-        headers: { "Content-Type": "application/json" },
-        body: {
-          name,
-          base_url: faultBaseUrl,
-          api_key: transientProviderFixtureApiKey,
-          model: transientProviderFixtureModel,
-          protocol: "openai",
-        },
-      },
-      remainingOptions(),
+    const poolCandidates = before.filter(
+      (provider) => provider.name === transientProviderFixturePoolName,
     );
-    accepted(response, "SPARK_X_AGENT_PROVIDER_FIXTURE_CREATE_FAILED");
-    const createdData = dataEnvelope(
-      response.body,
-      "SPARK_X_AGENT_PROVIDER_FIXTURE_RESPONSE_INVALID",
-    );
-    let fixture: SparkXProviderProjection;
-    try {
-      fixture = sparkXProviderProjection(
-        createdData,
-        "SPARK_X_AGENT_PROVIDER_FIXTURE_RESPONSE_INVALID",
+    if (poolCandidates.length > 1) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_PROVIDER_FIXTURE_POOL_DUPLICATED",
+        "短暂 Provider 显式测试资源池存在重复记录，需先完成环境治理。",
       );
+    }
+    const pool = poolCandidates[0];
+    if (
+      pool !== undefined &&
+      (pool.active ||
+        pool.baseUrl !== faultBaseUrl ||
+        pool.model !== transientProviderFixtureModel ||
+        pool.protocol !== "openai")
+    ) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_PROVIDER_FIXTURE_POOL_INVALID",
+        "短暂 Provider 显式测试资源池已偏离固定非活跃基线。",
+      );
+    }
+    const fixtureCreated = pool === undefined;
+    const fixtureReused = pool !== undefined;
+    let fixture: SparkXProviderProjection | undefined;
+    let createdId: string | undefined;
+    try {
+      if (pool !== undefined) {
+        fixture = await updateSparkXProviderFixture(
+          environment,
+          token,
+          pool.id,
+          {
+            name,
+            baseUrl: faultBaseUrl,
+            apiKey: transientProviderFixtureApiKey,
+            model: transientProviderFixtureModel,
+          },
+          remainingOptions(),
+        );
+      } else {
+        const response = await authenticatedRequest(
+          environment,
+          token,
+          {
+            method: "POST",
+            path: actionPath("/providers"),
+            headers: { "Content-Type": "application/json" },
+            body: {
+              name,
+              base_url: faultBaseUrl,
+              api_key: transientProviderFixtureApiKey,
+              model: transientProviderFixtureModel,
+              protocol: "openai",
+            },
+          },
+          remainingOptions(),
+        );
+        accepted(response, "SPARK_X_AGENT_PROVIDER_FIXTURE_CREATE_FAILED");
+        const createdData = dataEnvelope(
+          response.body,
+          "SPARK_X_AGENT_PROVIDER_FIXTURE_RESPONSE_INVALID",
+        );
+        createdId =
+          typeof createdData.id === "string" && uuidPattern.test(createdData.id)
+            ? createdData.id
+            : undefined;
+        fixture = sparkXProviderProjection(
+          createdData,
+          "SPARK_X_AGENT_PROVIDER_FIXTURE_RESPONSE_INVALID",
+        );
+      }
       if (
         fixture.name !== name ||
         fixture.baseUrl !== faultBaseUrl ||
@@ -5806,33 +5896,50 @@ export async function executeSparkXAgentAction(
         );
       }
     } catch (firstError) {
-      if (typeof createdData.id === "string" && uuidPattern.test(createdData.id)) {
+      if (pool !== undefined) {
         try {
-          const cleanupResponse = await authenticatedRequest(
+          await updateSparkXProviderFixture(
             environment,
             token,
+            pool.id,
             {
-              method: "DELETE",
-              path: actionPath(`/providers/${encodeURIComponent(createdData.id)}`),
+              name: transientProviderFixturePoolName,
+              baseUrl: faultBaseUrl,
+              apiKey: transientProviderFixtureApiKey,
+              model: transientProviderFixtureModel,
             },
             remainingOptions(),
           );
-          acceptedSkillRuntime(
-            cleanupResponse,
-            "SPARK_X_AGENT_SKILL_LIFECYCLE_CREATE_ROLLBACK_FAILED",
+        } catch {
+          // Preserve the first projection failure; pool restoration is best-effort here.
+        }
+      } else if (createdId !== undefined) {
+        try {
+          await authenticatedRequest(
+            environment,
+            token,
+            { method: "DELETE", path: actionPath(`/providers/${encodeURIComponent(createdId)}`) },
+            remainingOptions(),
           );
         } catch {
-          // Preserve the first product failure; the malformed fixture has no safe ledger identity.
+          // Preserve the first projection failure; a malformed new row has no safe ledger identity.
         }
       }
       throw firstError;
+    }
+    if (fixture === undefined) {
+      throw apiFailure(
+        "SPARK_X_AGENT_PROVIDER_FIXTURE_RESPONSE_INVALID",
+        "短暂 Provider 故障夹具准备结果缺失。",
+      );
     }
     const providerFixtureResourceId = `${fixture.id}:${active[0].id}`;
     return {
       providerFixtureResourceId,
       fixtureProviderId: fixture.id,
       originalProviderId: active[0].id,
-      fixtureCreated: true,
+      fixtureCreated,
+      fixtureReused,
       originalProviderActive: true,
       faultTargetAllowed: true,
       faultBaseUrlSha256: sha256(faultBaseUrl),
@@ -5934,6 +6041,7 @@ export async function executeSparkXAgentAction(
       fixtureProviderId: fixture.id,
       originalProviderId: active[0].id,
       fixtureCreated: true,
+      fixtureReused: false,
       originalProviderActive: true,
       contextFixtureTargetAllowed: true,
       contextBaseUrlSha256: sha256(contextBaseUrl),
@@ -6032,6 +6140,7 @@ export async function executeSparkXAgentAction(
       fixtureProviderId: fixture.id,
       originalProviderId: active[0].id,
       fixtureCreated: true,
+      fixtureReused: false,
       originalProviderActive: true,
       skillFixtureTargetAllowed: true,
       skillBaseUrlSha256: sha256(skillBaseUrl),
@@ -6047,6 +6156,13 @@ export async function executeSparkXAgentAction(
       73,
     );
     const fixtureResource = providerFixtureResource(providerFixtureResourceId);
+    const runId = variables["run.id"];
+    if (typeof runId !== "string" || !uuidPattern.test(runId)) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PROVIDER_FIXTURE_TRACEABILITY_REQUIRED",
+        "Provider 夹具清理必须绑定有效 run_id。",
+      );
+    }
     const before = await listSparkXProviders(environment, token, remainingOptions());
     const original = before.find((provider) => provider.id === fixtureResource.originalProviderId);
     if (original === undefined) {
@@ -6056,10 +6172,64 @@ export async function executeSparkXAgentAction(
       );
     }
     await activateSparkXProvider(environment, token, original.id, remainingOptions());
-    const fixtureExists = before.some(
-      (provider) => provider.id === fixtureResource.fixtureProviderId,
-    );
-    if (fixtureExists) {
+    const fixture = before.find((provider) => provider.id === fixtureResource.fixtureProviderId);
+    const transientFixture =
+      fixture !== undefined &&
+      fixture.baseUrl === transientProviderFixtureBaseUrl(environment) &&
+      fixture.model === transientProviderFixtureModel &&
+      fixture.protocol === "openai" &&
+      (fixture.name === transientProviderFixturePoolName || fixture.name.includes(runId));
+    const contextFixture =
+      !transientFixture &&
+      fixture !== undefined &&
+      fixture.baseUrl === contextCompactionFixtureBaseUrl(environment) &&
+      fixture.model === contextCompactionFixtureModel &&
+      fixture.protocol === "openai" &&
+      fixture.name.includes(runId);
+    const skillFixture =
+      !transientFixture &&
+      !contextFixture &&
+      fixture !== undefined &&
+      fixture.baseUrl === skillInjectionFixtureBaseUrl(environment) &&
+      fixture.model === skillInjectionFixtureModel &&
+      fixture.protocol === "openai" &&
+      fixture.name.includes(runId);
+    if (fixture !== undefined && !transientFixture && !contextFixture && !skillFixture) {
+      throw assertionFailure(
+        "SPARK_X_AGENT_PROVIDER_FIXTURE_CLEANUP_OWNERSHIP_FAILED",
+        "Provider 夹具清理目标与当前 run_id 或固定夹具配置不一致。",
+      );
+    }
+    let fixtureDeleted = fixture === undefined;
+    let fixtureReturnedToPool = false;
+    if (transientFixture && fixture !== undefined) {
+      const pooled = await updateSparkXProviderFixture(
+        environment,
+        token,
+        fixture.id,
+        {
+          name: transientProviderFixturePoolName,
+          baseUrl: transientProviderFixtureBaseUrl(environment),
+          apiKey: transientProviderFixtureApiKey,
+          model: transientProviderFixtureModel,
+        },
+        remainingOptions(),
+      );
+      if (
+        pooled.id !== fixture.id ||
+        pooled.name !== transientProviderFixturePoolName ||
+        pooled.active ||
+        pooled.baseUrl !== transientProviderFixtureBaseUrl(environment) ||
+        pooled.model !== transientProviderFixtureModel ||
+        pooled.protocol !== "openai"
+      ) {
+        throw apiFailure(
+          "SPARK_X_AGENT_PROVIDER_FIXTURE_POOL_RESTORE_FAILED",
+          "短暂 Provider 夹具未恢复为显式非活跃测试池资源。",
+        );
+      }
+      fixtureReturnedToPool = true;
+    } else if (fixture !== undefined) {
       const deleteResponse = await authenticatedRequest(
         environment,
         token,
@@ -6070,23 +6240,38 @@ export async function executeSparkXAgentAction(
         remainingOptions(),
       );
       accepted(deleteResponse, "SPARK_X_AGENT_PROVIDER_FIXTURE_DELETE_FAILED");
+      fixtureDeleted = true;
     }
     const after = await listSparkXProviders(environment, token, remainingOptions());
     const active = after.filter((provider) => provider.active);
+    const pooled = after.find((provider) => provider.id === fixtureResource.fixtureProviderId);
+    const poolRestored =
+      fixtureReturnedToPool &&
+      pooled?.name === transientProviderFixturePoolName &&
+      pooled.baseUrl === transientProviderFixtureBaseUrl(environment) &&
+      pooled.model === transientProviderFixtureModel &&
+      pooled.protocol === "openai" &&
+      !pooled.active;
     if (
       active.length !== 1 ||
       active[0]?.id !== original.id ||
-      after.some((provider) => provider.id === fixtureResource.fixtureProviderId)
+      (fixtureReturnedToPool ? !poolRestored : pooled !== undefined) ||
+      after.some(
+        (provider) =>
+          provider.id !== fixtureResource.fixtureProviderId &&
+          provider.name === transientProviderFixturePoolName,
+      )
     ) {
       throw apiFailure(
         "SPARK_X_AGENT_PROVIDER_FIXTURE_CLEANUP_ASSERTION_FAILED",
-        "临时 Provider 故障夹具清理后没有恢复唯一原 Provider 或仍有夹具残留。",
+        "Provider 夹具清理后没有恢复唯一原 Provider、回收池或删除边界。",
       );
     }
     return {
       providerFixtureResourceIdSha256: sha256(providerFixtureResourceId),
       originalProviderActive: true,
-      fixtureDeleted: true,
+      fixtureDeleted,
+      fixtureReturnedToPool,
       activeProviderCount: active.length,
     };
   }

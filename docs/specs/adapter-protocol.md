@@ -23,7 +23,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {},
@@ -188,7 +188,7 @@ telemetry.*
 
 星火 Agent 适配器优先复用现有 API、浏览器页面和结构化日志。只有确认证据不足时，才向被测系统增加只读、仅测试环境开启的遥测接口。
 
-当前 `0.25.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
+当前 `0.26.0` 纵向切片已经注册 `conversation.create`、`conversation.assert-recent`、
 `conversation.rename-and-assert-pagination`、`conversation.assert-deleted-state`、`chat.ask`、
 `chat.cancel-and-resume`、`chat.assert-provider-failure-retry`、`chat.assert-context-compaction-continuity`、`chat.assert-history`、`chat.assert-context-history`、
 `provider.create-transient-failure-fixture`、`provider.create-context-compaction-fixture`、`provider.create-skill-injection-fixture`、`provider.cleanup-transient-failure-fixture`、`tool.assert-safe-catalog`、`tool.invoke-safe`、
@@ -233,8 +233,7 @@ SHA-256、长度、Turn ID 和状态计数。
 不接受 URL、host、模型或 API Key 参数；创建回执只登记临时/原 Provider UUID 和名称/目标哈希。`chat.assert-provider-failure-retry` 短暂激活夹具，
 首次 Turn 入队后立即恢复原 Provider，再等待 `provider_unavailable/retryable=true` 终态并确认公开历史有唯一失败输入且无助手消息；用户明确重试
 必须使用派生的新幂等键、新 Turn 和新消息标识，以 `completed/stop` 完成。最终历史严格为失败输入、重试输入、成功助手回复三条且无工具消息。
-固定故障不使用平台诊断重试；原 Provider 恢复失败不覆盖更早的入队首错。`provider.cleanup-transient-failure-fixture` 可被普通 `finally` 和独立补偿调用，
-总是先激活登记的原 Provider，再删除临时夹具并验证唯一活跃 Provider，输出不含 Provider URL、哨兵、消息正文或凭据。
+固定故障不使用平台诊断重试；原 Provider 恢复失败不覆盖更早的入队首错。V12/V16 不可变 Turn 绑定会阻止删除已经实际使用的 Provider，因此短暂故障夹具采用唯一显式测试资源池：首次运行创建，清理时先激活登记的原 Provider，再把故障 Provider 恢复为固定非活跃池名称和固定非凭据配置；后续运行按同一 UUID 复用。`provider.cleanup-transient-failure-fixture` 可被普通 `finally` 和独立补偿调用，输出明确区分删除与回池，且不含 Provider URL、哨兵、消息正文或凭据。
 `provider.create-context-compaction-fixture` 固定构造同环境主机端口 4173、版本化夹具路径、OpenAI 协议、固定模型和无真实权限 Bearer，不接受 URL、host、模型或 API Key 参数。
 夹具 API 仅在 `PLATFORM_CONTEXT_COMPACTION_FIXTURE_ENABLED=true` 时注册，拒绝额外顶层字段、非固定模型、超过 96 条消息或 900,000 字节文本，不转发请求、不安装或执行依赖、不记录消息正文。
 `chat.assert-context-compaction-continuity` 激活夹具后先产生唯一 `document_search` 调用/结果，再用最多 24 轮受控消息触发语义压缩；必须恰好按序观察 `context_compacting/context_ready`。

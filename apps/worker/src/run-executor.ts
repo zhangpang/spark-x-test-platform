@@ -681,7 +681,7 @@ export async function executeRunJob(
   let compensationRequired = false;
   const browserSessionFactory = options.browserSessionFactory ?? createChromiumSession;
   try {
-    for (const item of snapshot.cases) {
+    for (const [caseIndex, item] of snapshot.cases.entries()) {
       const caseStartedAt = Date.now();
       if (controller.signal.aborted) {
         await store.finishCase(
@@ -896,6 +896,20 @@ export async function executeRunJob(
       );
       results.push(finalResult);
       if (finalFailure !== null) failures.push(finalFailure);
+      if (compensationRequired) {
+        for (const pending of snapshot.cases.slice(caseIndex + 1)) {
+          await store.finishCase(
+            job.runId,
+            pending.runCaseId,
+            "cancelled",
+            "not_required",
+            null,
+            Date.now(),
+          );
+          results.push("cancelled");
+        }
+        break;
+      }
     }
     const summary = summarizeCaseResults(results);
     await store.setRunStatus(job.runId, "cleaning");

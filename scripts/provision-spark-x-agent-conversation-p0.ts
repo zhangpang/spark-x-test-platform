@@ -5016,7 +5016,9 @@ function assertProviderRetryEvidence(run: RunDetail): void {
   const retryMessage = `自动化回归 ${run.id} 明确重试同一请求：请只回复标识 spark-x-provider-retry-${run.id}，不要调用工具或 Skill。`;
   const marker = `spark-x-provider-retry-${run.id}`;
   check(
-    fixture?.outputSummary?.fixtureCreated === true &&
+    typeof fixture?.outputSummary?.fixtureCreated === "boolean" &&
+      typeof fixture.outputSummary.fixtureReused === "boolean" &&
+      fixture.outputSummary.fixtureCreated !== fixture.outputSummary.fixtureReused &&
       fixture.outputSummary.originalProviderActive === true &&
       fixture.outputSummary.faultTargetAllowed === true &&
       typeof fixture.outputSummary.providerFixtureResourceId === "string" &&
@@ -5065,14 +5067,15 @@ function assertProviderRetryEvidence(run: RunDetail): void {
   );
   check(
     cleanup?.outputSummary?.originalProviderActive === true &&
-      cleanup.outputSummary.fixtureDeleted === true &&
+      cleanup.outputSummary.fixtureDeleted === false &&
+      cleanup.outputSummary.fixtureReturnedToPool === true &&
       cleanup.outputSummary.activeProviderCount === 1 &&
       typeof cleanup.outputSummary.providerFixtureResourceIdSha256 === "string" &&
       cleanup.outputSummary.providerFixtureResourceIdSha256 ===
         createHash("sha256")
           .update(String(fixture?.outputSummary?.providerFixtureResourceId))
           .digest("hex"),
-    "CHAT-004 did not prove original Provider restoration and fixture deletion",
+    "CHAT-004 did not prove original Provider restoration and fixture pool reclamation",
   );
   const evidence = JSON.stringify({ fixture, retry, cleanup });
   check(
@@ -5164,6 +5167,7 @@ function assertContextCompactionEvidence(run: RunDetail): void {
   );
   check(
     fixture?.outputSummary?.fixtureCreated === true &&
+      fixture.outputSummary.fixtureReused === false &&
       fixture.outputSummary.originalProviderActive === true &&
       fixture.outputSummary.contextFixtureTargetAllowed === true &&
       typeof fixture.outputSummary.providerFixtureResourceId === "string" &&
@@ -5214,6 +5218,7 @@ function assertContextCompactionEvidence(run: RunDetail): void {
   check(
     cleanup?.outputSummary?.originalProviderActive === true &&
       cleanup.outputSummary.fixtureDeleted === true &&
+      cleanup.outputSummary.fixtureReturnedToPool === false &&
       cleanup.outputSummary.activeProviderCount === 1 &&
       cleanup.outputSummary.providerFixtureResourceIdSha256 ===
         createHash("sha256")
@@ -5998,6 +6003,7 @@ function assertSkillInjectionEvidence(run: RunDetail): void {
   const result = assertion.outputSummary;
   check(
     fixture.fixtureCreated === true &&
+      fixture.fixtureReused === false &&
       fixture.originalProviderActive === true &&
       fixture.skillFixtureTargetAllowed === true &&
       typeof fixture.providerFixtureResourceId === "string" &&
@@ -6068,6 +6074,7 @@ function assertSkillInjectionEvidence(run: RunDetail): void {
   check(
     cleanupFixture.outputSummary.originalProviderActive === true &&
       cleanupFixture.outputSummary.fixtureDeleted === true &&
+      cleanupFixture.outputSummary.fixtureReturnedToPool === false &&
       cleanupFixture.outputSummary.activeProviderCount === 1 &&
       deleteConversation.outputSummary.conversationId === conversation.conversationId &&
       deleteConversation.outputSummary.deleted === true,
@@ -7590,7 +7597,7 @@ async function executeMcpSmoke(
   const run = await waitForRun(accepted.body.id);
   if (expectMcpUnavailable) {
     check(run.gateResult === "inconclusive", "stopped MCP fixture did not make gate inconclusive");
-    check(run.summary.environment_failed === 1, "stopped MCP fixture was not environment_failed");
+    check(run.summary.environmentFailed === 1, "stopped MCP fixture was not environment_failed");
     check(
       run.firstFailure?.code === "SPARK_X_AGENT_SAFE_TOOL_CATALOG_UNAVAILABLE",
       "stopped MCP fixture did not preserve its stable environment root cause",

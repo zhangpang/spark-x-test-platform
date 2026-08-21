@@ -1084,6 +1084,112 @@ describe("run worker", () => {
     expect(store.completeRun).not.toHaveBeenCalled();
   });
 
+  it("stops before a same-lock successor and cancels remaining cases when compensation is required", async () => {
+    const firstDefinition = {
+      execution: { stepTimeoutMs: 1_000, caseTimeoutMs: 5_000 },
+      resourceLocks: ["provider:${run.id}"],
+      steps: [
+        {
+          id: "create-provider-fixture",
+          action: "http:request",
+          params: { method: "POST", path: "/provider-fixture" },
+          capture: { "resource-id": "$.body.id" },
+          resource: {
+            type: "provider-fixture",
+            id: "${step.resource-id}",
+            cleanup: {
+              action: "http:request",
+              params: { method: "DELETE", path: "/provider-fixture/${resource.id}" },
+            },
+          },
+        },
+      ],
+      finally: [
+        {
+          id: "cleanup-provider-fixture",
+          action: "http:request",
+          params: { method: "DELETE", path: "/provider-fixture/${step.resource-id}" },
+          capture: { status: "$.status" },
+          assertions: [
+            {
+              type: "status:equals",
+              actual: "${step.status}",
+              expected: 204,
+            },
+          ],
+        },
+      ],
+    };
+    const base = snapshot(firstDefinition);
+    const pendingRunCaseId = "00000000-0000-4000-8000-000000000108";
+    const executionSnapshot: RunExecutionSnapshot = {
+      ...base,
+      suite: { ...base.suite, diagnosticRetries: 0 },
+      cases: [
+        base.cases[0] as RunExecutionSnapshot["cases"][number],
+        {
+          runCaseId: pendingRunCaseId,
+          caseId: "00000000-0000-4000-8000-000000000109",
+          caseVersionId: "00000000-0000-4000-8000-00000000010a",
+          name: "same lock successor",
+          version: 1,
+          sortOrder: 1,
+          definition: {
+            execution: { stepTimeoutMs: 1_000, caseTimeoutMs: 5_000 },
+            resourceLocks: ["provider:${run.id}"],
+            steps: [
+              {
+                id: "must-not-run",
+                action: "http:request",
+                params: { method: "GET", path: "/must-not-run" },
+              },
+            ],
+            finally: [],
+          },
+        },
+      ],
+    };
+    const store = fakeStore(executionSnapshot);
+    vi.mocked(store.markCaseResources).mockResolvedValue(1);
+    const responses = [
+      new Response(JSON.stringify({ id: "provider-123" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response(null, { status: 500 }),
+    ];
+    const fetchMock = vi.fn(() => Promise.resolve(responses.shift() as Response));
+    vi.stubGlobal("fetch", fetchMock);
+    const enqueueCleanup = vi.fn(() => Promise.resolve());
+
+    await expect(executeRunJob(job, "worker-1", store, enqueueCleanup)).resolves.toMatchObject({
+      summary: { infrastructureFailed: 1, cancelled: 1, total: 2 },
+      compensationPending: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.recordStep).toHaveBeenCalledWith(
+      job.runId,
+      expect.objectContaining({ phase: "finally", status: "failed" }),
+    );
+    expect(store.startCase).toHaveBeenCalledTimes(1);
+    expect(store.acquireResourceLocks).toHaveBeenCalledTimes(1);
+    expect(store.finishCase).toHaveBeenCalledWith(
+      job.runId,
+      pendingRunCaseId,
+      "cancelled",
+      "not_required",
+      null,
+      expect.any(Number),
+    );
+    expect(store.releaseResourceLocks).not.toHaveBeenCalled();
+    expect(store.prepareCompensation).toHaveBeenCalledWith(
+      job.runId,
+      expect.objectContaining({ infrastructureFailed: 1, cancelled: 1, total: 2 }),
+      "inconclusive",
+      expect.objectContaining({ code: "CLEANUP_FAILED" }),
+    );
+  });
+
   it("executes a persisted compensation definition and completes the pending run", async () => {
     const cleanupJob = {
       protocolVersion: "1.0" as const,
@@ -2541,12 +2647,17 @@ describe("run worker", () => {
     };
     const fixture = {
       id: fixtureProviderId,
-      name: "spark-x-provider-fault",
+      name: `spark-x-provider-fault-${job.runId}`,
       base_url: "http://192.168.110.136:9/spark-x-test-platform-provider-fault",
       model: "spark-x-test-platform-fault-model",
       protocol: "openai",
       is_active: true,
       has_api_key: true,
+    };
+    const pooled = {
+      ...fixture,
+      name: "spark-x-test-platform-provider-fault-pool",
+      is_active: false,
     };
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -2555,8 +2666,10 @@ describe("run worker", () => {
       )
       .mockResolvedValueOnce(json({ success: true, data: [fixture, original] }))
       .mockResolvedValueOnce(json({ success: true, message: "activated" }))
-      .mockResolvedValueOnce(json({ success: true, message: "deleted" }))
-      .mockResolvedValueOnce(json({ success: true, data: [{ ...original, is_active: true }] }));
+      .mockResolvedValueOnce(json({ success: true, data: pooled }))
+      .mockResolvedValueOnce(
+        json({ success: true, data: [pooled, { ...original, is_active: true }] }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(executeCompensationJob(cleanupJob, store)).resolves.toEqual({ cleaned: 1 });
@@ -2566,6 +2679,7 @@ describe("run worker", () => {
     expect(requestUrl(fetchMock.mock.calls[3]?.[0])).toBe(
       `http://192.168.110.136/trade/api/providers/${fixtureProviderId}`,
     );
+    expect(fetchMock.mock.calls[3]?.[1]?.method).toBe("PUT");
     expect(store.markResourceCleanup).toHaveBeenLastCalledWith(
       "00000000-0000-4000-8000-000000000173",
       "passed",

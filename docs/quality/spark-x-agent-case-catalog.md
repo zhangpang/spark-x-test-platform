@@ -129,7 +129,7 @@ CHAT-001 覆盖真实模型 SSE 终态、回答哈希、单轮历史持久化一
 CHAT-004 先登记一个固定、同环境白名单内但不可达的临时 Provider 和原活跃 Provider 标识，再创建运行隔离会话。故障夹具只使用无真实权限的固定哨兵值，
 不接收 URL、模型或凭据输入；切换夹具后完成首次 Turn 入队便立即恢复原 Provider。首次 Turn 必须以 `provider_unavailable/retryable=true` 失败且无助手消息，
 随后用户用新幂等键提交独立重试 Turn 并以 `completed/stop` 完成。最终历史只能有一条失败输入、一条重试输入和一条成功回复，Turn 与消息标识不得复用；
-`finally` 与独立补偿都会先恢复原 Provider，再幂等删除夹具。输出不含消息正文、Provider URL、哨兵值或凭据，仅保留 ID、计数、布尔判定和 SHA-256；
+`finally` 与独立补偿都会先恢复原 Provider；由于失败 Turn 的不可变 Provider 绑定禁止删除已使用行，故障夹具回收到唯一固定非活跃测试池并在后续运行复用。输出不含消息正文、Provider URL、哨兵值或凭据，仅保留 ID、计数、创建/复用/回池判定和 SHA-256；
 CHAT-005 先登记平台自身固定、受环境 allowlist 约束且不转发请求的 OpenAI 兼容 Provider 夹具，再创建运行隔离会话。首轮由夹具要求被测 Runtime 调用始终可用的内置只读
 `document_search`，工具调用、成功结果、最终回复和公开轨迹必须各自唯一且关联同一调用 ID。随后最多 24 轮发送每轮小于 20,000 字符的受控填充消息，必须在同一 SSE 中恰好观察一次
 `context_compacting` 后跟一次 `context_ready`；夹具只在摘要请求的 `messages_to_compact` 同时包含运行锚点、`document_search` 调用和匹配结果时写入固定关键事实与工具状态。下一次独立请求只有从持久化摘要和游标恢复上述状态才能得到成功标识，且不得立即再次压缩。

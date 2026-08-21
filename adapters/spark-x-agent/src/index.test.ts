@@ -463,7 +463,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.25.0",
+      version: "0.26.0",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -741,6 +741,7 @@ describe("spark-x-agent adapter", () => {
       fixtureProviderId,
       originalProviderId,
       fixtureCreated: true,
+      fixtureReused: false,
       originalProviderActive: true,
       faultTargetAllowed: true,
       faultBaseUrlSha256: createHash("sha256")
@@ -763,6 +764,51 @@ describe("spark-x-agent adapter", () => {
     expect(serialized).not.toContain("spark-x-test-platform-provider-fault");
     expect(serialized).not.toContain("memory-only-access-token-value");
     expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("reuses the explicit inactive fault Provider pool without creating another row", async () => {
+    const name = `spark-x-provider-fault-${variables["run.id"]}`;
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      true,
+    );
+    const pool = providerProjection(
+      fixtureProviderId,
+      "spark-x-test-platform-provider-fault-pool",
+      "http://192.168.110.136:9/spark-x-test-platform-provider-fault",
+      false,
+      "spark-x-test-platform-fault-model",
+    );
+    const prepared = { ...pool, name };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [pool, original] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: prepared }));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/provider.create-transient-failure-fixture",
+      environment,
+      { ...credentials, name: "spark-x-provider-fault-${run.id}" },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toMatchObject({
+      providerFixtureResourceId: `${fixtureProviderId}:${originalProviderId}`,
+      fixtureProviderId,
+      fixtureCreated: false,
+      fixtureReused: true,
+      originalProviderActive: true,
+    });
+    expect(fetcher.mock.calls[2]?.[1]?.method).toBe("PUT");
+    expect(urlOf(fetcher.mock.calls[2]?.[0] as URL | RequestInfo)).toContain(
+      `/providers/${fixtureProviderId}`,
+    );
   });
 
   it("registers the fixed context-compaction Provider fixture without exposing its sentinel", async () => {
@@ -802,6 +848,7 @@ describe("spark-x-agent adapter", () => {
       fixtureProviderId,
       originalProviderId,
       fixtureCreated: true,
+      fixtureReused: false,
       originalProviderActive: true,
       contextFixtureTargetAllowed: true,
       contextBaseUrlSha256: createHash("sha256").update(fixtureBaseUrl).digest("hex"),
@@ -863,6 +910,7 @@ describe("spark-x-agent adapter", () => {
       fixtureProviderId,
       originalProviderId,
       fixtureCreated: true,
+      fixtureReused: false,
       originalProviderActive: true,
       skillFixtureTargetAllowed: true,
       skillBaseUrlSha256: createHash("sha256").update(fixtureBaseUrl).digest("hex"),
@@ -1379,7 +1427,7 @@ describe("spark-x-agent adapter", () => {
     expect(fetcher).toHaveBeenCalledTimes(6);
   });
 
-  it("restores the original Provider and idempotently removes the registered failure fixture", async () => {
+  it("restores the original Provider and returns an immutable-bound failure fixture to its pool", async () => {
     const resourceId = `${fixtureProviderId}:${originalProviderId}`;
     const original = providerProjection(
       originalProviderId,
@@ -1394,6 +1442,13 @@ describe("spark-x-agent adapter", () => {
       true,
       "spark-x-test-platform-fault-model",
     );
+    const pooled = providerProjection(
+      fixtureProviderId,
+      "spark-x-test-platform-provider-fault-pool",
+      "http://192.168.110.136:9/spark-x-test-platform-provider-fault",
+      false,
+      "spark-x-test-platform-fault-model",
+    );
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -1401,11 +1456,11 @@ describe("spark-x-agent adapter", () => {
       )
       .mockResolvedValueOnce(jsonResponse({ success: true, data: [fixture, original] }))
       .mockResolvedValueOnce(jsonResponse({ success: true, message: "activated" }))
-      .mockResolvedValueOnce(jsonResponse({ success: true, message: "deleted" }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: pooled }))
       .mockResolvedValueOnce(
         jsonResponse({
           success: true,
-          data: [{ ...original, is_active: true }],
+          data: [pooled, { ...original, is_active: true }],
         }),
       );
 
@@ -1420,9 +1475,11 @@ describe("spark-x-agent adapter", () => {
     expect(output).toEqual({
       providerFixtureResourceIdSha256: createHash("sha256").update(resourceId).digest("hex"),
       originalProviderActive: true,
-      fixtureDeleted: true,
+      fixtureDeleted: false,
+      fixtureReturnedToPool: true,
       activeProviderCount: 1,
     });
+    expect(fetcher.mock.calls[3]?.[1]?.method).toBe("PUT");
     expect(urlOf(fetcher.mock.calls[3]?.[0] as URL | RequestInfo)).toContain(
       `/providers/${fixtureProviderId}`,
     );
