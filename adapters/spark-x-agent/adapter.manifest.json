@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -406,7 +406,7 @@
       {
         "key": "provider.cleanup-transient-failure-fixture",
         "name": "清理短暂 Provider 故障夹具",
-        "description": "重新激活故障前 Provider；不可变 Turn 已引用的故障夹具回收到显式测试池，其他夹具幂等删除，并验证活跃 Provider 唯一。",
+        "description": "重新激活夹具前 Provider；将已被不可变 Turn 引用的故障、上下文压缩和 Skill 注入夹具回收到各自显式测试池，并验证活跃 Provider 唯一。",
         "actionLevel": "dangerous",
         "defaultTimeoutMs": 20000,
         "producesResource": false,
@@ -466,7 +466,7 @@
       {
         "key": "provider.create-context-compaction-fixture",
         "name": "创建上下文压缩 Provider 夹具",
-        "description": "登记固定、受限且不转发请求的 OpenAI 兼容 Provider 夹具，并冻结原活跃 Provider 标识供 finally 与中断补偿。",
+        "description": "准备固定、受限且不转发请求的 OpenAI 兼容 Provider 夹具；可复用已回收池资源，并冻结原活跃 Provider 标识供 finally 与中断补偿。",
         "actionLevel": "dangerous",
         "defaultTimeoutMs": 20000,
         "producesResource": true,
@@ -522,10 +522,10 @@
               "format": "uuid"
             },
             "fixtureCreated": {
-              "const": true
+              "type": "boolean"
             },
             "fixtureReused": {
-              "const": false
+              "type": "boolean"
             },
             "originalProviderActive": {
               "const": true
@@ -549,7 +549,7 @@
       {
         "key": "provider.create-skill-injection-fixture",
         "name": "创建 Skill 注入 Provider 夹具",
-        "description": "登记固定、受限且不转发请求的 Skill 注入 Provider 夹具，并冻结原活跃 Provider 标识供 finally 与中断补偿。",
+        "description": "准备固定、受限且不转发请求的 Skill 注入 Provider 夹具；可复用已回收池资源，并冻结原活跃 Provider 标识供 finally 与中断补偿。",
         "actionLevel": "dangerous",
         "defaultTimeoutMs": 20000,
         "producesResource": true,
@@ -605,10 +605,10 @@
               "format": "uuid"
             },
             "fixtureCreated": {
-              "const": true
+              "type": "boolean"
             },
             "fixtureReused": {
-              "const": false
+              "type": "boolean"
             },
             "originalProviderActive": {
               "const": true

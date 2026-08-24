@@ -233,12 +233,12 @@ SHA-256、长度、Turn ID 和状态计数。
 不接受 URL、host、模型或 API Key 参数；创建回执只登记临时/原 Provider UUID 和名称/目标哈希。`chat.assert-provider-failure-retry` 短暂激活夹具，
 首次 Turn 入队后立即恢复原 Provider，再等待 `provider_unavailable/retryable=true` 终态并确认公开历史有唯一失败输入且无助手消息；用户明确重试
 必须使用派生的新幂等键、新 Turn 和新消息标识，以 `completed/stop` 完成。最终历史严格为失败输入、重试输入、成功助手回复三条且无工具消息。
-固定故障不使用平台诊断重试；原 Provider 恢复失败不覆盖更早的入队首错。V12/V16 不可变 Turn 绑定会阻止删除已经实际使用的 Provider，因此短暂故障夹具采用唯一显式测试资源池：首次运行创建，清理时先激活登记的原 Provider，再把故障 Provider 恢复为固定非活跃池名称和固定非凭据配置；后续运行按同一 UUID 复用。`provider.cleanup-transient-failure-fixture` 可被普通 `finally` 和独立补偿调用，输出明确区分删除与回池，且不含 Provider URL、哨兵、消息正文或凭据。
+固定故障不使用平台诊断重试；原 Provider 恢复失败不覆盖更早的入队首错。V12/V16 不可变 Turn 绑定会阻止删除已经实际使用的 Provider，因此故障、上下文压缩和 Skill 注入三类夹具分别采用唯一显式测试资源池：首次运行创建，清理时先激活登记的原 Provider，再把夹具恢复为对应固定非活跃池名称和固定非凭据配置；后续运行按同一 UUID 复用。`provider.cleanup-transient-failure-fixture` 可被普通 `finally` 和独立补偿调用，只接受当前 `run_id` 所有或已回池且固定配置完全匹配的目标，输出明确区分缺失删除态与回池，且不含 Provider URL、哨兵、消息正文或凭据。
 `provider.create-context-compaction-fixture` 固定构造同环境主机端口 4173、版本化夹具路径、OpenAI 协议、固定模型和无真实权限 Bearer，不接受 URL、host、模型或 API Key 参数。
 夹具 API 仅在 `PLATFORM_CONTEXT_COMPACTION_FIXTURE_ENABLED=true` 时注册，拒绝额外顶层字段、非固定模型、超过 96 条消息或 900,000 字节文本，不转发请求、不安装或执行依赖、不记录消息正文。
 `chat.assert-context-compaction-continuity` 激活夹具后先产生唯一 `document_search` 调用/结果，再用最多 24 轮受控消息触发语义压缩；必须恰好按序观察 `context_compacting/context_ready`。
 摘要夹具只有在被压缩区包含运行锚点、扁平工具调用和匹配结果时才登记固定工具状态。后续独立请求必须通过持久化摘要恢复成功标识且不立即重复压缩；完整历史、公开轨迹、调用 ID、参数、结果和动态消息基数再次逐项核对。
-任何首次失败直接保留并进入 `finally`；普通清理和独立补偿都先恢复原 Provider，再删除夹具及会话。填充消息、摘要正文、Provider URL、非凭据 Bearer、工具参数/结果原文和登录凭据不进入结构化证据。
+任何首次失败直接保留并进入 `finally`；普通清理和独立补偿都先恢复原 Provider，再把上下文压缩夹具回收到其独立非活跃池并删除会话。填充消息、摘要正文、Provider URL、非凭据 Bearer、工具参数/结果原文和登录凭据不进入结构化证据。
 
 TOOL 动作仅允许仓库内置的 `builtin-demo__calculator`、`builtin-demo__echo` 和 `builtin-demo__time` 只读
 工具。目录校验同时检查普通用户投影不含连接命令、环境变量、地址、工作目录或错误详情，以及管理员登记
@@ -321,13 +321,13 @@ Worker 内存中按被测系统 frontmatter 解析后的 `trim()` 语义计算 S
 判定和哈希。本地资产摘要是 legacy 容器文件兼容层，V12 不可变发布重启后允许为空，但三个 API 投影必须一致，
 并如实输出 `assetRootPresent` 与 `mainAssetPresent`，不得把缺失伪装为存在。受信任发布缺失归为 `environment_failed`，投影
 不一致归为 `product_failed`，精确发布哈希不匹配保留为 `test_failed`。当前被测系统的删除接口尚不能完整撤销
-不可变发布目录、授权和对象存储内容，因此适配器不创建带文件或不可变发布版本的临时 Skill。`provider.create-skill-injection-fixture` 只创建平台可完整补偿的临时 Provider，
+不可变发布目录、授权和对象存储内容，因此适配器不创建带文件或不可变发布版本的临时 Skill。`provider.create-skill-injection-fixture` 只准备平台可完整补偿并可回池复用的临时 Provider，
 固定到同主机端口 4173 的受限夹具路径、模型和非凭据 Bearer，不接受 URL、host、模型、API Key 或脚本参数。夹具 API 只在
 `PLATFORM_SKILL_INJECTION_FIXTURE_ENABLED=true` 时注册，限制 64 条消息、500,000 字节文本和 750,000 字节请求体，拒绝额外顶层字段，不转发请求且不回显 Prompt。
 `skill.assert-selected-injection` 仅允许选择已发布的 `trade-port-daily-brief`，先校验受信任正文的精确 SHA-256，再激活夹具并发出一次运行隔离请求。夹具只有在唯一
 active Skill 上下文、唯一选中 Skill 正文和未选中 Skill 正文缺失同时成立时才返回固定成功标识。动作还要求流式 `skill` 事件、会话
 `active_skill_name/active_skill_activated_at`、两条消息和助手消息 `public_execution_trace` 互相一致，且不得出现工具或复核事件。普通 `finally` 和独立补偿都先恢复原 Provider，
-再删除夹具和会话；输出只保留 UUID、计数、布尔判定和 SHA-256，首次失败不被清理结果或重试覆盖。
+再把夹具回收到 Skill 注入专用固定非活跃池并删除会话；输出只保留 UUID、计数、创建/复用/回池判定和 SHA-256，首次失败不被清理结果或重试覆盖。
 `skill.create-lifecycle-fixture` 只创建名称严格绑定当前 `run_id` 的可逆元数据记录，不上传文件、不创建 V12 不可变版本、不写对象存储；创建后要求管理与用户投影唯一一致、资产投影为空。`skill.assert-disabled-and-deleted` 先停用并验证用户清单、详情和会话选择均拒绝，再删除并验证管理/用户投影无残留；每次拒绝后会话必须保持零消息和空 active Skill。`skill.cleanup-lifecycle-fixture` 只允许删除当前运行所有的精确 UUID/名称映射，删除后重放幂等成功。三项动作不接受任意 Prompt、文件、URL 或脚本输入，证据只保留 UUID、计数、布尔判定和 SHA-256；首次产品失败不重试且仍进入 `finally`。
 
 MCP 夹具动作只创建名称严格绑定当前 `run_id` 的非内置连接器；地址固定为环境同主机、allowlist 端口 4173 的 v1/v2 端点或端口 9 的不可达故障目标，不能由用例传入。`mcp.assert-invocation` 启动 v1 后要求用户目录不含私有配置、唯一工具为正式治理的 pure-read 能力，并通过管理诊断入口执行一次精确参数调用。`mcp.assert-reconnect` 要求运行中更新返回 `needs_restart=true`，重启前仍命中 v1，重启后启动时间推进、同一工具 UUID 保持、描述符与结果切换到 v2。`mcp.assert-disconnect-disable-delete` 保留固定断线首错和 `error` 状态，停用后用户目录零出现且调用被正式治理阻断，删除后管理/用户目录无残留。`mcp.cleanup-fixture` 只停止和删除当前 run 所有且地址属于固定集合的连接器；普通 `finally` 与独立补偿共用该动作。所有输出只含 UUID、计数、布尔判定和 SHA-256，不保存连接地址、参数、结果、错误正文或遮罩前环境变量。

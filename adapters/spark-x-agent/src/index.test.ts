@@ -67,6 +67,7 @@ const resumedMessageId = "00000000-0000-4000-8000-000000000209";
 const resumedAssistantMessageId = "00000000-0000-4000-8000-00000000020a";
 const originalProviderId = "00000000-0000-4000-8000-00000000020b";
 const fixtureProviderId = "00000000-0000-4000-8000-00000000020c";
+const otherFixtureProviderId = "00000000-0000-4000-8000-000000000222";
 const failedProviderTurnId = "00000000-0000-4000-8000-00000000020d";
 const retriedProviderTurnId = "00000000-0000-4000-8000-00000000020e";
 const failedProviderMessageId = "00000000-0000-4000-8000-00000000020f";
@@ -463,7 +464,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.26.0",
+      version: "0.26.1",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -873,6 +874,49 @@ describe("spark-x-agent adapter", () => {
     expect(serialized).not.toContain(variables["case.admin-password"]);
   });
 
+  it("reuses the explicit inactive context-compaction Provider pool", async () => {
+    const name = `spark-x-context-compaction-${variables["run.id"]}`;
+    const fixtureBaseUrl = "http://192.168.110.136:4173/api/v1/fixtures/openai/context-compaction";
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      true,
+    );
+    const pool = providerProjection(
+      fixtureProviderId,
+      "spark-x-test-platform-provider-context-compaction-pool",
+      fixtureBaseUrl,
+      false,
+      "spark-x-test-platform-context-compaction-model",
+    );
+    const prepared = { ...pool, name };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [pool, original] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: prepared }));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/provider.create-context-compaction-fixture",
+      environment,
+      { ...credentials, name: "spark-x-context-compaction-${run.id}" },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toMatchObject({
+      providerFixtureResourceId: `${fixtureProviderId}:${originalProviderId}`,
+      fixtureProviderId,
+      fixtureCreated: false,
+      fixtureReused: true,
+      originalProviderActive: true,
+    });
+    expect(fetcher.mock.calls[2]?.[1]?.method).toBe("PUT");
+  });
+
   it("registers the fixed Skill-injection Provider fixture without exposing its sentinel", async () => {
     const name = `spark-x-skill-injection-${variables["run.id"]}`;
     const original = providerProjection(
@@ -931,6 +975,49 @@ describe("spark-x-agent adapter", () => {
     expect(serialized).not.toContain("/api/v1/fixtures/openai/skill-injection");
     expect(serialized).not.toContain("memory-only-access-token-value");
     expect(serialized).not.toContain(variables["case.admin-password"]);
+  });
+
+  it("reuses the explicit inactive Skill-injection Provider pool", async () => {
+    const name = `spark-x-skill-injection-${variables["run.id"]}`;
+    const fixtureBaseUrl = "http://192.168.110.136:4173/api/v1/fixtures/openai/skill-injection";
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      true,
+    );
+    const pool = providerProjection(
+      fixtureProviderId,
+      "spark-x-test-platform-provider-skill-injection-pool",
+      fixtureBaseUrl,
+      false,
+      "spark-x-test-platform-skill-injection-model",
+    );
+    const prepared = { ...pool, name };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [pool, original] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: prepared }));
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/provider.create-skill-injection-fixture",
+      environment,
+      { ...credentials, name: "spark-x-skill-injection-${run.id}" },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toMatchObject({
+      providerFixtureResourceId: `${fixtureProviderId}:${originalProviderId}`,
+      fixtureProviderId,
+      fixtureCreated: false,
+      fixtureReused: true,
+      originalProviderActive: true,
+    });
+    expect(fetcher.mock.calls[2]?.[1]?.method).toBe("PUT");
   });
 
   it("proves durable compaction continuity with a real read-only tool pair and exact phases", async () => {
@@ -1484,6 +1571,70 @@ describe("spark-x-agent adapter", () => {
       `/providers/${fixtureProviderId}`,
     );
     expect(JSON.stringify(output)).not.toContain("provider.example.com");
+  });
+
+  it("returns a context fixture to its own pool without rejecting the independent fault pool", async () => {
+    const resourceId = `${fixtureProviderId}:${originalProviderId}`;
+    const contextBaseUrl = "http://192.168.110.136:4173/api/v1/fixtures/openai/context-compaction";
+    const original = providerProjection(
+      originalProviderId,
+      "primary",
+      "https://provider.example.com",
+      false,
+    );
+    const fixture = providerProjection(
+      fixtureProviderId,
+      `spark-x-context-compaction-${variables["run.id"]}`,
+      contextBaseUrl,
+      true,
+      "spark-x-test-platform-context-compaction-model",
+    );
+    const pooled = providerProjection(
+      fixtureProviderId,
+      "spark-x-test-platform-provider-context-compaction-pool",
+      contextBaseUrl,
+      false,
+      "spark-x-test-platform-context-compaction-model",
+    );
+    const faultPool = providerProjection(
+      otherFixtureProviderId,
+      "spark-x-test-platform-provider-fault-pool",
+      "http://192.168.110.136:9/spark-x-test-platform-provider-fault",
+      false,
+      "spark-x-test-platform-fault-model",
+    );
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: [faultPool, fixture, original] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "activated" }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, data: pooled }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: [faultPool, pooled, { ...original, is_active: true }],
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
+      environment,
+      { ...credentials, providerFixtureResourceId: resourceId },
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+
+    expect(output).toEqual({
+      providerFixtureResourceIdSha256: createHash("sha256").update(resourceId).digest("hex"),
+      originalProviderActive: true,
+      fixtureDeleted: false,
+      fixtureReturnedToPool: true,
+      activeProviderCount: 1,
+    });
+    expect(fetcher.mock.calls[3]?.[1]?.method).toBe("PUT");
+    expect(JSON.stringify(output)).not.toContain(contextBaseUrl);
   });
 
   it("uses persisted history for the recent conversation message count", async () => {

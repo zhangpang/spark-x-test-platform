@@ -5166,8 +5166,9 @@ function assertContextCompactionEvidence(run: RunDetail): void {
     (step) => step.stepId === "cleanup-context-compaction-provider-fixture",
   );
   check(
-    fixture?.outputSummary?.fixtureCreated === true &&
-      fixture.outputSummary.fixtureReused === false &&
+    typeof fixture?.outputSummary?.fixtureCreated === "boolean" &&
+      typeof fixture.outputSummary.fixtureReused === "boolean" &&
+      fixture.outputSummary.fixtureCreated !== fixture.outputSummary.fixtureReused &&
       fixture.outputSummary.originalProviderActive === true &&
       fixture.outputSummary.contextFixtureTargetAllowed === true &&
       typeof fixture.outputSummary.providerFixtureResourceId === "string" &&
@@ -5217,14 +5218,14 @@ function assertContextCompactionEvidence(run: RunDetail): void {
   );
   check(
     cleanup?.outputSummary?.originalProviderActive === true &&
-      cleanup.outputSummary.fixtureDeleted === true &&
-      cleanup.outputSummary.fixtureReturnedToPool === false &&
+      cleanup.outputSummary.fixtureDeleted === false &&
+      cleanup.outputSummary.fixtureReturnedToPool === true &&
       cleanup.outputSummary.activeProviderCount === 1 &&
       cleanup.outputSummary.providerFixtureResourceIdSha256 ===
         createHash("sha256")
           .update(String(fixture?.outputSummary?.providerFixtureResourceId))
           .digest("hex"),
-    "CHAT-005 did not prove original Provider restoration and fixture deletion",
+    "CHAT-005 did not prove original Provider restoration and fixture pool reclamation",
   );
   const evidence = JSON.stringify({ fixture, continuity, cleanup });
   check(
@@ -6002,8 +6003,9 @@ function assertSkillInjectionEvidence(run: RunDetail): void {
   const conversation = createConversation.outputSummary;
   const result = assertion.outputSummary;
   check(
-    fixture.fixtureCreated === true &&
-      fixture.fixtureReused === false &&
+    typeof fixture.fixtureCreated === "boolean" &&
+      typeof fixture.fixtureReused === "boolean" &&
+      fixture.fixtureCreated !== fixture.fixtureReused &&
       fixture.originalProviderActive === true &&
       fixture.skillFixtureTargetAllowed === true &&
       typeof fixture.providerFixtureResourceId === "string" &&
@@ -6073,8 +6075,8 @@ function assertSkillInjectionEvidence(run: RunDetail): void {
   );
   check(
     cleanupFixture.outputSummary.originalProviderActive === true &&
-      cleanupFixture.outputSummary.fixtureDeleted === true &&
-      cleanupFixture.outputSummary.fixtureReturnedToPool === false &&
+      cleanupFixture.outputSummary.fixtureDeleted === false &&
+      cleanupFixture.outputSummary.fixtureReturnedToPool === true &&
       cleanupFixture.outputSummary.activeProviderCount === 1 &&
       deleteConversation.outputSummary.conversationId === conversation.conversationId &&
       deleteConversation.outputSummary.deleted === true,

@@ -78,9 +78,9 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/chat.ask`：向此前已创建并登记的测试会话发送消息含 `${run.id}` 的受控真实模型请求，逐次校验重定向目标，限制 SSE 为 1 MB，只输出终态、事件计数、长度和最终回答 SHA-256；流中会话 ID 必须与登记 ID 一致；
 - `adapter:spark-x-agent/provider.create-transient-failure-fixture`：准备同环境主机、白名单端口 9 的不可达 Provider 夹具；首次创建后清理回唯一显式测试池，后续按同一 UUID 复用，以兼容不可变 Turn–Provider 绑定；输出仅登记夹具/原 Provider 标识、创建/复用判定及哈希；
 - `adapter:spark-x-agent/chat.assert-provider-failure-retry`：用已登记夹具产生 `provider_unavailable` 可见首错，恢复原 Provider 后以新幂等键提交独立 Turn，严格校验三条消息基数且不输出正文或 Provider 配置；
-- `adapter:spark-x-agent/provider.create-context-compaction-fixture`：固定创建同环境主机、白名单端口 4173 的受限 OpenAI 兼容 Provider 夹具，只输出夹具/原 Provider 标识及哈希；必须同步登记专用资源和恢复补偿；
+- `adapter:spark-x-agent/provider.create-context-compaction-fixture`：准备同环境主机、白名单端口 4173 的受限 OpenAI 兼容 Provider 夹具；首次创建后清理回独立显式测试池，后续按同一 UUID 复用；只输出夹具/原 Provider 标识、创建/复用判定及哈希，必须同步登记专用资源和恢复补偿；
 - `adapter:spark-x-agent/chat.assert-context-compaction-continuity`：用已登记夹具产生一组真实内置只读 `document_search` 调用/结果，在 24 轮有界消息内按序观察唯一压缩阶段，再以独立请求验证关键事实、工具状态和持久化游标连续；只输出计数、判定和 SHA-256；
-- `adapter:spark-x-agent/provider.create-skill-injection-fixture`：固定创建同环境主机、白名单端口 4173 的受限 Skill 注入 Provider 夹具，不接受 URL、模型或 API Key 输入，只登记资源标识、判定和哈希；必须同步登记恢复原 Provider 的补偿；
+- `adapter:spark-x-agent/provider.create-skill-injection-fixture`：准备同环境主机、白名单端口 4173 的受限 Skill 注入 Provider 夹具；首次创建后清理回独立显式测试池，后续按同一 UUID 复用；不接受 URL、模型或 API Key 输入，只登记资源标识、创建/复用判定和哈希，必须同步登记恢复原 Provider 的补偿；
 - `adapter:spark-x-agent/skill.assert-selected-injection`：仅选择固定受信任 `trade-port-daily-brief`，校验精确发布哈希后证明 Skill 正文和 active 上下文进入 Provider，并关联唯一流式 Skill 事件、会话状态、公开历史轨迹和精确消息基数；不输出 Prompt、消息正文、Provider 目标或密钥；
 - `adapter:spark-x-agent/skill.create-lifecycle-fixture`：只创建名称严格绑定 `${run.id}` 的可逆 Skill 元数据，不接受 Prompt、文件、URL 或脚本输入，不创建不可变发布版本且不写对象存储；必须登记专用资源和所有权校验清理；
 - `adapter:spark-x-agent/skill.assert-disabled-and-deleted`：只操作本次运行登记的 Skill 与会话，先停用再删除，分别校验管理/用户投影、选择拒绝、空 active Skill 和零消息副作用；失败不重试且保留首次失败；
@@ -90,7 +90,7 @@ M3 JSON 与变量链纵向切片注册以下声明式动作：
 - `adapter:spark-x-agent/mcp.assert-reconnect`：运行中切换固定 v1/v2 地址，证明重启前旧连接仍生效，重启后同一工具身份、描述符缓存和实际结果同步刷新；不以重试掩盖失败；
 - `adapter:spark-x-agent/mcp.assert-disconnect-disable-delete`：切换固定不可达目标保留首次断线与 error 状态，停用后证明用户不可见和调用为零，删除后管理/用户投影无残留；
 - `adapter:spark-x-agent/mcp.cleanup-fixture`：只停止并删除当前 `run_id` 所有且地址属于固定 v1/v2/不可达集合的连接器，验证目录零残留并支持幂等重放；
-- `adapter:spark-x-agent/provider.cleanup-transient-failure-fixture`：先恢复资源标识中的原 Provider；短暂故障夹具恢复到固定非活跃测试池，未形成不可变引用的其他 Provider 夹具幂等删除，并验证唯一活跃 Provider；用于普通 `finally` 与独立补偿；
+- `adapter:spark-x-agent/provider.cleanup-transient-failure-fixture`：先恢复资源标识中的原 Provider；短暂故障、上下文压缩和 Skill 注入夹具分别恢复到各自固定非活跃测试池，并验证唯一活跃 Provider 与池内 UUID 唯一；用于普通 `finally` 与独立补偿；
 - `adapter:spark-x-agent/chat.assert-history`：重新登录并校验唯一用户消息、唯一助手回复、`stop` 终止原因，以及落库回答 SHA-256 与流式最终回答一致；
 - `adapter:spark-x-agent/chat.assert-context-history`：校验同一主会话两轮用户/助手消息顺序、两次流式哈希、`stop` 终态、零工具消息，并拒绝独立干扰会话标识串入；
 - `adapter:spark-x-agent/tool.assert-safe-catalog`：校验 `builtin-demo` 三个内置只读工具在普通用户与管理员目录中一致，且用户投影不暴露连接配置；
