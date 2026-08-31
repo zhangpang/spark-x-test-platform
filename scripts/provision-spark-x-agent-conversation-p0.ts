@@ -1556,6 +1556,20 @@ function chatContextCompactionDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+function safeToolFixtureStartStep(id: string): Readonly<Record<string, unknown>> {
+  return {
+    id,
+    name: "显式启动测试环境 builtin-demo 安全工具夹具",
+    kind: "action",
+    action: "adapter:spark-x-agent/tool.start-safe-fixture",
+    timeoutMs: 30_000,
+    params: {
+      username: "${case.admin-username}",
+      password: "${case.admin-password}",
+    },
+  };
+}
+
 function toolCatalogDefinition(): Readonly<Record<string, unknown>> {
   return {
     schemaVersion: "1.0",
@@ -1595,6 +1609,7 @@ function toolCatalogDefinition(): Readonly<Record<string, unknown>> {
     },
     resourceLocks: [],
     steps: [
+      safeToolFixtureStartStep("start-safe-tool-catalog-fixture"),
       {
         id: "assert-safe-tool-catalog",
         name: "校验内置只读工具目录与凭据边界",
@@ -1676,6 +1691,7 @@ function toolInvocationDefinition(): Readonly<Record<string, unknown>> {
           },
         },
       },
+      safeToolFixtureStartStep("start-safe-tool-invocation-fixture"),
       {
         id: "assert-safe-tool-precondition",
         name: "确认内置只读工具测试基线在线",
@@ -1812,6 +1828,7 @@ function toolResultDefinition(): Readonly<Record<string, unknown>> {
           },
         },
       },
+      safeToolFixtureStartStep("start-tool-result-fixture"),
       {
         id: "assert-tool-result-precondition",
         name: "确认仅有内置只读工具可用",
@@ -1948,6 +1965,7 @@ function toolFailureRecoveryDefinition(): Readonly<Record<string, unknown>> {
           },
         },
       },
+      safeToolFixtureStartStep("start-tool-recovery-fixture"),
       {
         id: "assert-tool-recovery-precondition",
         name: "确认内置失败与恢复工具均在线",
@@ -2061,6 +2079,7 @@ function forbiddenToolDefinition(): Readonly<Record<string, unknown>> {
     },
     resourceLocks: [],
     steps: [
+      safeToolFixtureStartStep("start-forbidden-tool-boundary-fixture"),
       {
         id: "assert-forbidden-tool-boundary",
         name: "校验禁止工具、写操作与私有配置均未暴露",
@@ -3382,6 +3401,7 @@ function mcpConnectorDefinition(): Readonly<Record<string, unknown>> {
     },
     resourceLocks: [],
     steps: [
+      safeToolFixtureStartStep("start-mcp-connector-fixture"),
       {
         id: "assert-mcp-connector",
         name: "校验内置连接器连接状态、工具发现与凭据边界",
@@ -4648,8 +4668,8 @@ async function executeSmoke(
     "Spark X Agent core smoke cleanup status is invalid",
   );
   check(
-    run.steps.length === 52,
-    "Spark X Agent core smoke did not record thirty-nine main steps and thirteen finally steps",
+    run.steps.length === 55,
+    "Spark X Agent core smoke did not record forty-two main steps and thirteen finally steps",
   );
   check(
     run.steps.every((step) => step.status === "passed"),
@@ -4679,8 +4699,10 @@ async function executeSmoke(
         "main:adapter:spark-x-agent/chat.assert-context-history",
         "finally:adapter:spark-x-agent/conversation.delete",
         "finally:adapter:spark-x-agent/conversation.delete",
+        "main:adapter:spark-x-agent/tool.start-safe-fixture",
         "main:adapter:spark-x-agent/tool.assert-safe-catalog",
         "main:adapter:spark-x-agent/conversation.create",
+        "main:adapter:spark-x-agent/tool.start-safe-fixture",
         "main:adapter:spark-x-agent/tool.assert-safe-catalog",
         "main:adapter:spark-x-agent/tool.invoke-safe",
         "main:adapter:spark-x-agent/tool.assert-history",
@@ -4704,6 +4726,7 @@ async function executeSmoke(
         "main:adapter:spark-x-agent/skill.assert-selected-injection",
         "finally:adapter:spark-x-agent/provider.cleanup-transient-failure-fixture",
         "finally:adapter:spark-x-agent/conversation.delete",
+        "main:adapter:spark-x-agent/tool.start-safe-fixture",
         "main:adapter:spark-x-agent/tool.assert-safe-catalog",
         "main:adapter:spark-x-agent/conversation.create",
         "main:adapter:spark-x-agent/automation.create",
@@ -7664,8 +7687,10 @@ async function executeMcpSmoke(
     check(run.gateResult === "inconclusive", "stopped MCP fixture did not make gate inconclusive");
     check(run.summary.environmentFailed === 1, "stopped MCP fixture was not environment_failed");
     check(
-      run.firstFailure?.code === "SPARK_X_AGENT_SAFE_TOOL_CATALOG_UNAVAILABLE",
-      "stopped MCP fixture did not preserve its stable environment root cause",
+      run.firstFailure?.code === "SPARK_X_AGENT_SAFE_TOOL_FIXTURE_INVALID" ||
+        run.firstFailure?.code === "SPARK_X_AGENT_SAFE_TOOL_FIXTURE_START_FAILED" ||
+        run.firstFailure?.code === "SPARK_X_AGENT_SAFE_TOOL_FIXTURE_START_TIMEOUT",
+      "unavailable MCP fixture did not preserve its stable environment root cause",
     );
     check(
       run.cases.length === 1 &&
@@ -7675,9 +7700,9 @@ async function executeMcpSmoke(
     );
     check(
       run.steps.length === 1 &&
-        run.steps[0]?.stepId === "assert-mcp-connector" &&
+        run.steps[0]?.stepId === "start-mcp-connector-fixture" &&
         run.steps[0].phase === "main" &&
-        run.steps[0].action === "adapter:spark-x-agent/tool.assert-safe-catalog" &&
+        run.steps[0].action === "adapter:spark-x-agent/tool.start-safe-fixture" &&
         run.steps[0].status === "failed",
       "stopped MCP fixture structured failure evidence is incomplete",
     );
@@ -7692,11 +7717,15 @@ async function executeMcpSmoke(
       "Spark X Agent MCP case failed",
     );
     check(
-      run.steps.length === 1 &&
-        run.steps[0]?.stepId === "assert-mcp-connector" &&
+      run.steps.length === 2 &&
+        run.steps[0]?.stepId === "start-mcp-connector-fixture" &&
         run.steps[0].phase === "main" &&
-        run.steps[0].action === "adapter:spark-x-agent/tool.assert-safe-catalog" &&
-        run.steps[0].status === "passed",
+        run.steps[0].action === "adapter:spark-x-agent/tool.start-safe-fixture" &&
+        run.steps[0].status === "passed" &&
+        run.steps[1]?.stepId === "assert-mcp-connector" &&
+        run.steps[1].phase === "main" &&
+        run.steps[1].action === "adapter:spark-x-agent/tool.assert-safe-catalog" &&
+        run.steps[1].status === "passed",
       "Spark X Agent MCP structured step sequence is incomplete",
     );
     assertMcpEvidence(run);

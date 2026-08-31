@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.26.2",
+  "version": "0.26.3",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {
@@ -1472,6 +1472,51 @@
             },
             "assistantFinishReasonsMatched": {
               "const": true
+            }
+          }
+        }
+      },
+      {
+        "key": "tool.start-safe-fixture",
+        "name": "启动安全工具夹具",
+        "description": "通过管理员 API 显式启动测试环境 builtin-demo 连接器，并等待运行状态持久化。",
+        "actionLevel": "write",
+        "defaultTimeoutMs": 30000,
+        "producesResource": false,
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["username", "password"],
+          "properties": {
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["serverName", "serverId", "running", "startedByFixture"],
+          "properties": {
+            "serverName": {
+              "const": "builtin-demo"
+            },
+            "serverId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "running": {
+              "const": true
+            },
+            "startedByFixture": {
+              "type": "boolean"
             }
           }
         }

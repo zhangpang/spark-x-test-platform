@@ -26,6 +26,7 @@ export const sparkXAgentActions = [
   "adapter:spark-x-agent/chat.assert-context-compaction-continuity",
   "adapter:spark-x-agent/chat.assert-history",
   "adapter:spark-x-agent/chat.assert-context-history",
+  "adapter:spark-x-agent/tool.start-safe-fixture",
   "adapter:spark-x-agent/tool.assert-safe-catalog",
   "adapter:spark-x-agent/tool.invoke-safe",
   "adapter:spark-x-agent/tool.invoke-failure-recovery",
@@ -841,6 +842,34 @@ export const sparkXAgentActionCapabilities = [
         firstAssistantContentSha256: { type: "string", minLength: 64, maxLength: 64 },
         secondAssistantContentSha256: { type: "string", minLength: 64, maxLength: 64 },
         assistantFinishReasonsMatched: { const: true },
+      },
+    },
+  },
+  {
+    key: "tool.start-safe-fixture",
+    name: "启动安全工具夹具",
+    description: "通过管理员 API 显式启动测试环境 builtin-demo 连接器，并等待运行状态持久化。",
+    actionLevel: "write",
+    defaultTimeoutMs: 30_000,
+    producesResource: false,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["username", "password"],
+      properties: {
+        username: { type: "string", minLength: 1, maxLength: 200 },
+        password: { type: "string", minLength: 1, maxLength: 4_096 },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["serverName", "serverId", "running", "startedByFixture"],
+      properties: {
+        serverName: { const: "builtin-demo" },
+        serverId: { type: "string", format: "uuid" },
+        running: { const: true },
+        startedByFixture: { type: "boolean" },
       },
     },
   },
@@ -2658,7 +2687,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.26.2",
+  version: "0.26.3",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -5832,6 +5861,77 @@ export async function executeSparkXAgentAction(
     automationToken,
     remainingOptions(),
   );
+
+  if (action === "adapter:spark-x-agent/tool.start-safe-fixture") {
+    const readBuiltinDemo = async (): Promise<Readonly<Record<string, unknown>>> => {
+      const response = await authenticatedRequest(
+        environment,
+        token,
+        { method: "GET", path: actionPath("/admin/mcp/servers?page=1&per_page=100") },
+        remainingOptions(),
+      );
+      accepted(response, "SPARK_X_AGENT_SAFE_TOOL_FIXTURE_LIST_FAILED");
+      const data = dataEnvelope(response.body, "SPARK_X_AGENT_SAFE_TOOL_FIXTURE_LIST_INVALID");
+      const matches = Array.isArray(data.items)
+        ? data.items
+            .map(objectValue)
+            .filter(
+              (item): item is Readonly<Record<string, unknown>> =>
+                item !== null && item.name === safeToolServerName,
+            )
+        : [];
+      if (matches.length !== 1 || matches[0] === undefined) {
+        throw environmentFailure(
+          "SPARK_X_AGENT_SAFE_TOOL_FIXTURE_MISSING",
+          "测试环境必须且只能登记一个 builtin-demo 安全工具夹具。",
+        );
+      }
+      return matches[0];
+    };
+
+    let server = await readBuiltinDemo();
+    if (
+      typeof server.id !== "string" ||
+      !uuidPattern.test(server.id) ||
+      server.is_enabled !== true
+    ) {
+      throw environmentFailure(
+        "SPARK_X_AGENT_SAFE_TOOL_FIXTURE_INVALID",
+        "builtin-demo 安全工具夹具未启用或身份无效。",
+      );
+    }
+    const serverId = server.id;
+    const startedByFixture = server.status !== "running";
+    if (startedByFixture) {
+      const startResponse = await authenticatedRequest(
+        environment,
+        token,
+        {
+          method: "POST",
+          path: actionPath(`/admin/mcp/servers/${encodeURIComponent(serverId)}/start`),
+        },
+        remainingOptions(),
+      );
+      accepted(startResponse, "SPARK_X_AGENT_SAFE_TOOL_FIXTURE_START_FAILED");
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        server = await readBuiltinDemo();
+        if (server.status === "running") break;
+        if (attempt < 9) await boundedDelay(200, remainingOptions().signal);
+      }
+    }
+    if (server.status !== "running") {
+      throw environmentFailure(
+        "SPARK_X_AGENT_SAFE_TOOL_FIXTURE_START_TIMEOUT",
+        "builtin-demo 启动后未在有界时间内进入运行状态。",
+      );
+    }
+    return {
+      serverName: safeToolServerName,
+      serverId,
+      running: true,
+      startedByFixture,
+    };
+  }
 
   if (action === "adapter:spark-x-agent/provider.create-transient-failure-fixture") {
     const name = requiredString(params, "name", variables, 200);

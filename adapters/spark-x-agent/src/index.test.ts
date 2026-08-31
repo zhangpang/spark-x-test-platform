@@ -466,7 +466,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.26.2",
+      version: "0.26.3",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -523,6 +523,10 @@ describe("spark-x-agent adapter", () => {
           }),
           expect.objectContaining({
             key: "chat.assert-context-history",
+            actionLevel: "write",
+          }),
+          expect.objectContaining({
+            key: "tool.start-safe-fixture",
             actionLevel: "write",
           }),
           expect.objectContaining({
@@ -665,6 +669,52 @@ describe("spark-x-agent adapter", () => {
         .map((capability) => `adapter:spark-x-agent/${capability.key}`)
         .sort(),
     ).toEqual([...sparkXAgentActions].sort());
+  });
+
+  it("starts the builtin safe-tool fixture through the administrator API", async () => {
+    const serverId = "00000000-0000-4000-8000-0000000002f0";
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, data: { token: "memory-only-access-token-value" } }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [{ id: serverId, name: "builtin-demo", is_enabled: true, status: "stopped" }],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ success: true, message: "服务已启动" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            items: [{ id: serverId, name: "builtin-demo", is_enabled: true, status: "running" }],
+          },
+        }),
+      );
+
+    const output = await executeSparkXAgentAction(
+      "adapter:spark-x-agent/tool.start-safe-fixture",
+      environment,
+      credentials,
+      variables,
+      { timeoutMs: 5_000, fetcher },
+    );
+    expect(output).toEqual({
+      serverName: "builtin-demo",
+      serverId,
+      running: true,
+      startedByFixture: true,
+    });
+    expect(urlOf(fetcher.mock.calls[2]?.[0] as URL | RequestInfo)).toBe(
+      `http://192.168.110.136/trade/api/admin/mcp/servers/${serverId}/start`,
+    );
+    const serialized = JSON.stringify(output);
+    expect(serialized).not.toContain(variables["case.admin-password"]);
+    expect(serialized).not.toContain(variables["case.automation-token"]);
   });
 
   it("keeps the login token in memory while returning only structured create evidence", async () => {
