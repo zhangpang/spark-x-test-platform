@@ -53,8 +53,10 @@ const credentials = {
   password: "${case.admin-password}",
 };
 const variables = {
+  "case.tenant-id": "0",
   "case.admin-username": "admin",
   "case.admin-password": "never-persist-this-password",
+  "case.automation-token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "run.id": "00000000-0000-4000-8000-000000000201",
 };
 const conversationId = "00000000-0000-4000-8000-000000000202";
@@ -464,7 +466,7 @@ describe("spark-x-agent adapter", () => {
   it("declares the controlled conversation capabilities", () => {
     expect(sparkXAgentAdapterManifest).toMatchObject({
       key: "spark-x-agent",
-      version: "0.26.1",
+      version: "0.26.2",
       capabilities: {
         actions: [
           expect.objectContaining({
@@ -696,6 +698,15 @@ describe("spark-x-agent adapter", () => {
     expect(urlOf(fetcher.mock.calls[0]?.[0] as URL | RequestInfo)).toBe(
       "http://192.168.110.136/trade/api/auth/login",
     );
+    const loginHeaders = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
+    expect(loginHeaders.get("x-sparkx-automation-token")).toBe(variables["case.automation-token"]);
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      tenant_id: "0",
+      username: "admin",
+      password: variables["case.admin-password"],
+      captcha: null,
+      captcha_uuid: null,
+    });
     expect(urlOf(fetcher.mock.calls[1]?.[0] as URL | RequestInfo)).toBe(
       "http://192.168.110.136/trade/api/conversations",
     );
@@ -704,6 +715,7 @@ describe("spark-x-agent adapter", () => {
     const serialized = JSON.stringify(output);
     expect(serialized).not.toContain("memory-only-access-token-value");
     expect(serialized).not.toContain(variables["case.admin-password"]);
+    expect(serialized).not.toContain(variables["case.automation-token"]);
   });
 
   it("registers a fixed unreachable Provider fixture without exposing its noncredential sentinel", async () => {

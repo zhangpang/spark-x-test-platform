@@ -2658,7 +2658,7 @@ export const sparkXAgentAdapterManifest: AdapterManifest = {
   manifestVersion: "1.0",
   key: "spark-x-agent",
   name: "星火 Agent",
-  version: "0.26.1",
+  version: "0.26.2",
   protocolVersion: "1.0",
   platformRange: ">=0.1.0 <0.2.0",
   environmentSchema: {
@@ -2909,6 +2909,22 @@ function requiredString(
     });
   }
   return interpolated;
+}
+
+function requiredCaseSecret(
+  variables: Readonly<Record<string, unknown>>,
+  name: "case.tenant-id" | "case.automation-token",
+  maxLength: number,
+): string {
+  const value = variables[name];
+  if (typeof value !== "string" || value.trim() === "" || value.length > maxLength) {
+    throw new ExecutorFailure({
+      code: "SPARK_X_AGENT_GOVERNANCE_CREDENTIAL_MISSING",
+      message: `星火 Agent 治理登录变量 ${name} 缺失或格式不正确。`,
+      classification: "test_failed",
+    });
+  }
+  return value;
 }
 
 function optionalBoundedInteger(
@@ -3978,8 +3994,10 @@ async function executeSparkXAgentRequest(
 
 async function login(
   environment: HttpExecutionEnvironment,
+  tenantId: string,
   username: string,
   password: string,
+  automationToken: string,
   options: SparkXAgentExecutionOptions,
 ): Promise<string> {
   const response = await executeSparkXAgentRequest(
@@ -3987,8 +4005,17 @@ async function login(
     {
       method: "POST",
       path: actionPath("/auth/login"),
-      headers: { "Content-Type": "application/json" },
-      body: { username, password },
+      headers: {
+        "Content-Type": "application/json",
+        "X-SparkX-Automation-Token": automationToken,
+      },
+      body: {
+        tenant_id: tenantId,
+        username,
+        password,
+        captcha: null,
+        captcha_uuid: null,
+      },
     },
     options.timeoutMs,
     options.signal,
@@ -5786,9 +5813,25 @@ export async function executeSparkXAgentAction(
       ...(options.fetcher === undefined ? {} : { fetcher: options.fetcher }),
     };
   };
+  const tenantId = requiredCaseSecret(variables, "case.tenant-id", 64);
   const username = requiredString(params, "username", variables, 200);
   const password = requiredString(params, "password", variables, 4_096);
-  const token = await login(environment, username, password, remainingOptions());
+  const automationToken = requiredCaseSecret(variables, "case.automation-token", 64);
+  if (!/^[0-9]+$/u.test(tenantId) || !sha256Pattern.test(automationToken)) {
+    throw new ExecutorFailure({
+      code: "SPARK_X_AGENT_GOVERNANCE_CREDENTIAL_INVALID",
+      message: "星火 Agent 治理租户或自动化登录凭据格式不正确。",
+      classification: "test_failed",
+    });
+  }
+  const token = await login(
+    environment,
+    tenantId,
+    username,
+    password,
+    automationToken,
+    remainingOptions(),
+  );
 
   if (action === "adapter:spark-x-agent/provider.create-transient-failure-fixture") {
     const name = requiredString(params, "name", variables, 200);

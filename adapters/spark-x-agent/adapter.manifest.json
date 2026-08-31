@@ -2,7 +2,7 @@
   "manifestVersion": "1.0",
   "key": "spark-x-agent",
   "name": "星火 Agent",
-  "version": "0.26.1",
+  "version": "0.26.2",
   "protocolVersion": "1.0",
   "platformRange": ">=0.1.0 <0.2.0",
   "environmentSchema": {

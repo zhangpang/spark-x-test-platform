@@ -90,8 +90,10 @@ const expectMcpUnavailable = process.env.SPARK_X_AGENT_EXPECT_MCP_UNAVAILABLE ==
 const runAutomationSmoke = process.env.SPARK_X_AGENT_RUN_AUTOMATION_SMOKE === "true";
 const useExistingSecrets = process.env.SPARK_X_AGENT_USE_EXISTING_SECRETS === "true";
 const testedVersion = process.env.SPARK_X_AGENT_TESTED_VERSION?.trim() || "test-environment";
+const tenantId = process.env.SPARK_X_AGENT_TENANT_ID?.trim() || "0";
 const adminUsername = process.env.SPARK_X_AGENT_ADMIN_USERNAME?.trim() || "admin";
 const passwordFile = process.env.SPARK_X_AGENT_ADMIN_PASSWORD_FILE?.trim();
+const automationTokenFile = process.env.SPARK_X_AGENT_AUTOMATION_TOKEN_FILE?.trim();
 const trustedSkillPublicationSha256 =
   "a5de94a8db8803916c772c214ac22e6d2c8cdca3e1555d97f013fdf4585803cc";
 
@@ -107,6 +109,19 @@ async function readPassword(): Promise<string> {
   const password = raw.replace(/[\r\n]+$/u, "");
   check(password.length > 0, "Spark X Agent administrator password is missing");
   return password;
+}
+
+async function readAutomationToken(): Promise<string> {
+  check(
+    automationTokenFile !== undefined && automationTokenFile !== "",
+    "Spark X Agent automation token file is missing",
+  );
+  const token = (await readFile(automationTokenFile, "utf8")).replace(/[\r\n]+$/u, "");
+  check(
+    /^[0-9a-f]{64}$/u.test(token),
+    "Spark X Agent automation token must be 64 lowercase hex characters",
+  );
+  return token;
 }
 
 async function api<T>(
@@ -272,7 +287,17 @@ async function upsertSecrets(
   systemId: string,
   environmentId: string,
   password: string,
+  automationToken: string,
 ): Promise<void> {
+  await api("/secrets", {
+    method: "POST",
+    body: {
+      systemId,
+      environmentId,
+      key: "spark-x-agent-tenant-id",
+      value: tenantId,
+    },
+  });
   await api("/secrets", {
     method: "POST",
     body: {
@@ -289,6 +314,15 @@ async function upsertSecrets(
       environmentId,
       key: "spark-x-agent-admin-password",
       value: password,
+    },
+  });
+  await api("/secrets", {
+    method: "POST",
+    body: {
+      systemId,
+      environmentId,
+      key: "spark-x-agent-automation-token",
+      value: automationToken,
     },
   });
 }
@@ -4442,6 +4476,41 @@ function automationLifecycleDefinition(): Readonly<Record<string, unknown>> {
   };
 }
 
+const governanceInputs = [
+  {
+    name: "tenant-id",
+    type: "string",
+    required: true,
+    description: "ContiNew 外部租户 ID",
+    secretRef: "spark-x-agent-tenant-id",
+  },
+  {
+    name: "automation-token",
+    type: "string",
+    required: true,
+    description: "测试环境受控自动化登录凭据",
+    secretRef: "spark-x-agent-automation-token",
+  },
+] as const;
+
+function withGovernanceInputs(
+  definition: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const existingInputs = Array.isArray(definition.inputs) ? definition.inputs : [];
+  const governanceNames = new Set<string>(governanceInputs.map((input) => input.name));
+  return {
+    ...definition,
+    inputs: [
+      ...governanceInputs,
+      ...existingInputs.filter((input) => {
+        if (typeof input !== "object" || input === null || Array.isArray(input)) return true;
+        const name = (input as Readonly<Record<string, unknown>>).name;
+        return typeof name !== "string" || !governanceNames.has(name);
+      }),
+    ],
+  };
+}
+
 async function ensureCase(
   systemId: string,
   moduleId: string,
@@ -4450,6 +4519,7 @@ async function ensureCase(
   definition: Readonly<Record<string, unknown>>,
   changeNote: string,
 ): Promise<Readonly<{ testCase: CaseRecord; version: CaseVersionRecord }>> {
+  const governanceDefinition = withGovernanceInputs(definition);
   const cases = (await api<{ readonly items: CaseRecord[] }>(`/test-cases?systemId=${systemId}`))
     .body.items;
   let testCase = cases.find((candidate) => candidate.name === caseName);
@@ -4460,7 +4530,7 @@ async function ensureCase(
         method: "POST",
         body: {
           moduleId,
-          definition,
+          definition: governanceDefinition,
           changeNote,
         },
       })
@@ -4478,14 +4548,14 @@ async function ensureCase(
     const versions = (await api<CaseVersionRecord[]>(`/test-cases/${testCase.id}/versions`)).body;
     const latest = versions[0];
     check(latest !== undefined, `existing ${caseName} does not have a version`);
-    if (canonical(latest.definition) === canonical(definition)) {
+    if (canonical(latest.definition) === canonical(governanceDefinition)) {
       version = latest;
     } else {
       version = (
         await api<CaseVersionRecord>(`/test-cases/${testCase.id}/versions`, {
           method: "POST",
           body: {
-            definition,
+            definition: governanceDefinition,
             expectedBaseVersion: latest.version,
             changeNote,
           },
@@ -7835,7 +7905,9 @@ async function executeAutomationSmoke(
   return run;
 }
 
+check(/^[0-9]+$/u.test(tenantId), "Spark X Agent tenant ID must contain only digits");
 const password = useExistingSecrets ? undefined : await readPassword();
+const automationToken = useExistingSecrets ? undefined : await readAutomationToken();
 const system = await ensureSystem();
 const modules = await ensureModules(system.id);
 const recentConversations = modules.get("recent-conversations");
@@ -7853,7 +7925,9 @@ check(mcp !== undefined, "mcp module was not provisioned");
 const automations = modules.get("automations");
 check(automations !== undefined, "automations module was not provisioned");
 const environment = await ensureEnvironment(system.id);
-if (password !== undefined) await upsertSecrets(system.id, environment.id, password);
+if (password !== undefined && automationToken !== undefined) {
+  await upsertSecrets(system.id, environment.id, password, automationToken);
+}
 const conversation = await ensureCase(
   system.id,
   recentConversations.id,
