@@ -61,7 +61,7 @@ const governanceInputs = [
     type: "string",
     required: true,
     description: "ContiNew 外部租户 ID",
-    secretRef: "spark-x-agent-tenant-id",
+    default: tenantId,
   },
   {
     name: "admin-username",
@@ -89,7 +89,9 @@ const governanceInputs = [
 function migrateDefinition(
   definition: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-  const existingInputs = Array.isArray(definition.inputs) ? definition.inputs : [];
+  const existingInputs: readonly unknown[] = Array.isArray(definition.inputs)
+    ? (definition.inputs as unknown[])
+    : [];
   const governanceNames = new Set<string>(governanceInputs.map((input) => input.name));
   return {
     ...definition,
@@ -133,15 +135,6 @@ check(
   /^[0-9a-f]{64}$/u.test(automationToken),
   "Spark X Agent automation token must be 64 lowercase hex characters",
 );
-await api("/secrets", {
-  method: "POST",
-  body: {
-    systemId: system.id,
-    environmentId: environment.id,
-    key: "spark-x-agent-tenant-id",
-    value: tenantId,
-  },
-});
 await api("/secrets", {
   method: "POST",
   body: {

@@ -954,6 +954,23 @@ function caseSecretInputs(
   });
 }
 
+function caseDefaultVariables(
+  snapshot: RunExecutionSnapshot,
+  runCaseId: string,
+): Readonly<Record<string, unknown>> {
+  const definition = snapshot.cases.find((item) => item.runCaseId === runCaseId)?.definition;
+  const inputs =
+    definition === undefined || !Array.isArray(definition.inputs) ? [] : definition.inputs;
+  return Object.fromEntries(
+    inputs.flatMap((candidate) => {
+      const input = objectValue(candidate);
+      return input !== null && typeof input.name === "string" && Object.hasOwn(input, "default")
+        ? [[`case.${input.name}`, input.default]]
+        : [];
+    }),
+  );
+}
+
 function compensationFailure(error: unknown): RunFailure {
   const source = error instanceof ExecutorFailure ? error.failure : undefined;
   return {
@@ -1012,6 +1029,7 @@ export async function executeCompensationJob(
       const variables = {
         "run.id": work.runId,
         "resource.id": resource.systemResourceId,
+        ...caseDefaultVariables(work.snapshot, resource.runCaseId),
         ...secrets,
       };
       if (definition.action === "http:request") {

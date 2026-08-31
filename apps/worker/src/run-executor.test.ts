@@ -17,6 +17,15 @@ const job = {
   priority: 50,
 };
 
+const governanceSecretInputs = [
+  { name: "tenant-id", type: "string", required: true, default: "0" },
+  { name: "automation-token", secretRef: "spark-x-agent-automation-token" },
+] as const;
+
+const governanceSecretVariables = {
+  "case.automation-token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+} as const;
+
 function snapshot(definition: Readonly<Record<string, unknown>>): RunExecutionSnapshot {
   return {
     environment: {
@@ -102,6 +111,7 @@ function knowledgeBaseSnapshot(): RunExecutionSnapshot {
     ...snapshot({
       execution: { stepTimeoutMs: 5_000, caseTimeoutMs: 30_000, diagnosticRetries: 0 },
       inputs: [
+        ...governanceSecretInputs,
         { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
         { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
       ],
@@ -1264,6 +1274,7 @@ describe("run worker", () => {
     const executionSnapshot: RunExecutionSnapshot = {
       ...snapshot({
         inputs: [
+          ...governanceSecretInputs,
           { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
           { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
         ],
@@ -1331,6 +1342,7 @@ describe("run worker", () => {
     };
     const store = fakeStore(executionSnapshot);
     vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      ...governanceSecretVariables,
       "case.admin-username": "admin",
       "case.admin-password": password,
     });
@@ -1399,6 +1411,7 @@ describe("run worker", () => {
     const executionSnapshot: RunExecutionSnapshot = {
       ...snapshot({
         inputs: [
+          ...governanceSecretInputs,
           { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
           { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
         ],
@@ -1481,6 +1494,7 @@ describe("run worker", () => {
     };
     const store = fakeStore(executionSnapshot);
     vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      ...governanceSecretVariables,
       "case.admin-username": "admin",
       "case.admin-password": password,
     });
@@ -1605,6 +1619,7 @@ describe("run worker", () => {
     const executionSnapshot: RunExecutionSnapshot = {
       ...snapshot({
         inputs: [
+          ...governanceSecretInputs,
           { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
           { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
         ],
@@ -1699,6 +1714,7 @@ describe("run worker", () => {
     };
     const store = fakeStore(executionSnapshot);
     vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      ...governanceSecretVariables,
       "case.admin-username": "admin",
       "case.admin-password": password,
     });
@@ -1845,6 +1861,7 @@ describe("run worker", () => {
     const store = fakeStore(knowledgeBaseSnapshot());
     const password = "knowledge-worker-password";
     vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      ...governanceSecretVariables,
       "case.admin-username": "admin",
       "case.admin-password": password,
     });
@@ -1914,6 +1931,7 @@ describe("run worker", () => {
       ...snapshot({
         execution: { stepTimeoutMs: 5_000, caseTimeoutMs: 15_000, diagnosticRetries: 0 },
         inputs: [
+          ...governanceSecretInputs,
           { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
           { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
         ],
@@ -1952,6 +1970,7 @@ describe("run worker", () => {
     const store = fakeStore(executionSnapshot);
     const password = "skill-worker-password";
     vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      ...governanceSecretVariables,
       "case.admin-username": "admin",
       "case.admin-password": password,
     });
@@ -1985,6 +2004,7 @@ describe("run worker", () => {
   it("preserves the first parser environment failure and still performs full knowledge cleanup", async () => {
     const store = fakeStore(knowledgeBaseSnapshot());
     vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      ...governanceSecretVariables,
       "case.admin-username": "admin",
       "case.admin-password": "knowledge-failure-password",
     });
@@ -2024,6 +2044,7 @@ describe("run worker", () => {
       ...snapshot({
         execution: { stepTimeoutMs: 5_000, caseTimeoutMs: 15_000, diagnosticRetries: 0 },
         inputs: [
+          ...governanceSecretInputs,
           { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
           { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
         ],
@@ -2094,6 +2115,7 @@ describe("run worker", () => {
     };
     const store = fakeStore(executionSnapshot);
     vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      ...governanceSecretVariables,
       "case.admin-username": "admin",
       "case.admin-password": "fixture-cleanup-password",
     });
@@ -2152,6 +2174,7 @@ describe("run worker", () => {
       ...snapshot({
         execution: { stepTimeoutMs: 5_000, caseTimeoutMs: 15_000, diagnosticRetries: 0 },
         inputs: [
+          ...governanceSecretInputs,
           { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
           { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
         ],
@@ -2225,6 +2248,7 @@ describe("run worker", () => {
     };
     const store = fakeStore(executionSnapshot);
     vi.mocked(store.resolveSecretVariables).mockResolvedValue({
+      ...governanceSecretVariables,
       "case.admin-username": "admin",
       "case.admin-password": "failure-cleanup-password",
     });
@@ -2294,6 +2318,7 @@ describe("run worker", () => {
     };
     const definition = {
       inputs: [
+        ...governanceSecretInputs,
         { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
         { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
       ],
@@ -2342,6 +2367,7 @@ describe("run worker", () => {
       ),
       resolveSecretVariables: vi.fn(() =>
         Promise.resolve({
+          ...governanceSecretVariables,
           "case.admin-username": "admin",
           "case.admin-password": "compensation-password",
         }),
@@ -2412,6 +2438,7 @@ describe("run worker", () => {
     const compensationSnapshot: RunExecutionSnapshot = {
       ...snapshot({
         inputs: [
+          ...governanceSecretInputs,
           { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
           { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
         ],
@@ -2458,6 +2485,7 @@ describe("run worker", () => {
       ),
       resolveSecretVariables: vi.fn(() =>
         Promise.resolve({
+          ...governanceSecretVariables,
           "case.admin-username": "admin",
           "case.admin-password": "knowledge-compensation-password",
         }),
@@ -2553,6 +2581,7 @@ describe("run worker", () => {
     const compensationSnapshot: RunExecutionSnapshot = {
       ...snapshot({
         inputs: [
+          ...governanceSecretInputs,
           { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
           { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
         ],
@@ -2605,6 +2634,7 @@ describe("run worker", () => {
       ),
       resolveSecretVariables: vi.fn(() =>
         Promise.resolve({
+          ...governanceSecretVariables,
           "case.admin-username": "admin",
           "case.admin-password": "provider-compensation-password",
         }),
@@ -2701,6 +2731,7 @@ describe("run worker", () => {
     const compensationSnapshot: RunExecutionSnapshot = {
       ...snapshot({
         inputs: [
+          ...governanceSecretInputs,
           { name: "admin-username", secretRef: "spark-x-agent-admin-username" },
           { name: "admin-password", secretRef: "spark-x-agent-admin-password" },
         ],
@@ -2747,6 +2778,7 @@ describe("run worker", () => {
       ),
       resolveSecretVariables: vi.fn(() =>
         Promise.resolve({
+          ...governanceSecretVariables,
           "case.admin-username": "admin",
           "case.admin-password": "automation-compensation-password",
         }),

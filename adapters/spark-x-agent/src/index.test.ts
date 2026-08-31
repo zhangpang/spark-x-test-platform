@@ -700,7 +700,10 @@ describe("spark-x-agent adapter", () => {
     );
     const loginHeaders = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
     expect(loginHeaders.get("x-sparkx-automation-token")).toBe(variables["case.automation-token"]);
-    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+    const loginBody = fetcher.mock.calls[0]?.[1]?.body;
+    expect(typeof loginBody).toBe("string");
+    if (typeof loginBody !== "string") throw new Error("login body was not serialized JSON");
+    expect(JSON.parse(loginBody)).toEqual({
       tenant_id: "0",
       username: "admin",
       password: variables["case.admin-password"],
