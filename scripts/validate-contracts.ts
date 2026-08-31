@@ -91,25 +91,22 @@ if (playwrightVersion !== "1.55.1") {
   throw new Error("Playwright resource contract must be reviewed when Playwright is upgraded");
 }
 
-const [
-  workerDockerfile,
-  playwrightBaseDockerfile,
-  composeFile,
-  releaseScript,
-  resourceScript,
-] = await Promise.all([
-  readFile("infra/compose/Dockerfile.worker", "utf8"),
-  readFile("infra/compose/Dockerfile.playwright-base", "utf8"),
-  readFile("infra/compose/compose.yaml", "utf8"),
-  readFile("infra/deploy/release.sh", "utf8"),
-  readFile("infra/deploy/manage-playwright-base.sh", "utf8"),
-]);
+const [workerDockerfile, playwrightBaseDockerfile, composeFile, releaseScript, resourceScript] =
+  await Promise.all([
+    readFile("infra/compose/Dockerfile.worker", "utf8"),
+    readFile("infra/compose/Dockerfile.playwright-base", "utf8"),
+    readFile("infra/compose/compose.yaml", "utf8"),
+    readFile("infra/deploy/release.sh", "utf8"),
+    readFile("infra/deploy/manage-playwright-base.sh", "utf8"),
+  ]);
 const expectedPlaywrightBase = `spark-x-test-platform-playwright-base:node22.18.0-pw${playwrightVersion}`;
 if (
   !workerDockerfile.includes(`ARG PLAYWRIGHT_BASE_IMAGE=${expectedPlaywrightBase}`) ||
   workerDockerfile.includes("playwright install --with-deps") ||
   !playwrightBaseDockerfile.includes(`ARG PLAYWRIGHT_VERSION=${playwrightVersion}`) ||
-  !composeFile.includes(`PLAYWRIGHT_BASE_IMAGE: \${PLAYWRIGHT_BASE_IMAGE:-${expectedPlaywrightBase}}`) ||
+  !composeFile.includes(
+    `PLAYWRIGHT_BASE_IMAGE: \${PLAYWRIGHT_BASE_IMAGE:-${expectedPlaywrightBase}}`,
+  ) ||
   !releaseScript.includes(`DEFAULT_PLAYWRIGHT_BASE_IMAGE="${expectedPlaywrightBase}"`) ||
   !releaseScript.includes("sha256sum -c") ||
   !releaseScript.includes("verify_playwright_base_image") ||
