@@ -32,10 +32,12 @@ export_resource() {
   trap 'rm -f "$temporary_archive"' RETURN
   docker save --output "$temporary_archive" "$BASE_IMAGE"
   mv "$temporary_archive" "$ARCHIVE"
+  chmod 0644 "$ARCHIVE"
   (
     cd "$RESOURCE_DIR"
     sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256.tmp"
     mv "$ARCHIVE_NAME.sha256.tmp" "$ARCHIVE_NAME.sha256"
+    chmod 0644 "$ARCHIVE_NAME.sha256"
   )
   trap - RETURN
   echo "Playwright base resource exported: $ARCHIVE"
