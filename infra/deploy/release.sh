@@ -6,6 +6,8 @@ ACTION="${1:-}"
 RELEASE_DIR="${2:-}"
 ENV_FILE="${3:-}"
 PROJECT_NAME="spark-x-test-platform"
+DEFAULT_PLAYWRIGHT_BASE_IMAGE="spark-x-test-platform-playwright-base:node22.18.0-pw1.55.1"
+DEFAULT_PLAYWRIGHT_BASE_ARCHIVE="/data/repo/resources/spark-x-test-platform/images/spark-x-test-platform-playwright-base-node22.18.0-pw1.55.1.tar"
 
 if [[ -z "$ACTION" || -z "$RELEASE_DIR" || -z "$ENV_FILE" ]]; then
   echo "usage: release.sh <backup|migrate|start|stop|smoke> <release-dir> <env-file>" >&2
@@ -62,6 +64,17 @@ ensure_runtime_environment() {
 ensure_runtime_environment
 chmod 600 "$ENV_FILE"
 
+append_runtime_default() {
+  local key="$1"
+  local value="$2"
+  if ! grep -q "^${key}=" "$ENV_FILE"; then
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
+append_runtime_default "PLAYWRIGHT_BASE_IMAGE" "$DEFAULT_PLAYWRIGHT_BASE_IMAGE"
+append_runtime_default "PLAYWRIGHT_BASE_ARCHIVE" "$DEFAULT_PLAYWRIGHT_BASE_ARCHIVE"
+
 if ! grep -Eq '^PLATFORM_SECRET_ENCRYPTION_KEY=[A-Za-z0-9+/]{43}=$' "$ENV_FILE"; then
   umask 077
   grep -v '^PLATFORM_SECRET_ENCRYPTION_KEY=' "$ENV_FILE" > "$ENV_FILE.tmp"
@@ -105,8 +118,59 @@ run_compose() {
     "$@"
 }
 
+read_runtime_value() {
+  local key="$1"
+  sed -n "s/^${key}=//p" "$ENV_FILE" | tail -n 1
+}
+
+verify_playwright_base_image() {
+  local image="$1"
+  local node_version
+  local playwright_version
+  node_version="$(docker image inspect --format '{{ index .Config.Labels "com.spark-x.test-platform.node-version" }}' "$image")"
+  playwright_version="$(docker image inspect --format '{{ index .Config.Labels "com.spark-x.test-platform.playwright-version" }}' "$image")"
+  test "$node_version" = "22.18.0"
+  test "$playwright_version" = "1.55.1"
+  docker run --rm --entrypoint sh "$image" -c \
+    'test "$(node --version)" = "v22.18.0" && test -n "$(find /ms-playwright -type f -name headless_shell -perm /111 -print -quit)"'
+}
+
+ensure_playwright_base_image() {
+  local image
+  local archive
+  image="$(read_runtime_value PLAYWRIGHT_BASE_IMAGE)"
+  archive="$(read_runtime_value PLAYWRIGHT_BASE_ARCHIVE)"
+
+  if [[ ! "$image" =~ ^[a-z0-9][a-z0-9./_-]*:[A-Za-z0-9_.-]+$ ]]; then
+    echo "Playwright base image reference is invalid" >&2
+    exit 69
+  fi
+  if [[ ! "$archive" =~ ^/data/repo/resources/spark-x-test-platform/images/[A-Za-z0-9._-]+\.tar$ ]]; then
+    echo "Playwright base image archive path is invalid" >&2
+    exit 69
+  fi
+
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    if [[ ! -s "$archive" || ! -s "$archive.sha256" ]]; then
+      echo "Playwright base image resource is missing: $archive" >&2
+      exit 69
+    fi
+    (
+      cd "$(dirname "$archive")"
+      sha256sum -c "$(basename "$archive").sha256"
+    )
+    docker load --input "$archive"
+  fi
+
+  if ! verify_playwright_base_image "$image"; then
+    echo "Playwright base image resource failed version or browser verification" >&2
+    exit 69
+  fi
+}
+
 build_and_verify() {
   mkdir -p "$VERIFIED_DIR"
+  ensure_playwright_base_image
   run_compose build
 
   local marker="$VERIFIED_DIR/$RELEASE_COMMIT.ok"

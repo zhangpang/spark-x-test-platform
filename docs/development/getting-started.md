@@ -24,6 +24,10 @@ npm run check
 
 正式部署统一通过 Youlan 发布控制台执行，发布对象必须是已经推送的精确 Commit。控制台在测试机共享目录生成并持久保存运行配置，调用 [`infra/deploy/release.sh`](../../infra/deploy/release.sh) 完成构建、测试、迁移、启动和冒烟。
 
+Worker 使用固定的 `Node 22.18.0 + Playwright 1.55.1 + Chromium` 基础镜像。该镜像必须预先保存到 `/data/repo/resources/spark-x-test-platform/images/`，并携带同名 `.sha256` 校验文件；普通应用发布禁止执行 `playwright install --with-deps`。只有升级 Node、Playwright 或 Chromium 时才重新生成并同步这一资源，测试环境和生产环境使用同一份校验通过的镜像归档。
+
+首次建立资源时，在测试机的可信源码目录执行 `infra/deploy/manage-playwright-base.sh build`。如果当前环境已有同版本、已验证的不可变 Worker 镜像，可以执行 `infra/deploy/manage-playwright-base.sh promote-worker spark-x-test-platform-worker:<40 位 Commit>`，从现有镜像提取浏览器运行层，避免再次联网下载。`verify` 用于只读验证本机镜像，`export` 用于重新生成资源归档和校验文件。
+
 以下手工命令只用于测试机上的受控诊断，不作为日常发布入口。登录测试机，复制示例配置并修改所有示例密码：
 
 ```bash

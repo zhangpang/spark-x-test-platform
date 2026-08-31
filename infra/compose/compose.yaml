@@ -201,6 +201,8 @@ services:
     build:
       context: ../..
       dockerfile: infra/compose/Dockerfile.worker
+      args:
+        PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-spark-x-test-platform-playwright-base:node22.18.0-pw1.55.1}
     command: ["node", "apps/worker/dist/main.js"]
     shm_size: "1gb"
     environment:

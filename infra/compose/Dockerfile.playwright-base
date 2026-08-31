@@ -1,0 +1,16 @@
+FROM node:22.18.0-bookworm-slim
+
+ARG PLAYWRIGHT_VERSION=1.55.1
+
+LABEL com.spark-x.test-platform.node-version="22.18.0"
+LABEL com.spark-x.test-platform.playwright-version="${PLAYWRIGHT_VERSION}"
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+WORKDIR /opt/playwright-bootstrap
+RUN npx --yes playwright@${PLAYWRIGHT_VERSION} install --with-deps chromium \
+  && test -n "$(find /ms-playwright -type f -name headless_shell -perm /111 -print -quit)" \
+  && rm -rf /root/.npm /opt/playwright-bootstrap/* \
+  && chown -R node:node /ms-playwright
+
+WORKDIR /app
